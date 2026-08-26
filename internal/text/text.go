@@ -17,6 +17,12 @@ import (
 
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
+// ContractVersion is asserted provenance for the admission and tokenization
+// contract consumed by downstream corpus snapshots. It does not enforce a
+// bump: the CI guard that would require contract changes to touch this
+// constant is not built yet.
+const ContractVersion = "text-v1"
+
 // ErrSpanOutOfBounds reports a span that does not fit within the raw document.
 var ErrSpanOutOfBounds = errors.New("span is outside document bounds")
 
