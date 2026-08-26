@@ -20,7 +20,8 @@ the loop.
 
 1. `d(candidate) ≤ d(current) − ε`, and
 2. `preserve(current → candidate)` passes, and
-3. `tells(candidate) ≤ tells(current)`.
+3. `tells(candidate) ⊑ tells(current)`, where `⊑` compares a **vector**, not a
+   count — see below.
 
 Improvement is required on `d` alone; conditions 2 and 3 are non-regression guards. Ties
 inside ε are rejections. Passes are capped.
@@ -34,6 +35,29 @@ The deterministic `tells` pre-pass is **not exempt** from this gate. A rule whos
 
 `preserve` is deterministic: numbers, named entities, negations, URLs and quoted strings
 must survive an edit.
+
+**Tell counts are compared as a severity-lexicographic vector, not a number.** An earlier
+version of condition 3 compared a single total, which permits trading one severe finding for
+several minor ones — the total falls while the prose gets worse in the way that matters.
+
+Comparison runs highest severity first: fewer errors wins outright, and only on a tie do
+warnings decide, then infos. A componentwise "no level may increase" rule was tried and
+rejected, because it makes four new infos worse than one new error, which inverts the
+question. Four infos in place of one error is an improvement.
+
+Three restrictions on what may enter the vector, each closing a way for the gate to block
+work it cannot justify:
+
+- **Only verdict-eligible categories.** A formatting rule firing more often is not evidence
+  the rewrite got worse at the thing being measured.
+- **Only DERIVED findings.** An unvalidated rule that could veto a rewrite would be making
+  exactly the claim its provenance denies. A consequence worth stating plainly: while every
+  shipped rule is unvalidated, this gate is **inert** — it blocks nothing. That is the
+  honest state, and better than a gate that is confidently wrong.
+- **Both sides from the same rule-set digest and the same options**, with suppression
+  disabled on both. A candidate that could waive its own findings would win by writing a
+  comment. A **truncated** report is a lower bound, not a count, and cannot participate at
+  all.
 
 ## Consequences
 

@@ -195,11 +195,19 @@ if and only if, against `current`:
 
 1. `d(candidate) ≤ d(current) − ε`, and
 2. `preserve(current → candidate)` passes, and
-3. `tells(candidate) ≤ tells(current)`.
+3. `tells(candidate) ⊑ tells(current)`, a **severity-lexicographic vector**
+   comparison over derived, verdict-eligible findings only — see ADR 0006.
 
 Improvement is required on `d` alone. Conditions 2 and 3 are non-regression guards, not
 improvement requirements: a rewrite that moves the prose toward the author while leaving
-the tell count unchanged is a good rewrite. Differences inside ε are rejections.
+the tell vector unchanged is a good rewrite. Differences inside ε are rejections.
+
+Condition 3 was a scalar count in an earlier version, which let one severe finding be
+traded for several minor ones. ADR 0006 carries the corrected rule and its restrictions:
+severity-lexicographic ordering, derived and verdict-eligible findings only, both sides
+from the same rule-set digest and options with suppression off, and no comparison at all
+when either report was truncated. **While every shipped rule is unvalidated this condition
+is inert** — it blocks nothing, which is the honest state.
 
 **Refusal.** If `d` is unavailable for either side — insufficient evidence at both tiers,
 or an `uncalibrated` profile — no acceptance is possible. The segment is reported as
