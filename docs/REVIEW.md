@@ -150,3 +150,93 @@ became wrong once an earlier fix landed.
 Three proposed v1 cuts were rejected and argued down: cutting the iterative loop, cutting
 cloud providers, and gating release on feature ablation. Two were conceded by the reviewer;
 the third was partially upheld and improved the design.
+
+---
+
+# Section 2 — Feature set, distance, and calibration
+
+## Round 1 — VERDICT: REVISE
+
+Six required changes, all accepted. Four were statistical errors rather than omissions.
+
+**The tier derivation conflated three quantities.** "Sampling SD below *k* × between-author
+SD" mixes within-author variation across occasions, finite-segment measurement error, and
+variation in author *means*. Only the first two are properties of the feature; the third is
+a property of a declared population and changes when that population changes.
+
+→ Population declared explicitly; components separated by clustered resampling over held-out
+whole documents; minimum defined against a bootstrap upper bound rather than a point
+estimate; degenerate cases marked *not usable* rather than assigned a minimum.
+
+**Standardizing by the profile SD ignores segment length.** A short segment carries far more
+measurement variance than the profile estimate does, so using the profile's σ alone
+understates short-segment noise and manufactures confident deviations — the paragraph-Delta
+error of Section 1 recurring at the normalization step.
+
+→ Denominator now combines profile variance with length-dependent sampling variance at the
+observed length.
+
+**Equal |z| is not equal evidence.** Comparing standardized values across bounded,
+zero-heavy, right-skewed rates and roughly symmetric features is indefensible.
+
+→ Count models or variance-stabilizing transforms for rates; empirical-CDF rank transform
+against the author's held-out distribution as the general mechanism.
+
+**Weights and `λ` were entirely unspecified** — uniform, expert, inverse-redundancy and
+learned weights are materially different models. Clipping was presented as a principle when
+it is a robust-loss choice that discards genuine *not you* evidence. Tier-A-only scores were
+sharing thresholds with a blended score drawn from a different distribution.
+
+→ Nested Train/Calibrate/Test splits declared; `w`, `λ` and `z_max` fitted on Train only;
+winsorization named as such with required sensitivity analysis; `d_A` given its own
+threshold artifact.
+
+Also accepted: feature-redundancy pruning is a declared Train-only procedure evaluated
+end-to-end, not a substitute for covariance handling, with residual correlation recorded as
+a limitation; lexical diversity is a versioned contract, since MTLD and vocd-D have their
+own short-sample instabilities; cache identity is content-hashed over every scoring
+artifact, because version integers do not force a bump when a golden file can be
+regenerated.
+
+## Round 2 — VERDICT: REVISE
+
+**Band quantiles were assigned to the wrong thresholds.** The design set
+`t_low = Q_author(...)` and `t_high = Q_distractor(...)`, which controls neither declared
+error rate while still producing non-overlapping bands — a failure invisible in testing.
+
+→ Each threshold is now drawn from the distribution whose error it bounds:
+`t_high = Q_author(1 − p_author)`, `t_low = Q_distractor(p_distractor)`.
+
+## Round 3 — VERDICT: REVISE
+
+Two corrections. **Crossing was mis-framed** as a target that could not be met, when each
+threshold may individually meet its rate and only the *pair* fails to leave a non-empty
+middle band → restated as pair incompatibility. **Quantile equalities cannot hold exactly**
+on finite, tie-prone samples → conservative selection rule added, boundary randomization
+rejected because a score that changes on re-run is unacceptable.
+
+## Round 4 — VERDICT: REVISE
+
+**The conservative extrema were reversed.** Author error decreases as `t_high` rises and
+distractor error increases as `t_low` rises, so the rule as written drove both errors toward
+zero — collapsing both bands and, worse, guaranteeing the crossing check never fires, which
+hides exactly the incompatible pair it exists to detect.
+
+→ Smallest `t_high` and largest `t_low` respecting their targets, with the monotonicity
+stated.
+
+## Round 5 — VERDICT: APPROVE
+
+No remaining Section 2 blockers.
+
+---
+
+## What the Section 2 review changed
+
+Every substantive finding was a case of a number looking more trustworthy than its
+derivation supported: a tier rule that would have produced fragile thresholds from noise, a
+normalization that understated short-segment uncertainty, standardized values compared
+across incomparable distributions, and — three times running, in the band logic — arithmetic
+that was internally consistent and controlled nothing. The last of these was the most
+instructive: reversed quantiles and reversed extrema both produce output that looks correct
+and passes any test not written against the error rates themselves.

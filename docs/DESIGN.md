@@ -231,3 +231,223 @@ any attempted dial rather than trusting the code path.
 `score`, `tells` and `eval` are useful with no LLM and no network at all, which gives the
 project a far wider top-of-funnel than a rewriter alone. Components 0–8 are the entire
 differentiator; 9–10 are commodity.
+
+---
+
+## Section 2 — Feature set, distance, and calibration
+
+*Revised after review round 1. See `docs/REVIEW.md`.*
+
+Unblocks issues #2–#5, each of which needs the register protocol, the band set, the
+threshold artifacts, or the feature-versioning scheme defined here.
+
+**What this section fixes and what it defers.** It defines *protocols and artifact shapes*.
+It does not pre-specify numbers that only data can supply — every constant named here is
+produced by running the derivation on real data and published with its uncertainty. The
+distinction matters: a design that invents thresholds is the failure mode this project
+exists to avoid.
+
+### Nested splits, declared once
+
+Three disjoint roles, split by **whole document** and never by segment:
+
+| Split | Used for |
+|---|---|
+| **Train** | Feature selection, weights `w`, `λ`, `z_max`, all tuning |
+| **Calibrate** | Threshold and band-boundary estimation |
+| **Test** | Reported discrimination and band-rate figures |
+
+Anything fitted on Calibrate or Test contaminates the numbers it produces. `z_max` in
+particular must be fixed on Train, never chosen after seeing calibration results.
+
+### Tier assignment is derived — and the derivation must not conflate three quantities
+
+The earlier formulation ("sampling SD below *k* × between-author SD") confused three
+different things: within-author variation across occasions, finite-segment measurement
+error, and variation in author *means*. Only the first two are properties of the feature.
+The third is a property of a **declared population** — which authors, which registers, what
+document mix, what segment-length distribution — and it changes when that population
+changes.
+
+The derivation therefore specifies its population and separates the components by
+resampling:
+
+- **Reference population declared explicitly**: author set, register mix, document mix,
+  segment-length distribution, and per-author weighting. Results are reported *relative to
+  that population* and are not portable to another without re-derivation.
+- **Held-out whole documents**; sampling *within* author for measurement noise, *across*
+  authors for between-author signal.
+- **Length in tokens**, with non-overlapping draws. Prose is autocorrelated: overlapping
+  windows manufacture false precision.
+- **Clustered bootstrap by document and author** for uncertainty on every estimate.
+- **Minimum sample size** for feature *f* is the smallest *L* at which the bootstrap upper
+  bound on measurement noise falls below the declared fraction of between-author signal —
+  a bound, not a point estimate, so a fragile threshold cannot be picked out of noise.
+- **Degenerate cases are outcomes, not errors**: where estimated between-author variance is
+  ~0 or its interval is too wide, the feature is marked **not usable**, not assigned a
+  minimum.
+
+A formal hierarchical model would also serve; clustered resampling is chosen as the simpler
+route to the same separation.
+
+### Feature transforms: equal |z| is not equal evidence
+
+Standardizing a bounded, zero-heavy, right-skewed rate by mean and SD produces a number
+that is computable and not comparable to the same number from a symmetric feature. Two
+corrections:
+
+**1. Scale by expected variance at the actual segment length, not the profile SD.** A
+40-token segment carries far more measurement variance than the profile estimate does.
+Using the profile's σ alone understates short-segment noise and manufactures confident
+deviations — the paragraph-Delta error recurring at the normalization step. The denominator
+combines profile variance with the length-dependent sampling variance of the feature at the
+observed length.
+
+**2. Transform before comparing.** Count and rate features get an explicit count model or a
+variance-stabilizing transform. The general mechanism, applied to every feature, is an
+**empirical-CDF (rank) transform against the author's held-out distribution**, which makes
+features comparable by construction rather than by assumption and is robust to skew and
+outliers.
+
+### The distance `d`
+
+`d` is a weighted robust mean of transformed deviations — Manhattan in transformed space,
+the same form as Burrows' Delta, generalized beyond function words.
+
+**Winsorization, named as such.** Deviations are winsorized at `z_max`. This is a
+robust-loss choice, not a principle: it stops one broken feature dominating, and it
+deliberately discards strong *not you* evidence. `z_max` is fixed on Train and shipped with
+a sensitivity analysis over its value.
+
+**Weights are learned, not asserted.** `w` and `λ` are fitted on Train against a declared
+objective — author-versus-distractor separation — with regularization and constraints
+stated, and a defined rule for missing features. Uniform, expert, inverse-redundancy and
+learned weights are materially different models; the choice is recorded, not implied.
+
+**Tier-A-only scores get their own calibration.** `d_A` alone is not drawn from the same
+distribution as the blended `d`, so it cannot share thresholds. It carries a separate
+threshold artifact, and a segment scored Tier-A-only is reported as such.
+
+Availability rules, matching ADR 0006:
+
+- Tier B unavailable ⇒ `d_A` with its own thresholds, flagged
+- Neither tier meets its minimum ⇒ **insufficient evidence**, no `d`, no band, and
+  `rewrite` passes the segment through untouched
+
+### Feature redundancy: a declared procedure, not a gesture
+
+Mahalanobis is rejected because a personal corpus is unlikely to support a well-conditioned
+covariance estimate at 150+ dimensions, and an ill-conditioned one is worse than ignoring
+correlation.
+
+"Drop correlated features" is not a replacement for it, and this section does not claim
+otherwise. What is required instead:
+
+- A **predeclared, Train-only** redundancy procedure with its correlation measure,
+  threshold, tie-breaking rule, and whether it runs per register or globally
+- Evaluation **end-to-end on Test** — the selected feature set is judged by the score it
+  produces, not by the pruning having occurred
+- An explicit acknowledgment that pairwise pruning does not address nonlinear dependence,
+  multivariate redundancy, or double-counting among surviving correlated features
+
+Residual correlation is a **recorded limitation**, not a solved problem.
+
+### Bands: two error targets, and a corrected crossing rule
+
+The earlier definition used one α for two incompatible jobs and produced a contradiction.
+
+The two error types have **asymmetric costs** and get **separate declared targets**:
+
+- `p_author` — tolerated rate of the author's own held-out writing being called `not you`.
+  Telling someone their own prose isn't theirs is the more damaging error.
+- `p_distractor` — tolerated rate of another author's writing being called `in range`.
+
+```
+in range : d ≤ t_low        not you : d ≥ t_high        drifting : between
+
+t_high = Q_author(1 − p_author)        author-distance quantile
+t_low  = Q_distractor(p_distractor)    distractor-distance quantile
+```
+
+Each threshold is drawn from the distribution whose error it bounds. `not you` is the
+upper region, so bounding the author's false-`not you` rate fixes `t_high` from the
+**author** distances: `P(d_author ≥ t_high) = p_author`. `in range` is the lower region, so
+bounding the distractor's false-`in range` rate fixes `t_low` from the **distractor**
+distances: `P(d_distractor ≤ t_low) = p_distractor`. Taking each threshold from the other
+distribution controls neither declared rate, even though the bands still fail to overlap —
+a failure that would be invisible in testing.
+
+**Ties and discreteness.** With finite samples and a score that can tie, the equalities above
+do not hold exactly. Each threshold is therefore chosen as the **tightest one that still
+respects its target** — respecting the direction in which each error moves:
+
+- `not you` is `d ≥ t_high`, so author error *decreases* as `t_high` rises. The choice is
+  the **smallest** `t_high` whose achieved author error is ≤ `p_author`.
+- `in range` is `d ≤ t_low`, so distractor error *increases* as `t_low` rises. The choice is
+  the **largest** `t_low` whose achieved distractor error is ≤ `p_distractor`.
+
+Taking the opposite extreme in either case drives that error toward zero, collapsing the
+band — and, worse, guarantees the crossing check below never fires, hiding a genuinely
+incompatible pair.
+Achieved rates are reported next to their targets rather than assumed equal to them. No
+boundary randomization — a score that changes on re-run is not acceptable here.
+
+**When `t_low ≥ t_high` the two targets are jointly unsatisfiable with a non-empty middle
+band.** Note precisely what this does and does not mean. Each threshold may still meet its
+own declared rate — the pair simply cannot also leave a `drifting` region between them. It
+is **pair incompatibility, not a failed target**, and it is *not* proof of
+non-discrimination: distributions can cross under stringent tail targets while retaining
+good AUC. Discrimination is judged by the AUC gate in ADR 0005 and nowhere else.
+
+The crossed case has a deterministic outcome rather than a contradictory one: **no bands are
+emitted, `d` and feature deltas still are, and the report states that the two targets are
+jointly unsatisfiable at the current separation, giving both achieved rates.** Overlapping
+classification is thereby impossible.
+
+Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
+A threshold whose interval is too wide to be actionable is not shipped.
+
+### Registers: user-named, distractor pools declared
+
+No fixed taxonomy and no classifier, per Section 1. Profiles are user-named
+(`--profile essays`). What Section 2 adds is the operational half issue #2 needs:
+
+**Register matching is by declaration, not inference.** A distractor pool is bound to a
+profile explicitly by the user or by the bundled manifest. Calibration figures are reported
+per `(profile, distractor pool)` pair, since a discrimination number computed against a
+mismatched pool measures genre and is meaningless.
+
+### Lexical diversity is a versioned contract
+
+Raw TTR falls monotonically with length; comparing it across unequal segments measures
+length. MTLD or vocd-D replace it — but neither is magic: MTLD destabilizes when the text is
+too short to contain enough factors, vocd-D's fitted curve is unstable on short samples and
+depends on its sampling protocol, and both remain topic-sensitive.
+
+Therefore: the measure, its parameters and its sampling protocol are a **versioned
+contract**; its minimum valid length is derived by the same procedure as every other
+feature; and fixed-window variants use **exactly matched window lengths in profile and
+scoring**. The hapax ratio that names this project has the same length dependence and takes
+the same treatment.
+
+### Cache identity: artifacts, not version integers
+
+Issue #3 needs cache keys that make stale reuse impossible. Contract version integers alone
+do not, and a golden-vector test does not force a bump — someone can regenerate the golden
+file. Two requirements:
+
+**The version integer is asserted by the golden test itself.** The checked-in golden file
+records the feature-set version alongside the expected vector, and regenerating it without
+bumping the version fails.
+
+**Scoring artifacts are keyed by content, not by name.** The cache identity includes the
+hash of: the selected feature set, every transform and its parameters, the derived minimum
+sample sizes, `z_max`, `w`, `λ`, missingness rules, seeds, split identity, the threshold
+artifact, and the distractor-pool identity. Anything that can change a score is in the key.
+
+### Numerical targets are outputs, not inputs
+
+`p_author`, `p_distractor`, the AUC floor, the noise/signal fraction, `k`, `z_max` and every
+minimum sample size are **declared before measurement and published with their measured
+outcomes and intervals**. Where a target cannot be met, the honest result is a refusal to
+emit that band — never a quietly relaxed target.
