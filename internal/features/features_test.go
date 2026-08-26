@@ -204,8 +204,8 @@ func TestFeatureSetVersionIsPinned(t *testing.T) {
 
 func TestFunctionWordListIsPinned(t *testing.T) {
 	fw := features.FunctionWords()
-	if len(fw) != 143 {
-		t.Errorf("function word list has %d entries, want 143", len(fw))
+	if len(fw) != 147 {
+		t.Errorf("function word list has %d entries, want 147", len(fw))
 	}
 	assertNoDuplicates(t, "function words", fw)
 	assertAllLowerCase(t, "function words", fw)
@@ -215,7 +215,10 @@ func TestFunctionWordListIsPinned(t *testing.T) {
 		// frequency-derived list tends to omit.
 		[]string{"the", "of", "and", "to", "a", "in", "that", "it", "is", "was",
 			"may", "might", "must", "will", "shall", "can", "could", "would",
-			"either", "neither", "upon", "within", "without", "among", "whose"},
+			"either", "neither", "upon", "within", "without", "among", "whose",
+			// Subordinating conjunctions: closed-class, and their absence was
+			// inconsistent while because/since/while/until/whether/if were present.
+			"although", "though", "whereas", "unless"},
 		// Register-sensitive adverbs deliberately excluded: they track subject
 		// matter and emphasis rather than grammar.
 		[]string{"again", "further", "more", "most", "only", "same", "very"})
@@ -248,8 +251,12 @@ func TestVocabularyOverlapIsPinned(t *testing.T) {
 			overlap++
 		}
 	}
-	if overlap != 18 {
-		t.Errorf("vocabulary overlap is %d markers, want 18; a change alters the correlation the derivation must measure", overlap)
+	// Every clause marker is also a function word. That is expected: the marker
+	// list is drawn from closed-class subordinators and relativisers, which are
+	// function words by definition. Total overlap makes the residual correlation
+	// Section 2 requires to be measured maximal rather than incidental.
+	if overlap != len(features.ClauseMarkers()) {
+		t.Errorf("vocabulary overlap is %d of %d markers, want total overlap; a partial overlap means the function-word list is missing closed-class subordinators", overlap, len(features.ClauseMarkers()))
 	}
 }
 

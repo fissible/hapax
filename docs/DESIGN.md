@@ -307,6 +307,12 @@ minimum sample size.
 removing or redefining any entry below — including a change to the function-word or
 clause-marker vocabulary — bumps it, and the two must never disagree.
 
+**One exception, stated rather than assumed:** a version that has never been used to
+produce a stored artifact is not yet meaningful, so changes made before its first use
+amend it in place instead of bumping. Bumping a version no artifact was ever written
+under would manufacture a version that never existed. The obligation begins at first
+use, and from that point every change bumps.
+
 **It is asserted provenance, not cache identity.** Cache identity is the content
 hash defined under "Cache identity: artifacts, not version integers" below, which
 covers the selected feature set, every transform and parameter, and the rest of the
