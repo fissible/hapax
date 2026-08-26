@@ -33,4 +33,4 @@ the README as numbers, not claims.
 
 - v1 cannot ship a score until the harness and a distractor corpus exist.
 - Feature-set ablation is explicitly post-v1; this is a calibration gate, not a research
-  programme.
+  program.

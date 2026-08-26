@@ -17,7 +17,7 @@ features.
 
 - **Correct axis.** Semantic embeddings match on *topic*. Two passages about databases
   cluster together regardless of who wrote them. Style is the axis that matters here, and
-  optimising topic similarity would actively select the wrong exemplars.
+  optimizing topic similarity would actively select the wrong exemplars.
 - No model download, no ONNX runtime, no vector store. Fully offline, deterministic,
   auditable, and fast — which is what makes ADR 0001 viable.
 - Register and topic matching, where wanted, is handled explicitly (ADR 0004) rather than

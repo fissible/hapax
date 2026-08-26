@@ -7,7 +7,7 @@
 The original design scored individual paragraphs with Burrows' Delta. Adversarial review
 established this is statistically invalid. Delta assumes stable relative frequencies over a
 substantial sample; in a 60-word paragraph most function-word counts are 0–2, and
-z-normalisation amplifies sampling noise into a confident-looking number.
+z-normalization amplifies sampling noise into a confident-looking number.
 
 ## Decision
 
@@ -19,11 +19,11 @@ minimum.
 - **Tier B** — sparse, requires a rolling window of several hundred tokens: function-word
   distribution, hapax ratio, sentence-opener distribution. Delta operates here only.
 
-A paragraph is scored on Tier A directly and on Tier B via a rolling window centred on it.
+A paragraph is scored on Tier A directly and on Tier B via a rolling window centered on it.
 When neither tier has sufficient sample, `score` returns `insufficient evidence` and no
 number.
 
-A normalisation and tokenisation contract (`text`) is a prerequisite component, since every
+A normalization and tokenization contract (`text`) is a prerequisite component, since every
 feature is determined by its choices.
 
 ## Consequences

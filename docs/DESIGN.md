@@ -68,7 +68,7 @@ over describing their style in prose.
 
 The central correction from review: **Burrows' Delta is invalid at paragraph scale.** It
 assumes stable relative frequencies over a substantial sample. In a 60-word paragraph,
-most function-word counts are 0–2, and z-normalisation amplifies sampling noise into a
+most function-word counts are 0–2, and z-normalization amplifies sampling noise into a
 confident-looking number that means nothing.
 
 Features are therefore **tiered by the sample size they require**, and every feature
@@ -81,13 +81,13 @@ declares its own minimum:
   distribution, hapax ratio, sentence-opener distribution. Delta operates here and
   nowhere else.
 
-A paragraph is scored on Tier A directly and on Tier B via a rolling window centred on
+A paragraph is scored on Tier A directly and on Tier B via a rolling window centered on
 it. When neither has enough sample, `score` returns **insufficient evidence** — never a
 number. No score is emitted with more precision than the sample supports.
 
 ### Scoring and selection are different objectives
 
-Second correction: the original design reused one nearest-neighbour search for both
+Second correction: the original design reused one nearest-neighbor search for both
 scoring and exemplar retrieval. That is degenerate. Retrieving corpus segments nearest to
 a failing draft retrieves the author's *most AI-like* writing and conditions the model on
 the very defect it is meant to remove.
@@ -131,14 +131,14 @@ by construction" below.*
 
 | # | Component | Responsibility | Depends on |
 |---|---|---|---|
-| 0 | `text` | Unicode normalisation, tokenisation, sentence-boundary detection, contraction handling, Markdown extraction with a configurable retention policy, English-only language gate. **Every feature is determined by these choices**, so the contract comes first. | — |
+| 0 | `text` | Unicode normalization, tokenization, sentence-boundary detection, contraction handling, Markdown extraction with a configurable retention policy, English-only language gate. **Every feature is determined by these choices**, so the contract comes first. | — |
 | 1 | `tells` | Deterministic AI-tell linter. Rule *schema* before rules: id, pattern, severity, source span, suppression syntax, register scope. Serves both draft linting and corpus contamination screening. | 0 |
 | 2 | `corpus` | Walk, parse, dedupe, per-source provenance (path, mtime, git date), minimum-length gates, contamination screening, register tagging, held-out split reserved for `eval`. | 0, 1 |
 | 3 | `features` | Tiered extractor. Each feature declares its minimum sample size and tier. | 0 |
-| 4 | `profile` | Versioned, provenance-carrying, **named per register** (`essays`, `email`). Per-feature distribution statistics only — means and variances, used to normalise feature deviations so a writer whose sentence length naturally varies is not penalised for varying. Outlier handling. **Refuses to emit** below a minimum corpus size. Declares **no** band boundaries: every emitted band, and all fallback and collapse behaviour, belongs to `eval`. | 2, 3 |
+| 4 | `profile` | Versioned, provenance-carrying, **named per register** (`essays`, `email`). Per-feature distribution statistics only — means and variances, used to normalize feature deviations so a writer whose sentence length naturally varies is not penalized for varying. Outlier handling. **Refuses to emit** below a minimum corpus size. Declares **no** band boundaries: every emitted band, and all fallback and collapse behavior, belongs to `eval`. | 2, 3 |
 | 5 | `eval` | Held-out calibration harness. Consumes the held-out source-document split and register-matched distractor segments from `corpus`, and the distribution statistics from `profile`. Produces both the discrimination metric and the band boundaries `score` uses. Score has no meaning without it, so it is not optional. Protocol below. | 2, 3, 4 |
 | 6 | `score` | Tier A at paragraph scale, Tier B over rolling windows. Emits a calibrated band plus per-feature deltas plus direction, or *insufficient evidence*. Requires an explicit `--profile`. | 3, 4, 5 |
-| 7 | `select` | Author-representative exemplars: medoids and high-density segments of the **named** profile, diversified by structure. Never nearest-neighbour to the draft. | 2, 3, 4 |
+| 7 | `select` | Author-representative exemplars: medoids and high-density segments of the **named** profile, diversified by structure. Never nearest-neighbor to the draft. | 2, 3, 4 |
 | 8 | `preserve` | Deterministic semantic-preservation gate. Numbers, named entities, negations, URLs and quoted strings must survive an edit or it is rejected. Applied to **every** mutation, mechanical and LLM alike. | 0 |
 | 9 | `llm` | Provider interface. Ollama first, Anthropic as the one named cloud provider. Corpus text fenced as untrusted data in prompt assembly. Hard `--local-only` mode; cloud failure is a hard error, never a silent fallback. | — |
 | 10 | `rewrite` | The loop, depending on interfaces (`Scorer`, `Selector`, `Gate`, `Provider`, `Store`) rather than concrete components. Monotonic acceptance rule below. Retains before/after artifacts and rejection reasons. | 6, 7, 8, 9 |

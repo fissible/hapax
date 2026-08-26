@@ -20,5 +20,5 @@ will wrap the same core later.
 - Trivial cross-compilation and a Homebrew formula; no interpreter, no virtualenv.
 - Stylometric features are implemented directly rather than pulled from spaCy or NLTK.
   This is acceptable: the features are counting problems, and owning them makes the
-  tokenisation contract (ADR 0003) explicit rather than inherited.
+  tokenization contract (ADR 0003) explicit rather than inherited.
 - The fissible org CI workflow is bash-oriented and will need a Go equivalent.

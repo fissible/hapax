@@ -4,7 +4,7 @@
 
 ## Context
 
-An iterative rewrite loop optimising a score will game the score: repetitive function
+An iterative rewrite loop optimizing a score will game the score: repetitive function
 words, distorted syntax, dropped facts. Review initially proposed cutting iteration to a
 single pass. Iteration is the product thesis and was defended; the safety envelope had to
 be made mechanical instead.

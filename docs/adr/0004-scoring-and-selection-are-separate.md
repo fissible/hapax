@@ -4,7 +4,7 @@
 
 ## Context
 
-The original design reused one nearest-neighbour search for both scoring a draft segment
+The original design reused one nearest-neighbor search for both scoring a draft segment
 and retrieving exemplars, presented as an elegance. Review identified it as degenerate.
 
 Retrieving corpus segments *nearest to a failing draft* retrieves the author's most
@@ -17,7 +17,7 @@ The two share a feature *extractor* and nothing else.
 
 - **`score`** measures a segment against the profile.
 - **`select`** picks segments *representative of the author* — medoids and high-density
-  regions of the named profile — diversified by structure. Never nearest-neighbour to the
+  regions of the named profile — diversified by structure. Never nearest-neighbor to the
   draft.
 
 Register is handled by explicit named profiles (`--profile essays`), required whenever more
