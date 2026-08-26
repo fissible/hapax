@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"sync"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/rivo/uniseg"
@@ -29,6 +31,26 @@ type Span struct {
 	Length int
 }
 
+// TokenClass identifies the role a token has in the text.
+type TokenClass string
+
+const (
+	Word        TokenClass = "word"
+	Number      TokenClass = "number"
+	Punctuation TokenClass = "punctuation"
+	Symbol      TokenClass = "symbol"
+)
+
+// Token is a raw-byte span and its NFC text. Only word tokens are lexical.
+type Token struct {
+	Span        Span
+	Text        string
+	Class       TokenClass
+	Contraction bool
+	Possessive  bool
+	Lexical     bool
+}
+
 // AdmissionError reports malformed UTF-8 at an offset in the original input.
 type AdmissionError struct {
 	Offset int
@@ -47,6 +69,8 @@ type Document struct {
 	hadBOM     bool
 	normalized string
 	normalize  sync.Once
+	tokens     []Token
+	tokenize   sync.Once
 	boundaries []byte
 }
 
@@ -121,6 +145,201 @@ func (d *Document) Normalized() string {
 		d.normalized = norm.NFC.String(string(d.raw))
 	})
 	return d.normalized
+}
+
+// Tokens returns the document's Slice 2a tokens. Spans address raw bytes while
+// Text is NFC-normalized. The returned slice is a copy and may be changed by
+// the caller without affecting the document's cached tokenization.
+func (d *Document) Tokens() []Token {
+	d.tokenize.Do(func() {
+		d.tokens = d.tokenizeRaw()
+	})
+	return append([]Token(nil), d.tokens...)
+}
+
+func (d *Document) tokenizeRaw() []Token {
+	var tokens []Token
+	for offset := 0; offset < len(d.raw); {
+		r, size := utf8.DecodeRune(d.raw[offset:])
+		if unicode.IsSpace(r) {
+			offset += size
+			continue
+		}
+
+		if isASCIIDigit(r) {
+			if end := d.numberEnd(offset); end > offset {
+				if next, _ := runeAt(d.raw, end); !isWordRune(next) {
+					tokens = append(tokens, d.token(offset, end, Number))
+					offset = end
+					continue
+				}
+			}
+		}
+
+		if isWordRune(r) {
+			end := d.wordEnd(offset)
+			token := d.token(offset, end, Word)
+			token.Lexical = true
+			token.Contraction, token.Possessive = apostropheFlags(string(d.raw[offset:end]))
+			tokens = append(tokens, token)
+			offset = end
+			continue
+		}
+
+		class := Punctuation
+		// Other_Number contains standalone numeric forms such as ½ and ⅓.
+		// They are numbers but never lexical words.
+		if unicode.Is(unicode.No, r) {
+			class = Number
+			// Symbols are limited to So and Sc. Sm (including U+2212 MINUS SIGN)
+			// and Sk deliberately remain punctuation separators, as required by the
+			// Slice 2a token boundary contract.
+		} else if unicode.Is(unicode.So, r) || unicode.Is(unicode.Sc, r) {
+			class = Symbol
+		}
+		tokens = append(tokens, d.token(offset, offset+size, class))
+		offset += size
+	}
+	return tokens
+}
+
+func (d *Document) token(start, end int, class TokenClass) Token {
+	return Token{
+		Span:  Span{Offset: start, Length: end - start},
+		Text:  norm.NFC.String(string(d.raw[start:end])),
+		Class: class,
+	}
+}
+
+func (d *Document) wordEnd(offset int) int {
+	end := offset
+	for end < len(d.raw) {
+		r, size := utf8.DecodeRune(d.raw[end:])
+		if isWordRune(r) {
+			end += size
+			continue
+		}
+		if isApostrophe(r) {
+			next, _ := runeAt(d.raw, end+size)
+			if isWordRune(next) {
+				end += size
+				continue
+			}
+			// A final apostrophe belongs to a possessive word.
+			previous, _ := runeBefore(d.raw, offset)
+			if isApostrophe(previous) {
+				return end
+			}
+			return end + size
+		}
+		if isJoiningHyphen(r) {
+			next, _ := runeAt(d.raw, end+size)
+			if isWordRune(next) {
+				end += size
+				continue
+			}
+		}
+		break
+	}
+	return end
+}
+
+// numberEnd recognizes the complete numeric grammar at offset. A malformed
+// comma or decimal continuation is deliberately left for the main scanner.
+func (d *Document) numberEnd(offset int) int {
+	i := offset
+	for i < len(d.raw) && d.raw[i] >= '0' && d.raw[i] <= '9' {
+		i++
+	}
+	digitsEnd := i
+	firstLen := digitsEnd - offset
+	if i < len(d.raw) && d.raw[i] == ',' && firstLen <= 3 {
+		for i < len(d.raw) && d.raw[i] == ',' {
+			if i+4 > len(d.raw) || !threeDigits(d.raw[i+1:i+4]) {
+				return digitsEnd
+			}
+			i += 4
+		}
+	}
+	allowDecimal := !(offset >= 2 && d.raw[offset-1] == '.' && isASCIIDigit(rune(d.raw[offset-2])))
+	if allowDecimal && i < len(d.raw) && d.raw[i] == '.' {
+		start := i + 1
+		for i = start; i < len(d.raw) && d.raw[i] >= '0' && d.raw[i] <= '9'; i++ {
+		}
+		if i == start {
+			return start - 1
+		}
+		if i+1 < len(d.raw) && d.raw[i] == '.' && isASCIIDigit(rune(d.raw[i+1])) {
+			return digitsEnd
+		}
+	}
+	if i < len(d.raw) && (d.raw[i] == ',' || isASCIIDigit(rune(d.raw[i]))) {
+		return digitsEnd
+	}
+	return i
+}
+
+func threeDigits(raw []byte) bool {
+	return len(raw) == 3 && isASCIIDigit(rune(raw[0])) && isASCIIDigit(rune(raw[1])) && isASCIIDigit(rune(raw[2]))
+}
+
+func runeAt(raw []byte, offset int) (rune, int) {
+	if offset >= len(raw) {
+		return utf8.RuneError, 0
+	}
+	return utf8.DecodeRune(raw[offset:])
+}
+
+func runeBefore(raw []byte, offset int) (rune, int) {
+	if offset == 0 {
+		return utf8.RuneError, 0
+	}
+	r, size := utf8.DecodeLastRune(raw[:offset])
+	return r, size
+}
+
+func isASCIIDigit(r rune) bool { return r >= '0' && r <= '9' }
+
+// isWordRune treats non-ASCII decimal digits as lexical word characters. The
+// numeric grammar is deliberately ASCII-only in English-only v1, so ٤٢ is one
+// lexical Word rather than a Number. This is a known script-dependent
+// limitation to revisit with a Unicode numeric grammar.
+func isWordRune(r rune) bool {
+	return unicode.IsLetter(r) || unicode.IsMark(r) || unicode.IsDigit(r)
+}
+
+func isApostrophe(r rune) bool { return r == '\'' || r == '’' }
+
+func isJoiningHyphen(r rune) bool { return r == '-' || r == '‑' }
+
+func apostropheFlags(raw string) (contraction, possessive bool) {
+	if len(raw) == 0 {
+		return false, false
+	}
+	canonical := strings.ReplaceAll(raw, "’", "'")
+	if strings.HasSuffix(canonical, "'") {
+		return false, true
+	}
+	lower := strings.ToLower(canonical)
+	for _, suffix := range []string{"n't", "'re", "'ve", "'ll", "'d", "'m"} {
+		if strings.HasSuffix(lower, suffix) {
+			return true, false
+		}
+	}
+	if strings.HasSuffix(lower, "'s") {
+		host := strings.TrimSuffix(lower, "'s")
+		if contractionSHosts[host] {
+			return true, false
+		}
+		return false, true
+	}
+	return false, false
+}
+
+var contractionSHosts = map[string]bool{
+	"it": true, "he": true, "she": true, "that": true, "there": true,
+	"here": true, "what": true, "who": true, "where": true, "when": true,
+	"how": true, "let": true,
 }
 
 // Snap clamps span to the document and expands it to grapheme boundaries.
