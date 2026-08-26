@@ -1,0 +1,16 @@
+# Binaries
+/hapax
+/dist/
+*.exe
+
+# Go
+*.test
+*.out
+/vendor/
+
+# Local state
+.hapax/
+*.profile.json
+
+# OS
+.DS_Store
