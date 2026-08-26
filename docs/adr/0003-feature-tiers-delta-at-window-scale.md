@@ -15,7 +15,9 @@ Features are tiered by the sample size they require, and each feature declares i
 minimum.
 
 - **Tier A** — dense, valid at paragraph scale: sentence-length mean and variance,
-  punctuation rates, contraction rate, word-length distribution, clause-marker density.
+  punctuation densities, contraction rate, word-length distribution, clause-marker rate.
+  (Terminology: Section 2 distinguishes a bounded membership *rate* from an unbounded
+  per-token *density*; these names follow that and correct an earlier inversion.)
 - **Tier B** — sparse, requires a rolling window of several hundred tokens: function-word
   distribution, hapax ratio, sentence-opener distribution. Delta operates here only.
 

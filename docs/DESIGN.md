@@ -75,7 +75,9 @@ Features are therefore **tiered by the sample size they require**, and every fea
 declares its own minimum:
 
 - **Tier A — dense, valid at paragraph scale.** Sentence-length mean and variance,
-  punctuation rates, contraction rate, word-length distribution, clause-marker density.
+  punctuation densities, contraction rate, word-length distribution, clause-marker rate.
+  (Terminology: Section 2 distinguishes a bounded membership *rate* from an unbounded
+  per-token *density*; these names follow that and correct an earlier inversion.)
   These have many observations per paragraph.
 - **Tier B — sparse, requires a rolling window of several hundred tokens.** Function-word
   distribution, hapax ratio, sentence-opener distribution. Delta operates here and
@@ -290,6 +292,93 @@ resampling:
 A formal hierarchical model would also serve; clustered resampling is chosen as the simpler
 route to the same separation.
 
+### The candidate feature set is a manifest, not prose
+
+Section 1 names Tier A and Tier B candidates in a sentence. Prose cannot be
+versioned, keyed or checked, and the rewrite of this section replaced the
+provisional tier tables without putting a concrete set anywhere — a gap found
+while implementing.
+
+The candidate set is therefore recorded here explicitly. Every claimed tier is
+**provisional** until the derivation above runs; nothing in this table asserts a
+minimum sample size.
+
+**Manifest version 1**, exposed by the implementation as `SetVersion`. Adding,
+removing or redefining any entry below — including a change to the function-word or
+clause-marker vocabulary — bumps it, and the two must never disagree.
+
+**It is asserted provenance, not cache identity.** Cache identity is the content
+hash defined under "Cache identity: artifacts, not version integers" below, which
+covers the selected feature set, every transform and parameter, and the rest of the
+scoring inputs. A version integer cannot serve as identity, for the reason given
+there: someone can regenerate a golden file without bumping it. `SetVersion`'s job is narrower, and narrower than an earlier draft of this
+paragraph claimed.
+
+**It cannot force a bump.** Changing the computation and regenerating the golden
+values, leaving both the package constant and its external pin at the same number,
+passes every check. Nothing inside a repository can prevent that, for the same
+reason the corpus digests in issue #1 are provenance rather than a security
+boundary: whoever can change the behaviour can change everything that describes it.
+
+What the pinned golden values do buy is narrower still: a change that alters an
+output **for the golden vector** cannot be made silently, because the diff shows a
+changed number rather than a changed line of arithmetic. A change affecting only
+inputs outside the golden text leaves every pinned expectation intact and is not
+caught — which is a further argument for the CI guard below rather than against
+pinning. The hash decides reuse; the golden values make a behaviour
+change visible; the integer is readable provenance travelling with stored artifacts.
+
+A genuine mechanical guard is possible and is not built here: a CI check that fails
+when a diff touches the feature computation without also touching `SetVersion`.
+Recorded as the real enforcement mechanism, deferred to its own slice.
+
+| Feature | Claimed tier | Status |
+|---|---|---|
+| word-length mean | A | implemented |
+| word-length distribution | A | candidate; the mean is a summary of it, not a replacement |
+| comma density | A | implemented |
+| semicolon density | A | implemented |
+| colon density | A | implemented |
+| surface clause-marker rate | A | implemented |
+| aggregate function-word rate | A | implemented, **unvalidated** — see below |
+| sentence-length mean and variance | A | blocked on sentence segmentation |
+| contraction rate | A | blocked on the contractible-opportunity denominator |
+| function-word distribution | B | not implemented |
+| lexical diversity | B | not implemented; see the versioned-contract note below |
+| sentence-opener distribution | B | not implemented |
+
+**The aggregate function-word rate is explicitly unvalidated.** Collapsing the
+Tier B function-word *distribution* into a single ratio discards the per-word
+identity signal that makes function words useful in authorship work, and may
+measure content density instead. It is included as a candidate so the derivation
+can rule on it, not because it has earned a place.
+
+**Clause markers are a surface feature.** Several markers (`as`, `that`, `when`,
+`which`) do not reliably signal a clause, so the feature is named for what it
+counts — marker occurrences — rather than for clauses. Its vocabulary overlaps
+the function-word list; that is not double counting, since they are separate
+dimensions, but it is expected residual correlation and must be measured before
+any weighting is fitted.
+
+### Rates and densities are different quantities
+
+A **rate** is a proportion of tokens and lies in [0,1]: the function-word rate
+and the clause-marker rate are membership counts over lexical tokens.
+
+A **density** is a count per lexical token and is unbounded above: `"word,,,"`
+has a comma density of 3. Punctuation features are densities. Presenting them
+"per 100 words" is display scaling and must not change the stored value.
+
+Conflating the two invites a range check that is wrong for half the feature set.
+
+### Undefined values are marked, not encoded as numbers
+
+A rate over zero lexical tokens is undefined. It is carried as an explicit
+definedness flag beside the value, never as a sentinel number and never as NaN:
+`encoding/json` refuses NaN, NaN compares unequal to itself, and hashing needs a
+canonical bit pattern — all three matter because these values are persisted and
+keyed per Section 2's cache identity rules.
+
 ### Feature transforms: equal |z| is not equal evidence
 
 Standardizing a bounded, zero-heavy, right-skewed rate by mean and SD produces a number
@@ -436,9 +525,19 @@ Issue #3 needs cache keys that make stale reuse impossible. Contract version int
 do not, and a golden-vector test does not force a bump — someone can regenerate the golden
 file. Two requirements:
 
-**The version integer is asserted by the golden test itself.** The checked-in golden file
-records the feature-set version alongside the expected vector, and regenerating it without
-bumping the version fails.
+**The version integer is asserted alongside the golden vector.** The checked-in golden
+values record the feature-set version next to the expected numbers.
+
+This does **not** force a bump, and an earlier draft of this bullet claimed it did while the
+sentence above it said the opposite — a contradiction inside one paragraph. Regenerating the
+values and leaving the version alone passes. What the pairing buys is that a change altering
+an output for the golden vector cannot be made silently: the diff shows a changed number
+rather than a changed line of arithmetic. A change touching only inputs outside the golden
+text is not caught at all.
+
+Forcing the bump needs a check outside the values themselves — a CI rule failing when a diff
+touches the feature computation without touching the version. That is the real enforcement
+and it is not yet built.
 
 **Scoring artifacts are keyed by content, not by name.** The cache identity includes the
 hash of: the selected feature set, every transform and its parameters, the derived minimum
