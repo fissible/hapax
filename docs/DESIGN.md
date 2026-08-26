@@ -451,3 +451,207 @@ artifact, and the distractor-pool identity. Anything that can change a score is 
 minimum sample size are **declared before measurement and published with their measured
 outcomes and intervals**. Where a target cannot be met, the honest result is a refusal to
 emit that band — never a quietly relaxed target.
+
+---
+
+## Section 3 — The `text` contract and the artifact store
+
+*Revised after review round 1. See `docs/REVIEW.md`.*
+
+Component 0 and the persistence layer. Everything measured in Section 2 is defined by the
+choices here, which is why the contract precedes the features that depend on it.
+
+### A structural tree, not a flat class list
+
+An earlier draft classified each segment into one flat class and asserted that list items
+are not sentences. That is false often enough to be harmful: authored prose appears inside
+list items, footnotes, captions and definition descriptions routinely, and Markdown
+structures nest — inline code lives *inside* prose, quotes contain lists, lists contain
+quotes.
+
+Parsing produces a **tree**, and the model distinguishes two things:
+
+- **Containers** — list, table, footnote section, block quote, definition list. Containers
+  are structure, never a feature-bearing unit themselves.
+- **Text runs** — the leaves. Each carries a role and its own admission verdict.
+
+| Leaf role | In feature population | Note |
+|---|---|---|
+| Paragraph prose | **Yes** | The core case |
+| Prose inside a list item | **Yes** | A list item containing sentences is prose in a container |
+| Footnote, caption, definition description | **Yes** | Authored prose; container differs, writing does not |
+| Heading, definition term | No | Fragmentary and verbless; would corrupt sentence-length features |
+| Bare list item (non-sentential) | No | A label or fragment, not prose — decided per item, not per container |
+| Inline code span | No | Excised from its containing run; surrounding prose is retained |
+| Block quote content | **Configurable, default no** | Usually another's words; some authors write original blockquotes |
+| Code block, table cell, front matter | No | Not prose |
+
+Whether a list item is prose is decided **per item** by sentential structure, not by its
+container. Non-included leaves are recorded rather than discarded — needed for spans, for
+rehydration, and so a policy change can be applied without reparsing.
+
+### Spans, normalization, and boundaries that may not exist
+
+Issue #3 decided the exemplar cache stores spans rather than sentences, so no second copy of
+private prose exists. That collides with normalization, and not every desired boundary is
+representable.
+
+**Spans are `(byte offset, byte length)` into the raw file bytes.** Normalization form is
+**NFC**, applied after span capture; parsing maintains an offset map from normalized
+positions to raw ones, and only raw offsets persist.
+
+**Not every normalized boundary has a raw counterpart.** `e` + combining acute normalizes to
+a single `é`: the boundary *between* those two raw code points has no position in the
+normalized text. The rule is therefore explicit rather than assumed:
+
+- Boundaries are constrained to **grapheme-cluster boundaries** — stricter than UTF-8
+  code-point boundaries — that are also stable under NFC
+- A desired boundary with no valid representation **snaps outward**, never inward: a span's
+  **start** boundary snaps *backward* and its **end** boundary snaps *forward*, each to the
+  nearest NFC-stable grapheme-cluster boundary. A span therefore only ever grows to the
+  nearest representable edge, so it can never silently drop authored content
+
+Byte-level admission rules, all explicit because offsets are byte offsets:
+
+- **Invalid UTF-8** ⇒ the document is rejected at admission with a clear error. Not
+  repaired, since repair shifts every offset in the file
+- **BOM** is stripped at admission and its presence recorded; offsets are relative to the
+  stripped content
+- **Line endings are preserved exactly.** CRLF is not normalized to LF — doing so would
+  shift every subsequent offset while leaving the file on disk unchanged
+
+### Tokenization
+
+Every decision here changes every feature. Word boundaries follow **UAX #29**, with a stated
+policy for each ambiguity rather than an inherited default:
+
+**Apostrophes carry three different jobs and must be distinguished:**
+
+- **Contraction** (`don't`, `we'll`) — one token, contraction flag set
+- **Possessive** (`John's`, `authors'`) — one token, possessive flag set, *not* counted as a
+  contraction. Conflating the two makes contraction rate track how often an author writes
+  about people's things
+- **Quotation mark** (typographic `'…'`, or ASCII `'` used as a quote) — punctuation, not a
+  word character
+
+Typographic (U+2019) and ASCII (U+0027) apostrophes are equivalent for classification.
+
+**Hyphens and dashes are distinct characters with distinct roles**, classified by codepoint
+rather than by appearance: ASCII hyphen-minus (U+002D) and non-breaking hyphen (U+2011) join
+compounds into **one token** (`well-known`); en dash (U+2013), em dash (U+2014) and minus
+sign (U+2212) are separators.
+
+**Recognition precedence**, highest first, so that overlapping patterns resolve
+deterministically: URL → email → file path → number → word. Each of URL, email and path is
+one token, classed **non-lexical** and excluded from word-length and lexical-diversity
+features. Numbers are one token, classed separately; decimal points are not sentence
+boundaries.
+
+**Terminal-punctuation peeling** resolves greedy matches deterministically. After a URL,
+email, path or number is matched, characters are removed one at a time from the right while
+**both** conditions hold:
+
+1. the final character is in the terminal set — `.` `,` `;` `:` `!` `?` `"` `'` `)` `]` `}` — and
+2. removing it leaves a string still valid as that token class
+
+with the additional rule that a closing bracket or quote is peeled **only if unbalanced**
+within the token, so a URL containing balanced parentheses keeps them. Peeling stops at the
+first character failing either condition; peeled characters become punctuation tokens in
+order.
+
+### Contraction rate needs a denominator
+
+A raw contraction count measures verbosity, not preference. The rate is *contractions per
+contractible opportunity*, requiring detection of realized contractions (`don't`) and
+unrealized ones (`do not`) alike. That means a bidirectional lexicon of expandable pairs,
+versioned as part of the contract — and it is why possessives must be excluded, since they
+create no contractible opportunity.
+
+### Sentence segmentation: a measured approximation, tested properly
+
+Sentence boundaries are the hardest part of the contract and every sentence-length feature
+rests on them. Abbreviations, initials, decimals, ellipses, quoted sentences and list
+punctuation all defeat naive splitting.
+
+v1 uses rule-based segmentation with an abbreviation lexicon — no ML dependency, per
+ADR 0001. The error rate is measured against a hand-annotated fixture and published.
+
+**Segmentation errors are systematic rather than random**: they correlate with an author's
+use of abbreviations, initials, decimals and quotation. A feature could therefore appear
+discriminative because the segmenter fails *differently* on different authors.
+
+An earlier draft proposed testing this by removing sentence-derived features and checking
+whether discrimination collapses. That does not establish the claim in either direction — a
+collapse may simply mean genuine sentence-level style matters, and no collapse does not show
+the errors are harmless. The actual test is a **segmentation-robustness evaluation**:
+
+- Score against **adjudicated boundaries** on the annotated fixture, and compare with scores
+  from rule-based segmentation on the same text
+- Apply **controlled boundary perturbations** and measure how discrimination responds
+- **Stratify results by author and by error-prone construction**, since the concern is
+  precisely that error rates differ across authors
+
+### Language gate operates per leaf
+
+Per document is too coarse: a French quotation inside an English essay should not disqualify
+the essay, nor enter the features. Detection is per text run. Non-English runs are recorded,
+excluded from the feature population, and reported. A document whose prose is predominantly
+non-English is rejected at admission — v1 is English only.
+
+### The artifact store
+
+SQLite via a pure-Go driver, so the single static binary of ADR 0001 survives. The corpus
+stays as files the user owns — **hapax is never the system of record for anyone's writing.**
+
+| Artifact | Identity | Holds |
+|---|---|---|
+| `snapshot` | Content hash of membership plus every admission policy | The set a profile is relative to |
+| `document` | Path plus content hash within a snapshot | Register, split role, admission status, language verdict |
+| `node` | Document plus tree position | Container or leaf, role, **raw byte span**, admission verdict |
+| `feature_vector` | Leaf plus feature-contract identity | The vector; never the text |
+| `profile` | Content hash over snapshot, register, policies and contract versions | Per-feature distribution statistics |
+| `exemplar` | Profile plus leaf reference | **A span reference only** |
+| `threshold` | Profile plus distractor-pool plus calibration-protocol identity | `t_low`, `t_high`, achieved rates, intervals, or the pair-incompatible verdict |
+| `eval_result` | All of the above, hashed | Discrimination and band figures with provenance |
+
+### The privacy invariant, stated as a prohibition
+
+"No prose text is written to the store" is the intent, but scanning the database for strings
+matching corpus text **cannot prove it** — that check misses normalized, fragmented,
+encoded, compressed and indexed copies, and says nothing about material outside the main
+database file.
+
+The invariant is therefore a prohibition on **any reversible prose representation or textual
+derivative**, which explicitly includes token sequences, snippets, cached parse text,
+full-text-search content, and any encoding or compression of the same. Feature vectors and
+span references are the permitted derived forms.
+
+Its **scope covers everything the store owns**: the database file, WAL and journal sidecars,
+any backup or export the tool writes, and all log and diagnostic output.
+
+Corpus-text scanning is retained as one **regression control**, not as proof. The primary
+controls are the prohibition itself, an explicit allowlist of what may be persisted, and
+review of anything added to it.
+
+### Dangling spans, and exactly how many exemplars is enough
+
+A span references a file the user may edit, move or delete, so rehydration failure is an
+ordinary state rather than an error condition.
+
+The required exemplar set is **fixed by the profile and invocation contract**: which
+exemplars, and how many, are determined before rehydration is attempted, and both are part
+of the identity of the result.
+
+- **No automatic substitution and no silent reduction.** If a selected exemplar cannot be
+  rehydrated, another is not quietly swapped in and the set is not quietly shrunk
+- A `rewrite` that cannot rehydrate its required set **refuses**, naming what is stale
+- Reindexing produces a **new** profile identity and may yield a different result — which is
+  legitimate, but it must never be presented as the same result under the old identity
+- Reindexing evicts artifacts whose documents are gone, per issue #3's deletion-phantom rule
+
+### Schema migration
+
+The store carries a schema version, migrated forward only. A migration that changes the
+*meaning* of a stored artifact must also bump the relevant semantic contract version from
+Section 2 — otherwise migrated artifacts are silently reinterpreted under new rules, which is
+the stale-reuse failure the cache identity exists to prevent.

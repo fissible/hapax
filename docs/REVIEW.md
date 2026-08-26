@@ -240,3 +240,73 @@ across incomparable distributions, and — three times running, in the band logi
 that was internally consistent and controlled nothing. The last of these was the most
 instructive: reversed quantiles and reversed extrema both produce output that looks correct
 and passes any test not written against the error rates themselves.
+
+---
+
+# Section 3 — The `text` contract and the artifact store
+
+## Round 1 — VERDICT: REVISE
+
+Six required changes, all accepted. One was a false premise rather than an omission.
+
+**"List items are not sentences" is wrong.** Authored prose appears inside list items,
+footnotes, captions and definition descriptions routinely, and Markdown structures nest —
+inline code inside prose, quotes containing lists, lists containing quotes. A flat
+segment-class model cannot represent any of that, and excluding list items would have
+silently removed real prose from the feature population.
+
+→ Replaced with a structural tree distinguishing **containers** from feature-bearing **leaf
+text runs**. Whether a list item is prose is decided per item by sentential structure, never
+by its container.
+
+**Not every boundary exists in both forms.** `e` + combining acute normalizes to a single
+`é`, so the boundary between those two raw code points has no position in the normalized
+text. "Constrained to positions valid in both forms" was therefore not always satisfiable.
+
+→ Boundaries constrained to grapheme-cluster boundaries that are also NFC-stable, with a
+deterministic outward snap — start backward, end forward — so a span can only grow to the
+nearest representable edge and never drops authored content. Invalid UTF-8 rejects the
+document rather than being repaired, since repair shifts every offset; BOM stripped and
+recorded; CRLF preserved exactly.
+
+**The proposed ablation test establishes nothing.** Removing sentence-derived features and
+checking whether discrimination collapses does not show that segmentation *errors* supply
+the signal: a collapse may simply mean genuine sentence-level style matters, and no collapse
+does not show the errors are harmless.
+
+→ Replaced with a segmentation-robustness evaluation against adjudicated boundaries, plus
+controlled boundary perturbations, stratified by author and by error-prone construction —
+since the concern is precisely that error rates differ across authors.
+
+**Apostrophes do three different jobs.** Contraction, possessive and quotation. Conflating
+possessive with contraction would make contraction rate track how often an author writes
+about people's things.
+
+→ Three roles distinguished, possessives excluded from contraction counting, hyphens and
+dashes enumerated by codepoint, and a stated recognition precedence with an exact
+terminal-punctuation peeling rule.
+
+**Scanning the database for corpus strings cannot prove the privacy invariant.** It misses
+normalized, fragmented, encoded, compressed and indexed copies, and says nothing about WAL,
+journals, backups or logs.
+
+→ Restated as a prohibition on any reversible prose representation or textual derivative —
+naming token sequences, snippets, cached parse text and FTS content — scoped across
+sidecars, backups and diagnostic output, with scanning demoted to one regression control
+behind an explicit persistence allowlist.
+
+Also accepted: the required exemplar set and count are fixed by the profile and invocation
+contract before rehydration, with no substitution and no silent reduction, and a reindexed
+profile yields a new identity rather than the same result.
+
+## Round 2 — VERDICT: REVISE
+
+Three narrow defects, all the same kind: the text promised a rule and did not state it. The
+snap direction was called "stated" without being stated; terminal punctuation was separated
+"by a stated rule" that did not exist; ASCII hyphen was named but not given its codepoint.
+
+→ All three specified concretely.
+
+## Round 3 — VERDICT: APPROVE
+
+No remaining Section 3 blockers.
