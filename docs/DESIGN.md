@@ -505,7 +505,9 @@ a single `é`: the boundary *between* those two raw code points has no position 
 normalized text. The rule is therefore explicit rather than assumed:
 
 - Boundaries are constrained to **grapheme-cluster boundaries** — stricter than UTF-8
-  code-point boundaries — that are also stable under NFC
+  code-point boundaries. This condition already makes them NFC-stable: canonical
+  decomposition, canonical reordering, and canonical composition operate within a
+  grapheme cluster and cannot cross a UAX #29 grapheme boundary.
 - A desired boundary with no valid representation **snaps outward**, never inward: a span's
   **start** boundary snaps *backward* and its **end** boundary snaps *forward*, each to the
   nearest NFC-stable grapheme-cluster boundary. A span therefore only ever grows to the
