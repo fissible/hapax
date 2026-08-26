@@ -1,0 +1,11 @@
+version = "default-v1"
+
+[[rule]]
+id = "double-space"
+description = "Two spaces between words."
+matcher = "regex"
+unit = "document"
+pattern = "  "
+severity = "warn"
+provenance = "unvalidated"
+category = "formatting"
