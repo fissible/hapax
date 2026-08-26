@@ -2,7 +2,6 @@
 package features
 
 import (
-	"strings"
 	"unicode/utf8"
 
 	"github.com/fissible/hapax/internal/text"
@@ -75,7 +74,7 @@ var definitions = []Definition{
 }
 
 var functionWords = []string{
-	"a", "about", "above", "across", "after", "against", "all", "am", "among", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "beneath", "beside", "between", "beyond", "both", "but", "by", "can", "cannot", "could", "did", "do", "does", "doing", "done", "down", "during", "each", "either", "few", "for", "from", "had", "has", "have", "having", "he", "her", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "may", "me", "might", "must", "my", "myself", "neither", "nor", "not", "of", "off", "on", "once", "one", "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "per", "shall", "she", "should", "since", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "through", "throughout", "to", "too", "toward", "towards", "under", "until", "unto", "up", "upon", "us", "was", "we", "were", "what", "when", "whence", "where", "whether", "which", "while", "who", "whom", "whose", "why", "will", "with", "within", "without", "would", "you", "your", "yours", "yourself", "yourselves",
+	"a", "about", "above", "across", "after", "against", "all", "although", "am", "among", "an", "and", "any", "are", "as", "at", "be", "because", "been", "before", "being", "below", "beneath", "beside", "between", "beyond", "both", "but", "by", "can", "cannot", "could", "did", "do", "does", "doing", "done", "down", "during", "each", "either", "few", "for", "from", "had", "has", "have", "having", "he", "her", "hers", "herself", "him", "himself", "his", "how", "i", "if", "in", "into", "is", "it", "its", "itself", "may", "me", "might", "must", "my", "myself", "neither", "nor", "not", "of", "off", "on", "once", "one", "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "per", "shall", "she", "should", "since", "so", "some", "such", "than", "that", "the", "their", "theirs", "them", "themselves", "then", "there", "these", "they", "this", "those", "though", "through", "throughout", "to", "too", "toward", "towards", "under", "unless", "until", "unto", "up", "upon", "us", "was", "we", "were", "what", "when", "whence", "where", "whereas", "whether", "which", "while", "who", "whom", "whose", "why", "will", "with", "within", "without", "would", "you", "your", "yours", "yourself", "yourselves",
 }
 
 var clauseMarkers = []string{
@@ -83,9 +82,9 @@ var clauseMarkers = []string{
 }
 
 var (
+	fold            = cases.Fold()
 	functionWordSet = vocabularySet(functionWords)
 	clauseMarkerSet = vocabularySet(clauseMarkers)
-	fold            = cases.Fold()
 )
 
 // Definitions returns the manifest in its stable positional order.
@@ -140,19 +139,24 @@ func Extract(tokens []text.Token) Vector {
 	}
 
 	denominator := float64(v.LexicalTokens)
-	v.Values[0] = FeatureValue{ID: WordLengthMean, Value: float64(wordLength) / denominator, Defined: true}
-	v.Values[1] = FeatureValue{ID: CommaDensity, Value: float64(commas) / denominator, Defined: true}
-	v.Values[2] = FeatureValue{ID: SemicolonDensity, Value: float64(semicolons) / denominator, Defined: true}
-	v.Values[3] = FeatureValue{ID: ColonDensity, Value: float64(colons) / denominator, Defined: true}
-	v.Values[4] = FeatureValue{ID: FunctionWordRate, Value: float64(functionWords) / denominator, Defined: true}
-	v.Values[5] = FeatureValue{ID: ClauseMarkerRate, Value: float64(clauseMarkers) / denominator, Defined: true}
+	values := map[ID]float64{
+		WordLengthMean:   float64(wordLength) / denominator,
+		CommaDensity:     float64(commas) / denominator,
+		SemicolonDensity: float64(semicolons) / denominator,
+		ColonDensity:     float64(colons) / denominator,
+		FunctionWordRate: float64(functionWords) / denominator,
+		ClauseMarkerRate: float64(clauseMarkers) / denominator,
+	}
+	for i, definition := range definitions {
+		v.Values[i] = FeatureValue{ID: definition.ID, Value: values[definition.ID], Defined: true}
+	}
 	return v
 }
 
 func vocabularySet(words []string) map[string]bool {
 	set := make(map[string]bool, len(words))
 	for _, word := range words {
-		set[strings.ToLower(word)] = true
+		set[fold.String(word)] = true
 	}
 	return set
 }
