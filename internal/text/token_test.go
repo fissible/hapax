@@ -548,18 +548,17 @@ func TestNonLatinScriptsProduceWordTokens(t *testing.T) {
 	}
 }
 
-// Symbols and emoji are neither words nor numbers, but must still be emitted so
-// that coverage holds.
 // Symbols are neither words nor numbers, but must still be emitted with a
 // pinned class so coverage holds and they cannot silently become words.
 func TestSymbolsAreEmittedWithSymbolClass(t *testing.T) {
-	got := requireTokens(t, "cost \u00a35 \U0001F600 ok", "\u00a3", "5", "\U0001F600", "ok")
+	got := requireTokens(t, "cost \u00a35 \U0001F600 ok", "cost", "\u00a3", "5", "\U0001F600", "ok")
 
 	want := []struct {
 		text    string
 		class   text.TokenClass
 		lexical bool
 	}{
+		{"cost", text.Word, true},
 		{"\u00a3", text.Symbol, false},
 		{"5", text.Number, false},
 		{"\U0001F600", text.Symbol, false},
