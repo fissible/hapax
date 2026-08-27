@@ -509,8 +509,8 @@ func TestLeafSpansAreRawByteOffsets(t *testing.T) {
 	if got, want := heading.Span, (text.Span{Offset: 2, Length: 6}); got != want {
 		t.Errorf("heading span = %+v, want %+v (raw bytes, marker and CRLF excluded)", got, want)
 	}
-	if got := resolve(t, doc, heading); got != "T\u00eate" {
-		t.Errorf("heading resolves to %q, want NFC %q", got, "T\u00eate")
+	if got := resolve(t, doc, heading); got != "T\u00e9te" {
+		t.Errorf("heading resolves to %q, want NFC %q", got, "T\u00e9te")
 	}
 
 	para := onlyRole(t, root, text.RoleParagraph)
