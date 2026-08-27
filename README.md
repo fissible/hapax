@@ -8,7 +8,11 @@ moved *toward you* rather than merely away from the model.
 
 The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 
-> **Status: pre-alpha.** The design is under review. Nothing is implemented yet.
+> **Status: pre-alpha.** Seven library components are built and tested — text
+> admission, tokenization, corpus indexing, feature extraction, the tell linter
+> and the author profile. **There is no CLI yet**, and no scoring or rewriting.
+> The commands below are the planned interface, not working ones. See
+> [PROJECT.md](PROJECT.md) for exactly what exists.
 
 ---
 
@@ -49,11 +53,13 @@ one of them.
 `score`, `tells` and `eval` make no network calls and require no model:
 
 ```bash
-hapax init ~/writing/ --profile essays   # build a profile from your own work
+hapax index ~/writing/ --profile essays  # build a profile from your own work
 hapax eval                               # how well does it actually distinguish you?
 hapax score draft.md                     # per-passage bands and feature deltas
 hapax tells draft.md                     # deterministic AI-tell linter
 ```
+
+*(Planned. None of these commands exists yet.)*
 
 Only `hapax rewrite` needs a model. It uses a local Ollama model by default; set an API key
 to use a stronger one.
