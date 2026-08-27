@@ -18,9 +18,12 @@ package text_test
 // speaking and which are this package choosing:
 //
 //  1. The tree always has a ContainerDocument root, even for an empty document.
-//  2. A container's span encloses every descendant. DESIGN keeps non-included
-//     leaves "for spans, for rehydration"; rehydrating a whole container needs
-//     this, but Section 3 never says it.
+//  2. A container's span is DEFINED as the enclosure of its descendant leaves.
+//     It is not the container's own source extent — quote markers and list
+//     markers are deliberately not represented — so a container's span does not
+//     reconstruct its source. An earlier version of this note justified the rule
+//     by rehydration, which it does not deliver. Section 3 requires neither
+//     reading.
 //  3. The front-matter leaf spans the body BETWEEN the fences, not the fences.
 //  4. StructureVersion is distinct from ContractVersion, so a change to the
 //     inclusion policy or the sententiality rule does not masquerade as a
