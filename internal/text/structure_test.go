@@ -1297,11 +1297,118 @@ func TestExcisionsOverlappingAContainerMarkerAreMerged(t *testing.T) {
 	}
 }
 
-// The backstop. Structure has no error return by design, so a construct whose
-// source envelope cannot be located must preserve its raw bytes, record no
-// guessed excision, and return — never crash the caller's document. Where the
-// right behavior is known it is pinned above; this is the floor for forms not
-// enumerated there, and it is a floor, not a contract.
+// A block with no content lines has no bytes to record, so it yields no leaf.
+//
+// Found by the sweep: an empty fence was producing a zero-length leaf at offset
+// 0, which sits BEFORE its preceding sibling and breaks document order for
+// everything after it. A leaf that spans nothing is not a record of anything —
+// the fence delimiters are markers, and markers are not leaves anywhere else in
+// this contract either.
+func TestEmptyBlockYieldsNoLeaf(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		roles []text.Role
+		run   string // RunText of the sole surviving leaf, if there is one
+	}{
+		{"empty fence alone", "```\n```\n", nil, ""},
+		{"unterminated empty fence", "```\n", nil, ""},
+		{"prose then empty fence", "Some prose here.\n\n```\n```\n", []text.Role{text.RoleParagraph}, "Some prose here."},
+		{"image then empty fence", "![](x.png)\n\n```\n```\n", []text.Role{text.RoleImage}, ""},
+		{"fence with content is kept", "```\nstuff\n```\n", []text.Role{text.RoleCodeBlock}, "stuff"},
+		{"empty heading", "#\n\nProse after the empty heading.\n", []text.Role{text.RoleParagraph}, "Prose after the empty heading."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc, root := structure(t, c.src, text.DefaultStructureOptions())
+			var got []text.Role
+			for _, l := range root.Leaves() {
+				got = append(got, l.Role)
+			}
+			if len(got) != len(c.roles) {
+				t.Fatalf("got leaves %v, want %v", got, c.roles)
+			}
+			for i := range got {
+				if got[i] != c.roles[i] {
+					t.Errorf("leaf %d = %q, want %q", i, got[i], c.roles[i])
+				}
+			}
+			// The surviving leaf must carry its content, so a fix cannot keep a
+			// marker-only leaf and still pass on role alone.
+			if len(c.roles) == 1 {
+				if got := runText(t, doc, root.Leaves()[0]); got != c.run {
+					t.Errorf("RunText = %q, want %q", got, c.run)
+				}
+			}
+		})
+	}
+}
+
+// Every span this package emits must be grapheme-aligned, so a CRLF is never
+// split. Snap exists for exactly this; block spans must go through it too.
+//
+// The expected runs are pinned as well as the alignment: checkTree alone would
+// pass an implementation that silently dropped the block it could not align.
+func TestSpansNeverSplitACRLF(t *testing.T) {
+	inList := []text.ContainerKind{text.ContainerDocument, text.ContainerList, text.ContainerListItem}
+	inQuote := []text.ContainerKind{text.ContainerDocument, text.ContainerBlockQuote}
+	atRoot := []text.ContainerKind{text.ContainerDocument}
+
+	cases := []struct {
+		src   string
+		runs  []string
+		roles []text.Role
+		paths [][]text.ContainerKind
+	}{
+		{
+			"- Prose in an item.\r\n\r\n- Another item entirely.\r\n",
+			[]string{"Prose in an item.", "Another item entirely."},
+			[]text.Role{text.RoleParagraph, text.RoleParagraph},
+			[][]text.ContainerKind{inList, inList},
+		},
+		{
+			"> Quoted prose here.\r\n> Continued on a second line.\r\n",
+			[]string{"Quoted prose here.\r\nContinued on a second line."},
+			[]text.Role{text.RoleParagraph},
+			[][]text.ContainerKind{inQuote},
+		},
+		{
+			"```\r\nfenced\r\n```\r\n",
+			[]string{"fenced"},
+			[]text.Role{text.RoleCodeBlock},
+			[][]text.ContainerKind{atRoot},
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.src, func(t *testing.T) {
+			// structure() runs checkTree, which resolves every span and so
+			// rejects any that is not on a grapheme boundary.
+			doc, root := structure(t, c.src, text.DefaultStructureOptions())
+			leaves := root.Leaves()
+			if len(leaves) != len(c.runs) {
+				t.Fatalf("got %d leaves, want %d", len(leaves), len(c.runs))
+			}
+			for i, want := range c.runs {
+				if got := runText(t, doc, leaves[i]); got != want {
+					t.Errorf("leaf %d RunText = %q, want %q", i, got, want)
+				}
+				if leaves[i].Role != c.roles[i] {
+					t.Errorf("leaf %d Role = %q, want %q", i, leaves[i].Role, c.roles[i])
+				}
+				if !reflect.DeepEqual(leaves[i].Containers, c.paths[i]) {
+					t.Errorf("leaf %d container path = %v, want %v", i, leaves[i].Containers, c.paths[i])
+				}
+			}
+		})
+	}
+}
+
+// The backstop, and deliberately shape-agnostic: it asserts only that Structure
+// returns without panicking and that every leaf it emits has resolvable RunText,
+// under a parse and again after Reclassify. It does NOT assert that raw bytes
+// are preserved or that no excision was guessed — those are the contract for an
+// unlocatable envelope, and where the right shape is known it is pinned in the
+// tests above. This is the floor for forms not enumerated there.
 func TestStructureNeverPanicsOnValidMarkdown(t *testing.T) {
 	for _, src := range []string{
 		"![](/url)\n",
@@ -1315,6 +1422,8 @@ func TestStructureNeverPanicsOnValidMarkdown(t *testing.T) {
 		"> ``\n> ``\n",
 		"- `a\n- `b\n",
 		"> A claim[^\n> 1] here.\n\n[^1]: A body.\n",
+		"- ```\n  \r\n",
+		"> - ```\n>   \r\n",
 		"| ![](x.png) | `a` |\n|---|---|\n| b | c |\n",
 		"***\n\n<!-- a comment -->\n\n    code\n",
 	} {
@@ -1326,12 +1435,16 @@ func TestStructureNeverPanicsOnValidMarkdown(t *testing.T) {
 				}
 			}()
 			root := doc.Structure(text.DefaultStructureOptions())
-			for _, l := range root.Leaves() {
-				if _, err := doc.RunText(l); err != nil {
-					t.Errorf("RunText on %s leaf: %v", l.Role, err)
+			resolveAll := func(stage string) {
+				for _, l := range root.Leaves() {
+					if _, err := doc.RunText(l); err != nil {
+						t.Errorf("RunText on %s leaf %s: %v", l.Role, stage, err)
+					}
 				}
 			}
+			resolveAll("after parse")
 			root.Reclassify(text.DefaultStructureOptions())
+			resolveAll("after Reclassify")
 		})
 	}
 }
