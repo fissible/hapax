@@ -603,6 +603,13 @@ Whether a list item is prose is decided **per item** by sentential structure, no
 container. Non-included leaves are recorded rather than discarded — needed for spans, for
 rehydration, and so a policy change can be applied without reparsing.
 
+**A run with no words left after excision is outside the population, wherever it sits.** A
+paragraph that is nothing but a code span or an image has no authored prose in it, and
+admitting it would add a paragraph observation carrying no measurement — diluting every
+per-paragraph statistic with an empty row. Only a role exclusion outranks this; the
+block-quote policy does not, since a policy about *whose* words they are cannot make an
+empty run measurable. Added in slice 2d.
+
 ### Spans, normalization, and boundaries that may not exist
 
 Issue #3 decided the exemplar cache stores spans rather than sentences, so no second copy of
