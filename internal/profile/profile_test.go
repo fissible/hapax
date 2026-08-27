@@ -134,10 +134,19 @@ func withTrainDocument(t *testing.T, files map[string]string, name, body string,
 func multiParagraphCorpus(n int) map[string]string {
 	files := make(map[string]string, n)
 	for i := 0; i < n; i++ {
+		// Word LENGTH varies with the document. An earlier version varied only
+		// the numeric index, and numbers are not lexical tokens, so every
+		// document had an identical word-length mean and no test could tell one
+		// population of documents from another.
+		word := strings.Repeat("w", i%5+2)
 		paragraphs := make([]string, 0, i%4+1)
 		for j := 0; j <= i%4; j++ {
+			// The "m<index>" token makes every document's body distinct for any
+			// n. Word length and paragraph count both cycle — i%5 and i%4 —
+			// and they repeat together every twenty documents, so varying only
+			// those silently deduped multiParagraphCorpus(24) down to twenty.
 			paragraphs = append(paragraphs,
-				"Paragraph "+pad(j)+" of document "+pad(i)+", which carries a comma and runs on for a while.")
+				"Paragraph "+pad(j)+" of m"+pad(i)+" holds "+word+" and "+word+" and "+word+", which carries a comma.")
 		}
 		files["m"+pad(i)+".md"] = strings.Join(paragraphs, "\n\n") + "\n"
 	}
@@ -238,10 +247,15 @@ func documentWeightedMean(groups [][]float64) float64 {
 	return mean(perDoc)
 }
 
+// Each document carries a distinct lexical word, of a length that varies with
+// the index. Without it the bodies collapse to three variants, corpus admission
+// dedupes them, and a helper asked for eight documents silently yields three —
+// which stayed invisible until a paragraph floor made the shortfall a refusal.
 func prosaicCorpus(n int) map[string]string {
 	files := make(map[string]string, n)
 	for i := 0; i < n; i++ {
-		files["d"+pad(i)+".md"] = "The subject was considered, and the matter that followed was settled because the parties agreed. " +
+		files["d"+pad(i)+".md"] = "The subject " + strings.Repeat("q", i%7+3) + pad(i) +
+			" was considered, and the matter that followed was settled because the parties agreed. " +
 			strings.Repeat("Another sentence of ordinary prose follows here. ", i%3+1)
 	}
 	return files
@@ -761,7 +775,12 @@ func TestParagraphsArePooledUnweightedAcrossDocuments(t *testing.T) {
 // paragraph level would leak: paragraphs from one document share topic,
 // register and occasion, which inflates every metric eval later reports.
 func TestParagraphsComeOnlyFromTrainDocuments(t *testing.T) {
-	root, snap := writeCorpus(t, multiParagraphCorpus(24), corpusPolicy())
+	// Balanced split weights, unlike the shared policy: this test needs
+	// documents OUTSIDE train to have anything that could leak, and the shared
+	// 98/1/1 weights put essentially everything in train.
+	pol := corpusPolicy()
+	pol.Splits = corpus.SplitWeights{Train: 1, Calibrate: 1, Test: 1}
+	root, snap := writeCorpus(t, multiParagraphCorpus(24), pol)
 
 	nonTrain := 0
 	for _, d := range snap.Eligible() {
