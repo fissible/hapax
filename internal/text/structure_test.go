@@ -632,7 +632,9 @@ func TestSententialityRuleBoundaries(t *testing.T) {
 
 		// A colon or comma is not a sentence terminator.
 		{"colon ending", "The three splits are as follows:", false},
-		{"comma ending", "First we admit the document, then we parse it,", false},
+		// Seven words, deliberately: at eight the unpunctuated tier would admit
+		// it regardless, and this case is about the comma not terminating.
+		{"comma ending", "We admit the document, then parse it,", false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -680,7 +682,7 @@ func TestSententialityIsJudgedAfterExcision(t *testing.T) {
 		want  bool
 	}{
 		{"only code spans", "`--verbose` `--quiet` `--json` `--porcelain` `--color` `--no-pager`", 0, false},
-		{"code supplies the words", "See `func Structure(opts StructureOptions) *Node` here.", 3, false},
+		{"code supplies the words", "See `func Structure(opts StructureOptions) *Node` here.", 2, false},
 		{"image supplies the words", "![A scatter plot of AUC against corpus size](plot.png)", 0, false},
 	}
 	for _, c := range cases {
