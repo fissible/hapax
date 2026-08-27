@@ -13,19 +13,38 @@
 // to Calibrate and reported figures to Test, so building on anything else leaks
 // into the numbers eval later reports.
 //
-// # Fenced: document-unit, NOT production
+// # The unit is the PARAGRAPH
 //
-// Section 2 puts Tier A features at PARAGRAPH scale. Paragraph segmentation
-// needs the structural tree from text slice 2d, which does not exist, so this
-// slice computes one feature vector per DOCUMENT.
-//
-// That is a different statistic, not an approximation of the same one:
+// Section 2 puts Tier A features at paragraph scale, and text slice 2d supplies
+// the unit: one feature vector per included leaf run. The earlier document-unit
+// profile was a different statistic, not an approximation of this one —
 // document-level means average away exactly the within-document variation the
-// design wants to measure, so the variances come out too small and any
-// normalisation built on them would be overconfident. The profile therefore
-// declares `ProductionReady = false` with a reason, and a paragraph-scale
-// consumer must refuse it. It exists so the corpus → features → statistics →
-// identity path is real and tested; the unit is an input to it, not its shape.
+// design measures, so its variances came out too small. That fence is gone.
+//
+// # Paragraphs are pooled UNWEIGHTED
+//
+// Every included paragraph is one observation, so a document with twenty
+// paragraphs contributes twenty and a document with three contributes three.
+// This estimates "a randomly chosen paragraph by this author", which is exactly
+// what `score` measures: the estimator and the inference target match.
+// Weighting each document equally would estimate a different quantity — pick a
+// document, then a paragraph within it — and would inflate the influence of
+// short documents. The cost, accepted knowingly, is that a few long documents
+// can dominate.
+//
+// # Split assignment stays at DOCUMENT level
+//
+// Section 2 holds out whole source documents before profiling, because
+// paragraphs from one document share topic, register and occasion. A paragraph
+// inherits its document's split and never crosses one.
+//
+// # The size floor is DECLARED, not derived
+//
+// Section 2 requires a published minimum segment size per tier. None has been
+// derived, so the profile applies a declared global floor on lexical tokens per
+// paragraph, records paragraphs below it rather than dropping them silently,
+// and flags the floor as underived — the same discipline `MinObservationsDerived`
+// already applies.
 package profile_test
 
 import (
@@ -44,13 +63,20 @@ import (
 func requirements() profile.Requirements {
 	return profile.Requirements{
 		MinDocuments:              5,
+		MinParagraphs:             5,
 		MinObservationsPerFeature: 3,
+		MinParagraphLexicalTokens: 1,
 		OutlierMADs:               0, // trimming off unless a test asks for it
 	}
 }
 
 func loose() profile.Requirements {
-	return profile.Requirements{MinDocuments: 1, MinObservationsPerFeature: 1}
+	return profile.Requirements{
+		MinDocuments:              1,
+		MinParagraphs:             1,
+		MinObservationsPerFeature: 1,
+		MinParagraphLexicalTokens: 1,
+	}
 }
 
 func corpusPolicy() corpus.Policy {
@@ -102,6 +128,116 @@ func withTrainDocument(t *testing.T, files map[string]string, name, body string,
 	return "", nil
 }
 
+// multiParagraphCorpus writes documents whose paragraph counts DIFFER, so that
+// unweighted pooling is distinguishable from document weighting. A fixture
+// where every document holds one paragraph cannot tell the two apart.
+func multiParagraphCorpus(n int) map[string]string {
+	files := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		paragraphs := make([]string, 0, i%4+1)
+		for j := 0; j <= i%4; j++ {
+			paragraphs = append(paragraphs,
+				"Paragraph "+pad(j)+" of document "+pad(i)+", which carries a comma and runs on for a while.")
+		}
+		files["m"+pad(i)+".md"] = strings.Join(paragraphs, "\n\n") + "\n"
+	}
+	return files
+}
+
+// paragraphValues extracts every train document's per-paragraph feature values
+// INDEPENDENTLY of the profile builder, through the same public path a consumer
+// would use: structure, included leaves, run tokens, extract. Returned per
+// document so a test can distinguish pooled from document-weighted statistics.
+func paragraphValues(t *testing.T, root string, snap *corpus.Snapshot, floor int) map[features.ID][][]float64 {
+	t.Helper()
+	return valuesFor(t, root, trainDocs(snap), floor)
+}
+
+func valuesFor(t *testing.T, root string, docs []corpus.Document, floor int) map[features.ID][][]float64 {
+	t.Helper()
+	out := map[features.ID][][]float64{}
+	for _, def := range features.Definitions() {
+		out[def.ID] = nil
+	}
+	for _, d := range docs {
+		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.Path)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		doc, err := text.Admit(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		perDoc := map[features.ID][]float64{}
+		for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+			tokens, err := doc.RunTokens(leaf)
+			if err != nil {
+				t.Fatalf("RunTokens: %v", err)
+			}
+			lexical := 0
+			for _, tok := range tokens {
+				if tok.Lexical {
+					lexical++
+				}
+			}
+			if lexical < floor {
+				continue
+			}
+			v := features.Extract(tokens)
+			for _, def := range features.Definitions() {
+				if fv, ok := v.Get(def.ID); ok && fv.Defined {
+					perDoc[def.ID] = append(perDoc[def.ID], fv.Value)
+				}
+			}
+		}
+		for _, def := range features.Definitions() {
+			if len(perDoc[def.ID]) > 0 {
+				out[def.ID] = append(out[def.ID], perDoc[def.ID])
+			}
+		}
+	}
+	return out
+}
+
+// allEligibleParagraphValues is paragraphValues over EVERY eligible document,
+// train or not. It exists only so a test can prove that the train-only figure
+// differs — never as an expectation the profile should match.
+func allEligibleParagraphValues(t *testing.T, root string, snap *corpus.Snapshot, floor int) map[features.ID][][]float64 {
+	t.Helper()
+	return valuesFor(t, root, snap.Eligible(), floor)
+}
+
+func pooled(groups [][]float64) []float64 {
+	var all []float64
+	for _, g := range groups {
+		all = append(all, g...)
+	}
+	return all
+}
+
+func mean(values []float64) float64 {
+	if len(values) == 0 {
+		return 0
+	}
+	var sum float64
+	for _, v := range values {
+		sum += v
+	}
+	return sum / float64(len(values))
+}
+
+// documentWeightedMean is the statistic this profile deliberately does NOT
+// compute. It exists so a test can prove the two differ on its fixture.
+func documentWeightedMean(groups [][]float64) float64 {
+	var perDoc []float64
+	for _, g := range groups {
+		if len(g) > 0 {
+			perDoc = append(perDoc, mean(g))
+		}
+	}
+	return mean(perDoc)
+}
+
 func prosaicCorpus(n int) map[string]string {
 	files := make(map[string]string, n)
 	for i := 0; i < n; i++ {
@@ -141,26 +277,83 @@ func trainDocs(snap *corpus.Snapshot) []corpus.Document {
 }
 
 // ---------------------------------------------------------------------------
-// The fence
+// The unit
 // ---------------------------------------------------------------------------
 
-// A document-unit profile is a plumbing artifact. It must say so, because a
-// consumer that treated it as the paragraph-scale profile the design specifies
-// would normalise against variances that are systematically too small.
-func TestDocumentUnitProfileIsNotProductionReady(t *testing.T) {
-	p := build(t, prosaicCorpus(8), requirements())
+// The unit is now the one the design specifies. The OLD fence — wrong unit — is
+// gone, and the reason must no longer say otherwise.
+func TestProfileIsParagraphUnit(t *testing.T) {
+	p := build(t, multiParagraphCorpus(8), requirements())
 
-	if p.Unit != profile.UnitDocument {
-		t.Errorf("Unit = %q, want %q", p.Unit, profile.UnitDocument)
+	if p.Unit != profile.UnitParagraph {
+		t.Errorf("Unit = %q, want %q", p.Unit, profile.UnitParagraph)
 	}
+	if strings.Contains(strings.ToLower(p.NotProductionReason), "unit") {
+		t.Errorf("reason %q still blames the unit; the unit is now correct", p.NotProductionReason)
+	}
+}
+
+// Readiness still withheld, for a smaller and different reason.
+//
+// An earlier draft of this slice set ProductionReady once the unit was right.
+// That overclaims: Section 2 requires each feature's minimum sample size to be
+// DERIVED and published, and requires a published minimum segment size per
+// tier. Neither derivation has run — the profile applies declared stand-ins and
+// says so — and a flag named ProductionReady must not assert more than the
+// artifact has earned. What changed is the reason, not the answer: it used to
+// be "the unit is wrong", which was a defect in the statistic itself; it is now
+// "the minimums are declared, not derived", which is a calibration gap.
+func TestReadinessIsWithheldUntilTheMinimumsAreDerived(t *testing.T) {
+	p := build(t, multiParagraphCorpus(8), requirements())
+
 	if p.ProductionReady {
-		t.Error("a document-unit profile reports ProductionReady; paragraph segmentation does not exist yet")
+		t.Error("ProductionReady is set while every minimum is a declared stand-in; Section 2 requires them derived")
 	}
 	if p.NotProductionReason == "" {
-		t.Error("no reason recorded for withholding production readiness")
+		t.Fatal("no reason recorded for withholding production readiness")
 	}
-	if !strings.Contains(strings.ToLower(p.NotProductionReason), "paragraph") {
-		t.Errorf("reason %q does not name the missing paragraph unit", p.NotProductionReason)
+	if !strings.Contains(strings.ToLower(p.NotProductionReason), "deriv") {
+		t.Errorf("reason %q does not name the missing derivation", p.NotProductionReason)
+	}
+}
+
+// Sample adequacy is per feature. A feature short of its minimum is undefined
+// and a consumer must refuse THAT feature; it does not change the artifact-wide
+// readiness answer, which is about derivation.
+func TestSampleAdequacyIsPerFeature(t *testing.T) {
+	enough := build(t, multiParagraphCorpus(8), requirements())
+	for _, d := range features.Definitions() {
+		if !stat(t, enough, d.ID).Defined {
+			t.Errorf("%s is undefined with %d observations against a minimum of %d",
+				d.ID, stat(t, enough, d.ID).N, enough.Requirements.MinObservationsPerFeature)
+		}
+	}
+
+	req := requirements()
+	req.MinObservationsPerFeature = 100000
+	short := build(t, multiParagraphCorpus(8), req)
+	for _, d := range features.Definitions() {
+		if stat(t, short, d.ID).Defined {
+			t.Errorf("%s is defined against an unreachable minimum", d.ID)
+		}
+	}
+	if short.NotProductionReason != enough.NotProductionReason {
+		t.Errorf("readiness reason changed with the observation floor (%q vs %q); adequacy is per feature",
+			short.NotProductionReason, enough.NotProductionReason)
+	}
+}
+
+// The document unit is no longer produced. The constant survives so a profile
+// persisted before this slice is recognisably not paragraph-scale rather than
+// carrying an unknown unit string.
+func TestDocumentUnitIsNeverProduced(t *testing.T) {
+	if profile.UnitDocument == profile.UnitParagraph {
+		t.Fatal("the two units are the same value")
+	}
+	for _, files := range []map[string]string{multiParagraphCorpus(8), prosaicCorpus(8)} {
+		if p := build(t, files, requirements()); p.Unit == profile.UnitDocument {
+			t.Error("Build produced a document-unit profile")
+		}
 	}
 }
 
@@ -178,7 +371,9 @@ func TestProfileSchemaIsExactly(t *testing.T) {
 		"FeatureSetVersion": true, "FeatureManifestDigest": true,
 		"SchemaVersion": true, "VarianceConvention": true,
 		"OutlierAlgorithm": true, "Requirements": true,
-		"Documents": true, "Stats": true,
+		"Documents": true, "Paragraphs": true,
+		"ParagraphsBelowFloor": true, "ParagraphFloorDerived": true,
+		"Stats": true,
 	}
 	rt := reflect.TypeOf(profile.Profile{})
 	for i := 0; i < rt.NumField(); i++ {
@@ -217,7 +412,7 @@ func TestStatsSchemaIsExactly(t *testing.T) {
 // applies a global floor and says the minimum is not derived — rather than
 // presenting a stand-in as an established figure.
 func TestPerFeatureMinimumsAreRecordedAsUnderived(t *testing.T) {
-	p := build(t, prosaicCorpus(8), requirements())
+	p := build(t, multiParagraphCorpus(8), requirements())
 	for _, d := range features.Definitions() {
 		s := stat(t, p, d.ID)
 		if s.MinObservationsDerived {
@@ -284,13 +479,41 @@ func TestBuildRefusesWhenNoDocumentIsInTrain(t *testing.T) {
 	t.Skip("could not construct a corpus with no train documents")
 }
 
+// A corpus can hold enough documents and still not hold enough paragraphs, so
+// the paragraph floor is its own refusal rather than a consequence of the
+// document one.
+func TestBuildRefusesBelowMinimumParagraphCount(t *testing.T) {
+	root, snap := writeCorpus(t, prosaicCorpus(8), corpusPolicy())
+
+	req := loose()
+	req.MinParagraphs = 100000
+	if _, err := profile.Build(root, snap, req); err == nil {
+		t.Fatal("Build accepted a corpus far below the paragraph minimum")
+	} else if !strings.Contains(strings.ToLower(err.Error()), "paragraph") {
+		t.Errorf("refusal %q does not name the paragraph shortfall", err)
+	}
+}
+
 func TestInvalidRequirementsAreRejected(t *testing.T) {
 	root, snap := writeCorpus(t, prosaicCorpus(8), corpusPolicy())
+	valid := loose()
+	invalid := func(mutate func(*profile.Requirements)) profile.Requirements {
+		req := valid
+		mutate(&req)
+		return req
+	}
 	for name, req := range map[string]profile.Requirements{
-		"zero minimum documents":     {MinDocuments: 0, MinObservationsPerFeature: 1},
-		"negative minimum documents": {MinDocuments: -1, MinObservationsPerFeature: 1},
-		"zero observations":          {MinDocuments: 1, MinObservationsPerFeature: 0},
-		"negative MADs":              {MinDocuments: 1, MinObservationsPerFeature: 1, OutlierMADs: -1},
+		"zero minimum documents":      invalid(func(r *profile.Requirements) { r.MinDocuments = 0 }),
+		"negative minimum documents":  invalid(func(r *profile.Requirements) { r.MinDocuments = -1 }),
+		"zero minimum paragraphs":     invalid(func(r *profile.Requirements) { r.MinParagraphs = 0 }),
+		"negative minimum paragraphs": invalid(func(r *profile.Requirements) { r.MinParagraphs = -1 }),
+		"zero observations":           invalid(func(r *profile.Requirements) { r.MinObservationsPerFeature = 0 }),
+		// A floor of zero is not "no floor": Section 2 requires a DECLARED
+		// minimum segment size, so omitting it must be an error rather than a
+		// silent bypass of the discipline.
+		"zero paragraph floor":     invalid(func(r *profile.Requirements) { r.MinParagraphLexicalTokens = 0 }),
+		"negative paragraph floor": invalid(func(r *profile.Requirements) { r.MinParagraphLexicalTokens = -1 }),
+		"negative MADs":            invalid(func(r *profile.Requirements) { r.OutlierMADs = -1 }),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := profile.Build(root, snap, req); err == nil {
@@ -381,59 +604,31 @@ func TestRejectedDocumentsAreNotUsed(t *testing.T) {
 // The statistics
 // ---------------------------------------------------------------------------
 
-// Expected values are computed here from the train documents using the merged
-// text and features packages, independently of the profile builder, for EVERY
-// feature rather than one.
+// Expected values are computed here from the train documents' PARAGRAPHS,
+// independently of the profile builder, for EVERY feature rather than one.
 func TestStatisticsMatchAnIndependentComputation(t *testing.T) {
-	files := map[string]string{}
-	for i := 0; i < 24; i++ {
-		files["z"+pad(i)+"a.md"] = "alpha" + pad(i) + " beta gamma delta"
-		files["z"+pad(i)+"b.md"] = "alpha" + pad(i) + ", beta gamma; delta"
-		files["z"+pad(i)+"c.md"] = "alpha" + pad(i) + ", beta, gamma: delta because that"
-	}
-	root, snap := writeCorpus(t, files, corpusPolicy())
+	root, snap := writeCorpus(t, multiParagraphCorpus(24), corpusPolicy())
 
-	// Gather every train document's feature vector independently.
-	perFeature := map[features.ID][]float64{}
-	for _, d := range trainDocs(snap) {
-		raw, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(d.Path)))
-		if err != nil {
-			t.Fatal(err)
-		}
-		doc, err := text.Admit(raw)
-		if err != nil {
-			t.Fatal(err)
-		}
-		v := features.Extract(doc.Tokens())
-		for _, def := range features.Definitions() {
-			fv, ok := v.Get(def.ID)
-			if ok && fv.Defined {
-				perFeature[def.ID] = append(perFeature[def.ID], fv.Value)
-			}
-		}
-	}
-	if len(perFeature) != len(features.Definitions()) {
-		t.Fatalf("independent computation produced %d features, want %d", len(perFeature), len(features.Definitions()))
-	}
+	req := loose()
+	independent := paragraphValues(t, root, snap, req.MinParagraphLexicalTokens)
 
-	built, err := profile.Build(root, snap, loose())
+	built, err := profile.Build(root, snap, req)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
 
 	for _, def := range features.Definitions() {
-		values := perFeature[def.ID]
+		values := pooled(independent[def.ID])
 		s := stat(t, built, def.ID)
 
 		if s.N != len(values) {
-			t.Errorf("%s: N = %d, want %d", def.ID, s.N, len(values))
+			t.Errorf("%s: N = %d, want %d paragraph observations", def.ID, s.N, len(values))
 			continue
 		}
-		var sum float64
-		for _, v := range values {
-			sum += v
+		if len(values) == 0 {
+			continue
 		}
-		wantMean := sum / float64(len(values))
+		wantMean := mean(values)
 		if diff := s.Mean - wantMean; diff > 1e-12 || diff < -1e-12 {
 			t.Errorf("%s: Mean = %v, want %v", def.ID, s.Mean, wantMean)
 		}
@@ -452,6 +647,160 @@ func TestStatisticsMatchAnIndependentComputation(t *testing.T) {
 		if diff := s.Variance - wantVar; diff > 1e-12 || diff < -1e-12 {
 			t.Errorf("%s: Variance = %v, want %v (sample, not population)", def.ID, s.Variance, wantVar)
 		}
+	}
+}
+
+// The one test whose expected numbers do not come from the extraction path the
+// builder uses. Everything else in this file shares Structure, IncludedLeaves,
+// RunTokens and features.Extract with production, so a fault in that shared
+// path would agree with itself. Here the values are computed by hand.
+//
+// The document holds exactly two paragraphs:
+//
+//	"aa bb cc dd"      -> 4 lexical tokens, each 2 characters -> mean 2.0
+//	"aaa bbb ccc ddd"  -> 4 lexical tokens, each 3 characters -> mean 3.0
+//
+// so pooled over both paragraphs word_length_mean has mean 2.5 and SAMPLE
+// variance ((2-2.5)^2 + (3-2.5)^2) / 1 = 0.5. A document-unit builder would see
+// one observation of 2.5 and no variance at all, which is exactly the failure
+// this slice exists to end.
+//
+// withTrainDocument appends a numeric filler to place the document in train.
+// That filler is a Number token, not a Word, so it is not lexical and cannot
+// move a word-length mean.
+func TestParagraphStatisticsAgainstHandComputedValues(t *testing.T) {
+	root, snap := withTrainDocument(t, nil, "anchor.md", "aa bb cc dd\n\naaa bbb ccc ddd", corpusPolicy())
+	if len(trainDocs(snap)) != 1 {
+		t.Fatalf("%d train documents, want 1", len(trainDocs(snap)))
+	}
+
+	p, err := profile.Build(root, snap, loose())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+
+	if p.Documents != 1 {
+		t.Errorf("Documents = %d, want 1", p.Documents)
+	}
+	if p.Paragraphs != 2 {
+		t.Fatalf("Paragraphs = %d, want 2 — one document, two paragraphs", p.Paragraphs)
+	}
+
+	s := stat(t, p, features.WordLengthMean)
+	if s.N != 2 {
+		t.Fatalf("N = %d, want 2 paragraph observations", s.N)
+	}
+	if diff := s.Mean - 2.5; diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("Mean = %v, want 2.5", s.Mean)
+	}
+	if !s.VarianceDefined {
+		t.Fatal("variance undefined over two observations")
+	}
+	if diff := s.Variance - 0.5; diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("Variance = %v, want 0.5 (sample variance over two paragraphs)", s.Variance)
+	}
+}
+
+// The pooling decision, tested so that it can fail. A fixture where every
+// document holds the same number of paragraphs cannot distinguish unweighted
+// pooling from document weighting, so this one first PROVES the two statistics
+// differ on its corpus, then asserts the profile computes the pooled one.
+func TestParagraphsArePooledUnweightedAcrossDocuments(t *testing.T) {
+	files := map[string]string{}
+	// Documents with many comma-free paragraphs, each also carrying leaves that
+	// are NOT in the feature population: a heading, a code block and a bare
+	// list label. A builder that pooled every leaf rather than the included
+	// ones would pass without them.
+	for i := 0; i < 12; i++ {
+		paragraphs := make([]string, 0, 6)
+		for j := 0; j < 6; j++ {
+			paragraphs = append(paragraphs, "Plain prose "+pad(i)+pad(j)+" without any punctuation at all here")
+		}
+		files["long"+pad(i)+".md"] = "# Heading, with a comma, excluded by role\n\n" +
+			strings.Join(paragraphs, "\n\n") +
+			"\n\n- Redis\n\n```\ncode, with, commas, is, not, prose\n```\n"
+	}
+	// Documents with a single comma-dense paragraph.
+	for i := 0; i < 12; i++ {
+		files["short"+pad(i)+".md"] = "Dense, prose, " + pad(i) + ", with, very, many, commas, indeed, here\n"
+	}
+	root, snap := writeCorpus(t, files, corpusPolicy())
+
+	req := loose()
+	independent := paragraphValues(t, root, snap, req.MinParagraphLexicalTokens)
+	groups := independent[features.CommaDensity]
+
+	wantPooled := mean(pooled(groups))
+	wantWeighted := documentWeightedMean(groups)
+	if diff := wantPooled - wantWeighted; diff < 1e-6 && diff > -1e-6 {
+		t.Fatalf("fixture cannot discriminate: pooled mean %v and document-weighted mean %v are equal", wantPooled, wantWeighted)
+	}
+
+	built, err := profile.Build(root, snap, req)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	got := stat(t, built, features.CommaDensity).Mean
+
+	if diff := got - wantPooled; diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("Mean = %v, want the unweighted pooled mean %v", got, wantPooled)
+	}
+	if diff := got - wantWeighted; diff < 1e-12 && diff > -1e-12 {
+		t.Errorf("Mean = %v is the document-weighted mean; paragraphs are pooled unweighted", got)
+	}
+
+	if built.Paragraphs != len(pooled(groups)) {
+		t.Errorf("Paragraphs = %d, want %d", built.Paragraphs, len(pooled(groups)))
+	}
+	if built.Paragraphs <= built.Documents {
+		t.Errorf("Paragraphs(%d) <= Documents(%d); this corpus has multi-paragraph documents", built.Paragraphs, built.Documents)
+	}
+}
+
+// A paragraph inherits its document's split and never crosses one. Splitting at
+// paragraph level would leak: paragraphs from one document share topic,
+// register and occasion, which inflates every metric eval later reports.
+func TestParagraphsComeOnlyFromTrainDocuments(t *testing.T) {
+	root, snap := writeCorpus(t, multiParagraphCorpus(24), corpusPolicy())
+
+	nonTrain := 0
+	for _, d := range snap.Eligible() {
+		if d.Split != corpus.Train {
+			nonTrain++
+		}
+	}
+	if nonTrain == 0 {
+		t.Fatal("fixture has no non-train documents, so it cannot detect a leak")
+	}
+
+	built, err := profile.Build(root, snap, loose())
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	trainOnly := pooled(paragraphValues(t, root, snap, loose().MinParagraphLexicalTokens)[features.WordLengthMean])
+	if built.Paragraphs != len(trainOnly) {
+		t.Errorf("Paragraphs = %d, want %d — the train documents' paragraphs only", built.Paragraphs, len(trainOnly))
+	}
+	if built.Documents != len(trainDocs(snap)) {
+		t.Errorf("Documents = %d, want %d train documents", built.Documents, len(trainDocs(snap)))
+	}
+
+	// Counts alone would not catch a leak that happened to preserve them, so
+	// the STATISTICS must be the train-only ones. The fixture is built so the
+	// two populations give different means.
+	everything := pooled(allEligibleParagraphValues(t, root, snap, loose().MinParagraphLexicalTokens)[features.WordLengthMean])
+	if len(everything) == len(trainOnly) {
+		t.Fatalf("fixture cannot discriminate: all %d eligible paragraphs are in train", len(everything))
+	}
+	if diff := mean(everything) - mean(trainOnly); diff < 1e-9 && diff > -1e-9 {
+		t.Fatalf("fixture cannot discriminate: train-only and all-document means are equal (%v)", mean(trainOnly))
+	}
+	got := stat(t, built, features.WordLengthMean).Mean
+	if diff := got - mean(trainOnly); diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("Mean = %v, want the train-only mean %v", got, mean(trainOnly))
+	}
+	if diff := got - mean(everything); diff < 1e-12 && diff > -1e-12 {
+		t.Errorf("Mean = %v is the all-document mean; Calibrate and Test leaked into the profile", got)
 	}
 }
 
@@ -500,23 +849,135 @@ func TestFeatureWithTooFewObservationsIsUndefined(t *testing.T) {
 	}
 }
 
-// Undefined values are excluded and counted, never treated as zero. Every
-// document must be accounted for in exactly one of the three tallies.
-func TestUndefinedValuesAreExcludedAndCounted(t *testing.T) {
-	pol := corpusPolicy()
-	pol.MinLexicalTokens = 0
-	root, snap := withTrainDocument(t, prosaicCorpus(10), "punct.md", ", ; : . , ; : .", pol)
+// Every admitted paragraph is accounted for in exactly one of the three
+// tallies, so a value can never go missing between them.
+func TestEveryParagraphIsAccountedFor(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  profile.Requirements
+	}{
+		{"no trimming", loose()},
+		{"with trimming", func() profile.Requirements { r := loose(); r.OutlierMADs = 3; return r }()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A corpus carrying every kind of leaf the accounting must survive:
+			// a role-excluded heading, a non-sentential list label, a fully
+			// excised run, and a below-floor paragraph.
+			files := map[string]string{}
+			for i := 0; i < 16; i++ {
+				files["acc"+pad(i)+".md"] = "# Heading " + pad(i) + "\n\n" +
+					"A paragraph of ordinary prose that clears the floor comfortably.\n\n" +
+					"- Redis\n\n" +
+					"`code and nothing else`\n\n" +
+					"Tiny " + pad(i) + "\n\n" +
+					"Another paragraph of ordinary prose, also clearing the floor.\n"
+			}
+			root, snap := writeCorpus(t, files, corpusPolicy())
+			req := tc.req
+			req.MinParagraphLexicalTokens = 5
 
-	built, err := profile.Build(root, snap, loose())
+			built, err := profile.Build(root, snap, req)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if built.Paragraphs == 0 {
+				t.Fatal("no paragraphs admitted; the identity below would hold vacuously")
+			}
+			if built.ParagraphsBelowFloor == 0 {
+				t.Error("no below-floor paragraphs counted, though every document holds a two-word one")
+			}
+
+			want := len(pooled(paragraphValues(t, root, snap, req.MinParagraphLexicalTokens)[features.WordLengthMean]))
+			if built.Paragraphs != want {
+				t.Errorf("Paragraphs = %d, want %d — headings, labels and fully excised runs are not observations", built.Paragraphs, want)
+			}
+			for _, d := range features.Definitions() {
+				s := stat(t, built, d.ID)
+				if s.N+s.Undefined+s.Excluded != built.Paragraphs {
+					t.Errorf("%s: N(%d) + Undefined(%d) + Excluded(%d) != Paragraphs(%d)",
+						d.ID, s.N, s.Undefined, s.Excluded, built.Paragraphs)
+				}
+			}
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// The declared size floor
+// ---------------------------------------------------------------------------
+
+// A paragraph below the floor is not an observation, and it is COUNTED rather
+// than dropped silently — the same discipline slice 2d applies to leaves it
+// excludes. A four-word paragraph otherwise contributes a word-length mean at
+// full weight, which is the noise the tiering scheme exists to keep out.
+func TestParagraphsBelowTheFloorAreExcludedAndCounted(t *testing.T) {
+	files := map[string]string{}
+	for i := 0; i < 12; i++ {
+		files["p"+pad(i)+".md"] = "A paragraph of ordinary prose that comfortably clears any floor here.\n\nTiny " + pad(i) + "\n"
+	}
+	root, snap := writeCorpus(t, files, corpusPolicy())
+
+	low := loose()
+	low.MinParagraphLexicalTokens = 1
+	high := loose()
+	high.MinParagraphLexicalTokens = 6
+
+	below, err := profile.Build(root, snap, low)
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
-	s := stat(t, built, features.CommaDensity)
-	if s.Undefined == 0 {
-		t.Error("no undefined values counted, though a document with no lexical tokens is in train")
+	above, err := profile.Build(root, snap, high)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
 	}
-	if s.N+s.Undefined+s.Excluded != built.Documents {
-		t.Errorf("N(%d) + Undefined(%d) + Excluded(%d) != Documents(%d)", s.N, s.Undefined, s.Excluded, built.Documents)
+
+	if below.ParagraphsBelowFloor != 0 {
+		t.Errorf("floor 1 excluded %d paragraphs; every paragraph here has at least one lexical token", below.ParagraphsBelowFloor)
+	}
+	if above.ParagraphsBelowFloor == 0 {
+		t.Fatal("floor 6 excluded nothing, though half the paragraphs are two words long")
+	}
+	if above.Paragraphs+above.ParagraphsBelowFloor != below.Paragraphs {
+		t.Errorf("Paragraphs(%d) + ParagraphsBelowFloor(%d) != the unfiltered %d",
+			above.Paragraphs, above.ParagraphsBelowFloor, below.Paragraphs)
+	}
+
+	// The floor is a separate tally from Undefined: a short paragraph is not an
+	// undefined observation, it is not an observation at all.
+	for _, d := range features.Definitions() {
+		if got := stat(t, above, d.ID).Undefined; got != 0 {
+			t.Errorf("%s counted %d undefined values; below-floor paragraphs belong in ParagraphsBelowFloor", d.ID, got)
+		}
+	}
+
+	// Counters alone are not enough: a builder can populate them correctly and
+	// still compute its statistics over the wrong population. The mean must
+	// move, and must land on the above-floor value.
+	survivors := pooled(paragraphValues(t, root, snap, high.MinParagraphLexicalTokens)[features.WordLengthMean])
+	everything := pooled(paragraphValues(t, root, snap, low.MinParagraphLexicalTokens)[features.WordLengthMean])
+	if len(survivors) != above.Paragraphs {
+		t.Errorf("Paragraphs = %d, want %d above-floor paragraphs", above.Paragraphs, len(survivors))
+	}
+	if diff := mean(survivors) - mean(everything); diff < 1e-9 && diff > -1e-9 {
+		t.Fatalf("fixture cannot discriminate: the floor does not move the mean (%v)", mean(survivors))
+	}
+	got := stat(t, above, features.WordLengthMean).Mean
+	if diff := got - mean(survivors); diff > 1e-12 || diff < -1e-12 {
+		t.Errorf("Mean = %v, want the above-floor mean %v", got, mean(survivors))
+	}
+	if diff := got - mean(everything); diff < 1e-12 && diff > -1e-12 {
+		t.Errorf("Mean = %v includes the below-floor paragraphs", got)
+	}
+}
+
+// The floor is declared, not derived, and says so.
+func TestParagraphFloorIsRecordedAsUnderived(t *testing.T) {
+	p := build(t, multiParagraphCorpus(8), requirements())
+	if p.ParagraphFloorDerived {
+		t.Error("the profile claims a derived paragraph floor; Section 2's derivation has not run")
+	}
+	if p.Requirements.MinParagraphLexicalTokens <= 0 {
+		t.Error("no paragraph size floor declared; Section 2 requires a published minimum segment size")
 	}
 }
 
@@ -585,8 +1046,8 @@ func TestZeroMADDoesNotTrimEverything(t *testing.T) {
 	if s.Excluded != 0 {
 		t.Errorf("a zero MAD excluded %d observations; identical values are not outliers", s.Excluded)
 	}
-	if s.N != p.Documents {
-		t.Errorf("N = %d, want all %d documents", s.N, p.Documents)
+	if s.N != p.Paragraphs {
+		t.Errorf("N = %d, want all %d paragraphs", s.N, p.Paragraphs)
 	}
 	if !s.Defined {
 		t.Error("a feature whose values are all identical is defined, with zero variance")
@@ -630,7 +1091,7 @@ func TestProvenanceIsRecorded(t *testing.T) {
 }
 
 func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
-	files := prosaicCorpus(8)
+	files := multiParagraphCorpus(8)
 	root, snap := writeCorpus(t, files, corpusPolicy())
 
 	first, err := profile.Build(root, snap, requirements())
@@ -646,7 +1107,7 @@ func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
 	}
 
 	t.Run("corpus content", func(t *testing.T) {
-		changed := mergeFiles(files, map[string]string{"d000.md": "Entirely different prose, at some length, for this corpus."})
+		changed := mergeFiles(files, map[string]string{"m000.md": "Entirely different prose, at some length, for this corpus.\n\nAnd a second paragraph that differs too.\n"})
 		root2, snap2 := writeCorpus(t, changed, corpusPolicy())
 		other, err := profile.Build(root2, snap2, requirements())
 		if err != nil {
@@ -659,7 +1120,9 @@ func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
 
 	for name, mutate := range map[string]func(*profile.Requirements){
 		"minimum documents":    func(r *profile.Requirements) { r.MinDocuments = 6 },
+		"minimum paragraphs":   func(r *profile.Requirements) { r.MinParagraphs = 6 },
 		"minimum observations": func(r *profile.Requirements) { r.MinObservationsPerFeature = 4 },
+		"paragraph size floor": func(r *profile.Requirements) { r.MinParagraphLexicalTokens = 2 },
 		"outlier rule":         func(r *profile.Requirements) { r.OutlierMADs = 3 },
 	} {
 		t.Run("requirements: "+name, func(t *testing.T) {
@@ -680,6 +1143,8 @@ func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
 		"feature-manifest-digest",
 		"min-documents",
 		"min-observations-per-feature",
+		"min-paragraph-lexical-tokens",
+		"min-paragraphs",
 		"outlier-algorithm",
 		"outlier-mads",
 		"profile-schema-version",
@@ -721,6 +1186,12 @@ func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
 	}
 	if inputs["min-observations-per-feature"] != itoa(first.Requirements.MinObservationsPerFeature) {
 		t.Errorf("identity input min-observations-per-feature = %q, want %q", inputs["min-observations-per-feature"], itoa(first.Requirements.MinObservationsPerFeature))
+	}
+	if inputs["min-paragraphs"] != itoa(first.Requirements.MinParagraphs) {
+		t.Errorf("identity input min-paragraphs = %q, want %q", inputs["min-paragraphs"], itoa(first.Requirements.MinParagraphs))
+	}
+	if inputs["min-paragraph-lexical-tokens"] != itoa(first.Requirements.MinParagraphLexicalTokens) {
+		t.Errorf("identity input min-paragraph-lexical-tokens = %q, want %q", inputs["min-paragraph-lexical-tokens"], itoa(first.Requirements.MinParagraphLexicalTokens))
 	}
 }
 
