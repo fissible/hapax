@@ -310,3 +310,17 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 ## Round 3 — VERDICT: APPROVE
 
 No remaining Section 3 blockers.
+
+## Round 4 — VERDICT: REVISE (raised while reviewing the slice 2d tests)
+
+One defect, found by the reviewer of the frozen-first test suite rather than of the prose.
+
+**The normalized-to-raw offset map is not needed and claiming it obscures the contract.**
+Section 3 required parsing to maintain a map from normalized positions to raw ones. That is
+only true of a parser that consumes the normalized form. Parsing the raw bytes instead makes
+every reported offset a raw offset already, so the map translates nothing — and a map that
+exists but is always the identity is a place for a bug to hide.
+
+→ Section 3 now states that structural parsing runs over the raw admitted bytes and that NFC
+is applied only when a span is resolved to text. The requirement that survives unchanged is
+the one that mattered: only raw offsets persist.

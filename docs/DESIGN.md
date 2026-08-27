@@ -610,8 +610,13 @@ private prose exists. That collides with normalization, and not every desired bo
 representable.
 
 **Spans are `(byte offset, byte length)` into the raw file bytes.** Normalization form is
-**NFC**, applied after span capture; parsing maintains an offset map from normalized
-positions to raw ones, and only raw offsets persist.
+**NFC**, applied after span capture, and only raw offsets persist.
+
+An earlier draft required parsing to maintain an offset map from normalized positions to
+raw ones. That map is only necessary if the parser consumes the normalized form. It does
+not: **structural parsing runs over the raw admitted bytes**, so every offset the parser
+reports is already a raw offset and the map has nothing to translate. NFC is applied when a
+span is resolved to text, never before. Revised during slice 2d — see `docs/REVIEW.md`.
 
 **Not every normalized boundary has a raw counterpart.** `e` + combining acute normalizes to
 a single `é`: the boundary *between* those two raw code points has no position in the
