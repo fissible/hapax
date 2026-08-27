@@ -157,10 +157,16 @@ func (d *Document) Normalized() string {
 // Text is NFC-normalized. The returned slice is a copy and may be changed by
 // the caller without affecting the document's cached tokenization.
 func (d *Document) Tokens() []Token {
+	return append([]Token(nil), d.cachedTokens()...)
+}
+
+// cachedTokens returns the document-owned tokenization. Callers must treat the
+// returned slice as immutable; public consumers should use Tokens instead.
+func (d *Document) cachedTokens() []Token {
 	d.tokenize.Do(func() {
 		d.tokens = d.tokenizeRaw()
 	})
-	return append([]Token(nil), d.tokens...)
+	return d.tokens
 }
 
 func (d *Document) tokenizeRaw() []Token {
