@@ -323,7 +323,10 @@ func checkTree(t *testing.T, doc *text.Document, root *text.Node, opts text.Stru
 
 		// The verdict is a pure function of the recorded evidence and the
 		// options. This is what makes Reclassify sound.
-		wantSentential := (l.EndsTerminal && l.Words >= opts.MinSententialWords) || l.Words >= opts.MinUnpunctuatedWords
+		// Zero words is never sentential: a run with nothing left after
+		// excision carries no authored prose to measure.
+		wantSentential := l.Words > 0 &&
+			((l.EndsTerminal && l.Words >= opts.MinSententialWords) || l.Words >= opts.MinUnpunctuatedWords)
 		if l.Sentential != wantSentential {
 			t.Errorf("leaf %d (%s) %q: Sentential = %v, but Words=%d EndsTerminal=%v under %+v implies %v",
 				i, l.Role, runText(t, doc, l), l.Sentential, l.Words, l.EndsTerminal, opts, wantSentential)
@@ -331,6 +334,13 @@ func checkTree(t *testing.T, doc *text.Document, root *text.Node, opts text.Stru
 
 		if l.Included != (l.Exclusion == text.NotExcluded) {
 			t.Errorf("leaf %d (%s): Included=%v but Exclusion=%q", i, l.Role, l.Included, l.Exclusion)
+		}
+
+		// Precedence: role first, then the zero-word and sententiality rule,
+		// then the block-quote policy. So a run with nothing left after excision
+		// is excluded wherever it sits, and only a role exclusion outranks that.
+		if l.Words == 0 && l.Exclusion != text.ExcludedByRole && l.Exclusion != text.ExcludedNotSentential {
+			t.Errorf("leaf %d (%s) has no words left but Exclusion=%q, want %q", i, l.Role, l.Exclusion, text.ExcludedNotSentential)
 		}
 	}
 }
@@ -1070,6 +1080,204 @@ func TestImageOnlyParagraphIsNotProse(t *testing.T) {
 	}
 	if got := onlyRole(t, root, text.RoleParagraph); !got.Included {
 		t.Errorf("the following prose paragraph was excluded as %q", got.Exclusion)
+	}
+}
+
+// Every image form CommonMark defines, inline and reference alike.
+//
+// Added after the implementation panicked on four of these. An image with empty
+// alt text is ordinary — it is what a decorative image looks like — and a
+// reference-style image is no rarer.
+func TestImageFormsAreExcised(t *testing.T) {
+	const refDef = "\n\n[ref]: /url\n"
+	cases := []struct {
+		name     string
+		src      string
+		excision string
+		run      string
+	}{
+		{"inline with alt", "Before ![alt text](x.png) after the image here.\n", "![alt text](x.png)", "Before  after the image here."},
+		{"empty alt text", "Before ![](x.png) after the image here.\n", "![](x.png)", "Before  after the image here."},
+		{"whitespace alt text", "Before ![ ](x.png) after the image here.\n", "![ ](x.png)", "Before  after the image here."},
+		{"title attribute", "Before ![alt](x.png \"a title\") after the image.\n", "![alt](x.png \"a title\")", "Before  after the image."},
+		{"empty alt and title", "Before ![](x.png \"a title\") after the image.\n", "![](x.png \"a title\")", "Before  after the image."},
+		{"full reference", "Before ![alt text][ref] after the image here." + refDef, "![alt text][ref]", "Before  after the image here."},
+		{"collapsed reference", "Before ![ref][] after the image runs here." + refDef, "![ref][]", "Before  after the image runs here."},
+		{"shortcut reference", "Before ![ref] after the image runs here." + refDef, "![ref]", "Before  after the image runs here."},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc, root := structure(t, c.src, text.DefaultStructureOptions())
+			paras := findRole(root, text.RoleParagraph)
+			if len(paras) != 1 {
+				t.Fatalf("got %d paragraph leaves, want 1", len(paras))
+			}
+			para := paras[0]
+			if len(para.Excisions) != 1 {
+				t.Fatalf("got %d excisions, want 1: %+v", len(para.Excisions), para.Excisions)
+			}
+			if got, err := doc.Resolve(para.Excisions[0]); err != nil {
+				t.Fatalf("excision does not resolve: %v", err)
+			} else if got != c.excision {
+				t.Errorf("excision covers %q, want %q", got, c.excision)
+			}
+			if got := runText(t, doc, para); got != c.run {
+				t.Errorf("RunText = %q, want %q", got, c.run)
+			}
+		})
+	}
+}
+
+// A paragraph of nothing but images is not prose however many it holds, so the
+// image role cannot be conditioned on there being exactly one.
+func TestParagraphOfSeveralImagesIsNotProse(t *testing.T) {
+	doc, root := structure(t, "![](x.png)![](y.png)![](z.png)\n", text.DefaultStructureOptions())
+
+	leaf := onlyRole(t, root, text.RoleImage)
+	if len(leaf.Excisions) != 3 {
+		t.Fatalf("got %d excisions, want 3: %+v", len(leaf.Excisions), leaf.Excisions)
+	}
+	if got := runText(t, doc, leaf); got != "" {
+		t.Errorf("RunText = %q, want empty", got)
+	}
+	if leaf.Included || leaf.Exclusion != text.ExcludedByRole {
+		t.Errorf("Included=%v Exclusion=%q, want false/%q", leaf.Included, leaf.Exclusion, text.ExcludedByRole)
+	}
+}
+
+// Excision is driven by what the parser actually resolved. Markup that only
+// resembles a construct is authored prose and stays byte for byte: an unmatched
+// double backtick is not a code span, and a bracket with no footnote definition
+// is not a reference.
+func TestOnlyResolvedConstructsAreExcised(t *testing.T) {
+	const src = "A `` b and ![](x.png) and [^ not a note] together here.\n"
+
+	doc, root := structure(t, src, text.DefaultStructureOptions())
+	para := onlyRole(t, root, text.RoleParagraph)
+
+	if len(para.Excisions) != 1 {
+		t.Fatalf("got %d excisions, want 1 (the image only): %+v", len(para.Excisions), para.Excisions)
+	}
+	if got, _ := doc.Resolve(para.Excisions[0]); got != "![](x.png)" {
+		t.Errorf("excision covers %q, want the image", got)
+	}
+	if got, want := runText(t, doc, para), "A `` b and  and [^ not a note] together here."; got != want {
+		t.Errorf("RunText = %q, want %q", got, want)
+	}
+}
+
+// An image inside a code span is code, not an image: the parser resolves one
+// code span and no Image node, so there is exactly one excision.
+//
+// Pinning this also settles a policy gap it exposed. A run with nothing left
+// after excision has no authored prose in it, whatever its container, so it is
+// not in the feature population — otherwise an empty paragraph would count as a
+// paragraph observation and dilute every per-paragraph statistic. Zero words is
+// therefore never sentential, and the top-level paragraph exemption does not
+// override it.
+func TestRunWithNoProseLeftIsNotInThePopulation(t *testing.T) {
+	const src = "`code with ![](img.png) inside it`\n"
+
+	doc, root := structure(t, src, text.DefaultStructureOptions())
+	para := onlyRole(t, root, text.RoleParagraph)
+
+	if got := findRole(root, text.RoleImage); len(got) != 0 {
+		t.Errorf("got %d image leaves; the parser resolves a code span here, not an image", len(got))
+	}
+	if len(para.Excisions) != 1 {
+		t.Fatalf("got %d excisions, want 1 code span: %+v", len(para.Excisions), para.Excisions)
+	}
+	if got, _ := doc.Resolve(para.Excisions[0]); got != src[:len(src)-1] {
+		t.Errorf("excision covers %q, want the whole code span", got)
+	}
+	if got := runText(t, doc, para); got != "" {
+		t.Errorf("RunText = %q, want empty", got)
+	}
+	if para.Words != 0 {
+		t.Errorf("Words = %d, want 0", para.Words)
+	}
+	if para.Sentential {
+		t.Error("a run with no words left is sentential")
+	}
+	if para.Included || para.Exclusion != text.ExcludedNotSentential {
+		t.Errorf("Included=%v Exclusion=%q, want false/%q", para.Included, para.Exclusion, text.ExcludedNotSentential)
+	}
+}
+
+// Zero words outranks the block-quote policy, under either setting and after a
+// reclassification. Nothing left after excision is nothing to measure, so it
+// cannot become admissible by flipping a policy that is about whose words they
+// are.
+func TestZeroWordRuleOutranksTheBlockQuotePolicy(t *testing.T) {
+	const src = "> `code and nothing else`\n"
+
+	on := text.DefaultStructureOptions()
+	on.IncludeBlockQuotes = true
+
+	assert := func(t *testing.T, doc *text.Document, leaf *text.Node) {
+		t.Helper()
+		if got := runText(t, doc, leaf); got != "" {
+			t.Errorf("RunText = %q, want empty", got)
+		}
+		if leaf.Words != 0 {
+			t.Errorf("Words = %d, want 0", leaf.Words)
+		}
+		if leaf.Included {
+			t.Error("a quoted run with no words left was admitted")
+		}
+		if leaf.Exclusion != text.ExcludedNotSentential {
+			t.Errorf("Exclusion = %q, want %q", leaf.Exclusion, text.ExcludedNotSentential)
+		}
+	}
+
+	for _, tc := range []struct {
+		name string
+		opts text.StructureOptions
+	}{{"policy off", text.DefaultStructureOptions()}, {"policy on", on}} {
+		t.Run(tc.name, func(t *testing.T) {
+			doc, root := structure(t, src, tc.opts)
+			assert(t, doc, onlyRole(t, root, text.RoleParagraph))
+		})
+	}
+
+	doc, root := structure(t, src, text.DefaultStructureOptions())
+	root.Reclassify(on)
+	checkTree(t, doc, root, on)
+	assert(t, doc, onlyRole(t, root, text.RoleParagraph))
+}
+
+// The backstop. Structure has no error return by design, so a construct whose
+// source envelope cannot be located must preserve its raw bytes, record no
+// guessed excision, and return — never crash the caller's document. Where the
+// right behavior is known it is pinned above; this is the floor for forms not
+// enumerated there, and it is a floor, not a contract.
+func TestStructureNeverPanicsOnValidMarkdown(t *testing.T) {
+	for _, src := range []string{
+		"![](/url)\n",
+		"![](/url \"title\")\n",
+		"![alt][ref]\n\n[ref]: /url\n",
+		"![ref]\n\n[ref]: /url\n",
+		"[![nested image link](i.png)](https://example.test)\n",
+		"![](x.png) `a` [^1] all at once here.\n\n[^1]: A body.\n",
+		"> ![](x.png)\n> - ![](y.png)\n",
+		"| ![](x.png) | `a` |\n|---|---|\n| b | c |\n",
+		"***\n\n<!-- a comment -->\n\n    code\n",
+	} {
+		t.Run(src, func(t *testing.T) {
+			doc := mustAdmit(t, src)
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("Structure(%q) panicked: %v", src, r)
+				}
+			}()
+			root := doc.Structure(text.DefaultStructureOptions())
+			for _, l := range root.Leaves() {
+				if _, err := doc.RunText(l); err != nil {
+					t.Errorf("RunText on %s leaf: %v", l.Role, err)
+				}
+			}
+			root.Reclassify(text.DefaultStructureOptions())
+		})
 	}
 }
 
