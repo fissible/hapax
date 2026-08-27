@@ -1344,6 +1344,67 @@ func TestEmptyBlockYieldsNoLeaf(t *testing.T) {
 	}
 }
 
+// An empty table cell is ordinary, and it must not become an empty leaf.
+//
+// The empty-block rule was first applied at the code-block and heading call
+// sites rather than centrally, so cells kept producing a zero-length leaf at
+// offset 0 — which sorts before every real cell and breaks the table's order.
+// The rule is general: NO leaf has an empty span, whatever produced it.
+func TestEmptyTableCellYieldsNoLeaf(t *testing.T) {
+	cases := []struct {
+		name  string
+		src   string
+		cells []string
+	}{
+		{"empty header cell", "| a |  |\n|---|---|\n| c | d |\n", []string{"a", "c", "d"}},
+		{"empty body cell", "| a | b |\n|---|---|\n| c |  |\n", []string{"a", "b", "c"}},
+		{"empty first cell", "|  | b |\n|---|---|\n| c | d |\n", []string{"b", "c", "d"}},
+		{"no empty cells", "| a | b |\n|---|---|\n| c | d |\n", []string{"a", "b", "c", "d"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc, root := structure(t, c.src, text.DefaultStructureOptions())
+			cells := findRole(root, text.RoleTableCell)
+			if len(cells) != len(c.cells) {
+				var got []string
+				for _, l := range cells {
+					got = append(got, runText(t, doc, l))
+				}
+				t.Fatalf("got cells %q, want %q", got, c.cells)
+			}
+			for i, want := range c.cells {
+				if got := runText(t, doc, cells[i]); got != want {
+					t.Errorf("cell %d = %q, want %q", i, got, want)
+				}
+			}
+		})
+	}
+}
+
+// An independent producer of the same defect, pinned so that a table-local fix
+// cannot satisfy the amendment while leaving the invariant non-central. An
+// empty figcaption yields no caption leaf, and the HTML either side of it is
+// still recorded, in order.
+func TestEmptyFigcaptionYieldsNoCaptionLeaf(t *testing.T) {
+	const src = "<figure>\n<figcaption></figcaption>\n</figure>\n"
+
+	doc, root := structure(t, src, text.DefaultStructureOptions())
+
+	if got := findRole(root, text.RoleCaption); len(got) != 0 {
+		t.Errorf("got %d caption leaves, want none for an empty figcaption", len(got))
+	}
+	remnants := findRole(root, text.RoleHTMLBlock)
+	want := []string{"<figure>\n<figcaption>", "</figcaption>\n</figure>"}
+	if len(remnants) != len(want) {
+		t.Fatalf("got %d HTML remnants, want %d", len(remnants), len(want))
+	}
+	for i, w := range want {
+		if got := resolve(t, doc, remnants[i]); got != w {
+			t.Errorf("remnant %d = %q, want %q", i, got, w)
+		}
+	}
+}
+
 // Every span this package emits must be grapheme-aligned, so a CRLF is never
 // split. Snap exists for exactly this; block spans must go through it too.
 //
