@@ -1246,6 +1246,57 @@ func TestZeroWordRuleOutranksTheBlockQuotePolicy(t *testing.T) {
 	assert(t, doc, onlyRole(t, root, text.RoleParagraph))
 }
 
+// A construct wrapped across a line inside a container produces two overlapping
+// reasons to excise the same bytes: the container's marker on the continuation
+// line, and the construct that spans it. They must coalesce into one span.
+//
+// Added after all three of these crashed. A code span wrapped across a line in
+// a quote or a list item is ordinary technical writing, not an edge case.
+func TestExcisionsOverlappingAContainerMarkerAreMerged(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		excision string
+		run      string
+	}{
+		{
+			"code span across lines in a quote",
+			"> Run `go test\n> ./...` before pushing here.\n",
+			"`go test\n> ./...`",
+			"Run  before pushing here.",
+		},
+		{
+			"code span across lines in a list item",
+			"- Run `go test\n  ./...` before pushing here.\n",
+			"`go test\n  ./...`",
+			"Run  before pushing here.",
+		},
+		{
+			"image across lines in a quote",
+			"> See ![alt\n> text](x.png) here now.\n",
+			"![alt\n> text](x.png)",
+			"See  here now.",
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			doc, root := structure(t, c.src, text.DefaultStructureOptions())
+			para := onlyRole(t, root, text.RoleParagraph)
+			if len(para.Excisions) != 1 {
+				t.Fatalf("got %d excisions, want 1 merged span: %+v", len(para.Excisions), para.Excisions)
+			}
+			if got, err := doc.Resolve(para.Excisions[0]); err != nil {
+				t.Fatalf("merged excision does not resolve: %v", err)
+			} else if got != c.excision {
+				t.Errorf("excision covers %q, want %q", got, c.excision)
+			}
+			if got := runText(t, doc, para); got != c.run {
+				t.Errorf("RunText = %q, want %q", got, c.run)
+			}
+		})
+	}
+}
+
 // The backstop. Structure has no error return by design, so a construct whose
 // source envelope cannot be located must preserve its raw bytes, record no
 // guessed excision, and return — never crash the caller's document. Where the
@@ -1260,6 +1311,10 @@ func TestStructureNeverPanicsOnValidMarkdown(t *testing.T) {
 		"[![nested image link](i.png)](https://example.test)\n",
 		"![](x.png) `a` [^1] all at once here.\n\n[^1]: A body.\n",
 		"> ![](x.png)\n> - ![](y.png)\n",
+		"> `\n> `a`\n",
+		"> ``\n> ``\n",
+		"- `a\n- `b\n",
+		"> A claim[^\n> 1] here.\n\n[^1]: A body.\n",
 		"| ![](x.png) | `a` |\n|---|---|\n| b | c |\n",
 		"***\n\n<!-- a comment -->\n\n    code\n",
 	} {
