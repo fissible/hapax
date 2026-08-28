@@ -165,6 +165,15 @@ func TestSamplingVarianceAgainstHandComputedValues(t *testing.T) {
 		if !closeTo(got.SamplingVariance, want) {
 			t.Errorf("%s: sampling variance = %v, want %v", id, got.SamplingVariance, want)
 		}
+		// Finiteness on this fixture too — it is the one that exercises comma
+		// density with a non-zero count, and Section 2 persists and hashes
+		// these values.
+		if math.IsNaN(got.SamplingVariance) || math.IsInf(got.SamplingVariance, 0) {
+			t.Errorf("%s: sampling variance is %v, which cannot be persisted or hashed", id, got.SamplingVariance)
+		}
+		if math.IsNaN(got.Value) || math.IsInf(got.Value, 0) {
+			t.Errorf("%s: value is %v, which cannot be persisted or hashed", id, got.Value)
+		}
 	}
 }
 
@@ -187,23 +196,45 @@ func TestEveryFamilyMemberWithANonZeroValue(t *testing.T) {
 		t.Fatalf("fixture has %d lexical tokens, want 5", v.LexicalTokens)
 	}
 
-	for id, want := range map[features.ID]float64{
-		features.WordLengthMean:   0.34,
-		features.SemicolonDensity: 1.0 / 25.0,
-		features.ColonDensity:     1.0 / 25.0,
-		features.FunctionWordRate: 0.048,
-		features.ClauseMarkerRate: 0.032,
+	// The VALUE is pinned alongside the variance. Asserting only "not zero"
+	// would be satisfied by NaN, and would not notice a fixture that quietly
+	// stopped exercising the feature it was chosen for.
+	// The density expectations are written in terms of the DECLARED dispersion
+	// rather than as bare numbers. phi is 1 today, so the arithmetic is
+	// identical either way — but writing it this way means the test expresses
+	// the dependency, and a later phi that the computation ignored would fail
+	// here instead of passing silently.
+	phi := features.CurrentSamplingModel().DensityDispersion
+	for id, want := range map[features.ID][2]float64{
+		features.WordLengthMean:   {2.8, 0.34},
+		features.SemicolonDensity: {1.0 / 5.0, phi * (1.0 / 5.0) / 5.0},
+		features.ColonDensity:     {1.0 / 5.0, phi * (1.0 / 5.0) / 5.0},
+		features.FunctionWordRate: {2.0 / 5.0, 0.048},
+		features.ClauseMarkerRate: {1.0 / 5.0, 0.032},
 	} {
 		got := samplingVariance(t, v, id)
-		if got.Value == 0 {
-			t.Errorf("%s has value 0 in a fixture chosen to make it non-zero", id)
+		if !got.Defined {
+			t.Errorf("%s is undefined", id)
+			continue
+		}
+		if !closeTo(got.Value, want[0]) {
+			t.Errorf("%s: value = %v, want %v", id, got.Value, want[0])
 		}
 		if !got.SamplingVarianceDefined {
 			t.Errorf("%s: sampling variance undefined", id)
 			continue
 		}
-		if !closeTo(got.SamplingVariance, want) {
-			t.Errorf("%s: sampling variance = %v, want %v", id, got.SamplingVariance, want)
+		if !closeTo(got.SamplingVariance, want[1]) {
+			t.Errorf("%s: sampling variance = %v, want %v", id, got.SamplingVariance, want[1])
+		}
+		// Finiteness is part of the contract, not an incidental property:
+		// Section 2 persists and hashes these values, encoding/json refuses
+		// NaN, and NaN compares unequal to itself.
+		if math.IsNaN(got.SamplingVariance) || math.IsInf(got.SamplingVariance, 0) {
+			t.Errorf("%s: sampling variance is %v, which cannot be persisted or hashed", id, got.SamplingVariance)
+		}
+		if math.IsNaN(got.Value) || math.IsInf(got.Value, 0) {
+			t.Errorf("%s: value is %v, which cannot be persisted or hashed", id, got.Value)
 		}
 	}
 }
@@ -350,8 +381,8 @@ func TestSamplingVarianceAtTwoLengths(t *testing.T) {
 // about.
 func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 	definitions := features.Definitions()
-	if features.ManifestDigest() != features.DigestOf(definitions) {
-		t.Fatal("ManifestDigest is not the digest of the current manifest")
+	if features.ManifestDigest() != features.DigestOf(definitions, features.CurrentSamplingModel()) {
+		t.Fatal("ManifestDigest is not the digest of the current manifest and sampling model")
 	}
 
 	for i := range definitions {
@@ -362,7 +393,7 @@ func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 		default:
 			altered[i].Sampling = features.SamplingRate
 		}
-		if features.DigestOf(altered) == features.ManifestDigest() {
+		if features.DigestOf(altered, features.CurrentSamplingModel()) == features.ManifestDigest() {
 			t.Errorf("changing %s's sampling family did not change the manifest digest", altered[i].ID)
 		}
 	}
@@ -370,7 +401,42 @@ func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 	// And the digest still covers what it covered before.
 	altered := features.Definitions()
 	altered[0].Description = altered[0].Description + " (reworded)"
-	if features.DigestOf(altered) == features.ManifestDigest() {
+	if features.DigestOf(altered, features.CurrentSamplingModel()) == features.ManifestDigest() {
 		t.Error("changing a description did not change the manifest digest")
+	}
+}
+
+// The declared family is not the whole sampling model. The density dispersion
+// and the model's own version can change while every family stays as it was,
+// and a deviation computed under a different dispersion is a different number —
+// so those must reach the digest too, or two incompatible profiles collide on
+// one identity.
+//
+// What this CANNOT establish, stated rather than implied: the version is a
+// manual promise. Someone can change the variance formula and leave the version
+// alone, and the digest will not notice. That is the same limit Section 2
+// already concedes for SetVersion — "Nothing inside a repository can prevent
+// that... whoever can change the behaviour can change everything that describes
+// it" — and it is why the version is provenance rather than a guarantee. The
+// digest's job is to make a DECLARED change impossible to make silently, not to
+// detect an undeclared one.
+func TestTheManifestDigestCoversTheWholeSamplingModel(t *testing.T) {
+	definitions := features.Definitions()
+	current := features.CurrentSamplingModel()
+
+	if current.Version == "" {
+		t.Error("the sampling model declares no version; a formula change could not be signalled")
+	}
+	if current.DensityDispersion != 1 {
+		t.Errorf("declared dispersion phi = %v, want the stated stand-in of 1", current.DensityDispersion)
+	}
+
+	for name, altered := range map[string]features.SamplingModel{
+		"a different dispersion": {Version: current.Version, DensityDispersion: 1.5},
+		"a later model version":  {Version: current.Version + "-next", DensityDispersion: current.DensityDispersion},
+	} {
+		if features.DigestOf(definitions, altered) == features.ManifestDigest() {
+			t.Errorf("%s did not change the manifest digest", name)
+		}
 	}
 }
