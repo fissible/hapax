@@ -335,6 +335,27 @@ chosen silently, because it is visible in the output: it caps |deviation| at
 Φ⁻¹(1 − 1/2*m*) — 2.14 at thirty reference segments, 2.58 at a hundred, 1.69 at ten. At
 small reference sizes that cap, not `z_max`, is the operative limit.
 
+**The reference split was a caller-supplied label with nothing behind it.** Raised by the
+reviewer of the frozen-first test suite. A reference is declared to be built on Calibrate,
+but a standardization carried no record of where it came from, so Train or Test segments
+passed with a Calibrate argument and the split boundary the whole reference rests on was
+enforced by the caller remembering it.
+
+→ Each standardization carries its own split, set at the point that actually knows it, and a
+reference refuses any segment not from the split it claims. The package still cannot verify
+a split it is never told — but it can refuse to accept a claim nobody made, which is the
+difference between an unchecked argument and a checked field.
+
+**Serialization order and undefined-cause precedence were being frozen in tests without
+being stated anywhere.** Also raised by the test reviewer, and correct as an objection: a
+test file is not where design is decided.
+
+→ Both adopted into Section 2 rather than dropped. Manifest order is load-bearing because
+the reference and the deviation record are hashed into the scoring cache identity and an
+unordered set has no canonical hash. Precedence is load-bearing because the causes imply
+different remedies, and which one a user is shown should not depend on the order the guards
+happened to be written in.
+
 **The sign had no stated fate.** `d` takes absolute values, which invites discarding the
 sign at the source.
 

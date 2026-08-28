@@ -448,6 +448,20 @@ magnitude on its own, `z_max` binds only above that cap, and at small reference 
 cap — not `z_max` — is the operative limit. This is published beside the minimum reference
 size, and is a further reason that minimum is a real figure rather than a formality.
 
+**Deviations are emitted in manifest order, and every manifest feature is
+present.** This is a serialization contract, not a style preference: the reference
+distribution and the deviation record are both hashed into the scoring cache identity, and
+a set with no canonical order has no canonical hash. A feature that is unavailable appears
+with its reason rather than being omitted, so a reader can tell "measured and typical" from
+"not measured" without knowing the manifest by heart.
+
+**Undefined causes have a declared precedence.** A deviation can fail to exist for several
+reasons at once, and the reported one is the first reached checking the inputs in order:
+the segment value, the segment sampling variance, the profile statistic, the profile
+variance, then the combined variance. Left unstated, the reason a user is shown would depend
+on the order an implementation happened to write its guards in — and the reasons imply
+different remedies. Write more text, or fit a better profile, are not the same advice.
+
 **The deviation keeps its sign.** `d` takes absolute values, so the sign does not survive
 into the distance — but a segment below the author's usual comma density and one above it
 are different facts, and `rewrite` needs the direction. Discarding it at the source is
