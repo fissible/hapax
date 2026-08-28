@@ -55,7 +55,10 @@ package corpus_test
 //  4. Ineligible documents are not screened: they never enter the feature
 //     population, so overlap among them cannot corrupt a measurement.
 //  5. Screening against an author snapshot with no eligible documents is an
-//     error. Screening against nothing is not evidence of cleanliness.
+//     error, and so is screening a distractor snapshot that has none. Screening
+//     against nothing is not evidence of cleanliness, and neither is screening
+//     nothing against something: an empty distractor directory would otherwise
+//     pass vacuously and be handed a clearance.
 
 import (
 	"reflect"
@@ -389,20 +392,29 @@ func TestARefusedScreenLeavesTheSnapshotUntouched(t *testing.T) {
 	otherDistractor := walk(t, write(t, map[string]string{"more.md": prose("delta", 40)}), distractorPolicy())
 	emptyAuthor := walk(t, write(t, map[string]string{"stub.md": "three words only"}), authorPolicy())
 
-	for name, call := range map[string]func() (corpus.OverlapReport, error){
-		"nil author":           func() (corpus.OverlapReport, error) { return distractor.ScreenOverlap(nil) },
-		"self screen":          func() (corpus.OverlapReport, error) { return author.ScreenOverlap(author) },
-		"roles reversed":       func() (corpus.OverlapReport, error) { return author.ScreenOverlap(distractor) },
-		"distractor as author": func() (corpus.OverlapReport, error) { return distractor.ScreenOverlap(otherDistractor) },
-		"author with nothing eligible": func() (corpus.OverlapReport, error) {
+	emptyDistractor := walk(t, write(t, map[string]string{"stub.md": "three words only"}), distractorPolicy())
+
+	type refusal struct {
+		subject *corpus.Snapshot
+		call    func() (corpus.OverlapReport, error)
+	}
+	for name, tc := range map[string]refusal{
+		"nil author":           {distractor, func() (corpus.OverlapReport, error) { return distractor.ScreenOverlap(nil) }},
+		"self screen":          {author, func() (corpus.OverlapReport, error) { return author.ScreenOverlap(author) }},
+		"roles reversed":       {author, func() (corpus.OverlapReport, error) { return author.ScreenOverlap(distractor) }},
+		"distractor as author": {distractor, func() (corpus.OverlapReport, error) { return distractor.ScreenOverlap(otherDistractor) }},
+		"author with nothing eligible": {distractor, func() (corpus.OverlapReport, error) {
 			return distractor.ScreenOverlap(emptyAuthor)
-		},
+		}},
+		// The symmetric case. An empty distractor directory shares nothing with
+		// anything, so an unguarded screen calls it clean and hands out a
+		// clearance for a set that contains no writing at all.
+		"distractor with nothing eligible": {emptyDistractor, func() (corpus.OverlapReport, error) {
+			return emptyDistractor.ScreenOverlap(author)
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			subject := distractor
-			if name == "self screen" || name == "roles reversed" {
-				subject = author
-			}
+			subject, call := tc.subject, tc.call
 			before := snapshotState(subject)
 
 			report, err := call()
@@ -414,6 +426,11 @@ func TestARefusedScreenLeavesTheSnapshotUntouched(t *testing.T) {
 			}
 			if got := snapshotState(subject); !reflect.DeepEqual(got, before) {
 				t.Errorf("%s changed the snapshot:\n  before %+v\n  after  %+v", name, before, got)
+			}
+			// The consequence that matters: a refused screen must never leave
+			// the subject able to claim non-overlap.
+			if err := subject.NonOverlappingWith(author.ID); err == nil {
+				t.Errorf("%s was refused, yet the snapshot reports non-overlap with the author", name)
 			}
 		})
 	}
