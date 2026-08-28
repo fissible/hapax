@@ -311,6 +311,33 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 5 — VERDICT: REVISE (raised while scoping the eval deviation slice)
+
+**Two corrections were named without saying how they compose.** Section 2 gives a
+length-aware denominator and an empirical-CDF rank transform, and left their relationship
+implicit. That is not a detail — ranking raw values and ranking standardized values are
+different estimators, and only one of them lets segment length affect where a segment lands.
+
+→ They compose in order: standardize with the length-aware denominator, then rank *that*
+quantity. Ranking raw values would silently drop correction 1 and readmit the
+paragraph-Delta error; standardizing without ranking would reinstate the incomparability the
+section is named for.
+
+**The reference distribution had no declared split.** "The author's held-out distribution"
+does not say which held-out split, and the choice decides whether a reported figure is
+honest.
+
+→ Built on Calibrate, with figures reported on Test. Train is excluded because the profile
+was fitted on it. The cost is stated rather than hidden: half the data per purpose, and a
+coarse CDF at small Calibrate sizes, so the minimum reference size joins the published
+minimums.
+
+**One denominator cannot serve three feature families.** Correction 1 was written as though
+the sampling variance were a single formula.
+
+→ Each feature declares its family — bounded membership rate, unbounded per-token density,
+or mean — and the family is part of the manifest, and therefore of the cache identity.
+
 ## Round 4 — VERDICT: REVISE (raised while reviewing the slice 2d tests)
 
 One defect, found by the reviewer of the frozen-first test suite rather than of the prose.

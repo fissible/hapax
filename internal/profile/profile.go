@@ -177,7 +177,7 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		ProductionReady:       false,
 		NotProductionReason:   "profile minimums are declared, not derived",
 		FeatureSetVersion:     features.SetVersion,
-		FeatureManifestDigest: featureManifestDigest(),
+		FeatureManifestDigest: features.ManifestDigest(),
 		SchemaVersion:         profileSchemaVersion,
 		VarianceConvention:    SampleVariance,
 		OutlierAlgorithm:      NoTrimming,
@@ -315,17 +315,4 @@ func median(values []float64) float64 {
 		return sorted[middle]
 	}
 	return (sorted[middle-1] + sorted[middle]) / 2
-}
-
-func featureManifestDigest() string {
-	definitions := features.Definitions()
-	parts := make([]string, 0, len(definitions)*6)
-	for _, definition := range definitions {
-		parts = append(parts,
-			string(definition.ID), string(definition.CandidateTier),
-			strconv.FormatBool(definition.TierProvisional), strconv.FormatBool(definition.Unvalidated),
-			definition.Description,
-		)
-	}
-	return identity.HashBytes(identity.Frame(parts...))
 }

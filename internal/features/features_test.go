@@ -39,6 +39,17 @@ import (
 // only inputs outside goldenText leaves every pinned expectation intact and is
 // not caught here. Cache identity is the content hash described in Section 2,
 // not this integer.
+// Still 1 after each definition gained a declared sampling-variance family.
+//
+// A bump was the first instinct and Section 2 rules it out: "a version that has
+// never been used to produce a stored artifact is not yet meaningful, so changes
+// made before its first use amend it in place instead of bumping. Bumping a
+// version no artifact was ever written under would manufacture a version that
+// never existed." Nothing in this project serialises a profile yet, so version 1
+// has never been written down anywhere and this change amends it in place.
+//
+// The obligation begins at first use. Once an artifact exists at version 1, the
+// next manifest change bumps.
 const wantSetVersion = 1
 
 const goldenText = "The Constitution, which was drafted in 1787, provides that the several States shall retain their powers; it does so because the framers feared concentration: a fear well founded."

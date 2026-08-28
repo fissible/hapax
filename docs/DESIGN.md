@@ -417,6 +417,49 @@ variance-stabilizing transform. The general mechanism, applied to every feature,
 features comparable by construction rather than by assumption and is robust to skew and
 outliers.
 
+**The two corrections compose, in that order.** An earlier draft named both and left their
+composition unstated, which is not a detail: the orderings are different estimators. The
+deviation is the length-aware standardization of correction 1, and the empirical-CDF
+transform of correction 2 is then applied *to that quantity*, not to the raw feature value.
+
+Ranking raw values would drop correction 1 entirely — segment length would never enter, and
+a short segment could reach an extreme percentile on sampling noise alone, which is the
+paragraph-Delta error correction 1 exists to prevent. Standardizing without ranking would
+reinstate the problem this section is named for, since equal |z| is not equal evidence
+across a bounded membership rate and a symmetric mean.
+
+**The reference distribution is built on Calibrate and reported figures come from Test.**
+Section 2 assigns thresholds to Calibrate and reported figures to Test, so ranking a Test
+segment against a Calibrate-derived reference keeps the reported number honest. Train is
+excluded because the profile was fitted on it and ranks against it would be optimistic. The
+cost is accepted and stated: each split carries half the data it otherwise would, and an
+empirical CDF over a small Calibrate set is coarse — thirty segments give percentiles in
+steps of a thirtieth, and the minimum reference size is therefore a published figure like
+every other minimum.
+
+**Each feature declares its sampling-variance family**, because correction 1's denominator
+is not one formula. The manifest distinguishes a bounded membership **rate**, whose sampling
+variance at *n* lexical tokens is the binomial *p*(1−*p*)/*n*; an unbounded per-token
+**density**, modelled conditionally on the lexical-token count as exposure, giving λ/*n*; and
+a **mean**, which needs the within-segment variance of the quantity being averaged and
+therefore requires `features` to expose it. The mean uses the sample (*n*−1) variance,
+matching the profile's convention, and is therefore undefined at *n* = 1.
+
+The density model is a **working assumption, recorded as such rather than asserted**.
+Punctuation is syntax-constrained, plausibly zero-inflated and overdispersed relative to
+Poisson, and the numerator counts punctuation across all tokens while the denominator counts
+lexical ones. It is modelled as Poisson with lexical exposure and a **declared dispersion of
+φ = 1** — stated explicitly, because a quasi-Poisson variance is φλ/*n* and asserting λ/*n*
+while calling the model quasi-Poisson would fix φ = 1 without saying so. φ awaits the same
+calibration as every other declared minimum; until it is derived it is 1, and that is a
+stand-in rather than a finding.
+
+The family is part of the feature manifest and therefore part of the profile's cache
+identity: changing a feature's sampling model changes every deviation computed from it, and
+a cache must not serve one for the other. The manifest digest is computed by `features`,
+which owns the manifest — an earlier arrangement had `profile` recompute it from the fields
+it happened to know about, which cannot notice a field added elsewhere.
+
 ### The distance `d`
 
 `d` is a weighted robust mean of transformed deviations — Manhattan in transformed space,

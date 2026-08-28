@@ -2,8 +2,11 @@
 package features
 
 import (
+	"sort"
+	"strconv"
 	"unicode/utf8"
 
+	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/text"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -14,6 +17,9 @@ type ID string
 
 // Tier is a candidate feature tier.
 type Tier string
+
+// Sampling identifies the observation model used for a feature's sampling variance.
+type Sampling string
 
 const (
 	// TierA contains features intended for paragraph-scale measurement.
@@ -28,7 +34,30 @@ const (
 	ColonDensity     ID = "colon_density"
 	FunctionWordRate ID = "function_word_rate"
 	ClauseMarkerRate ID = "clause_marker_rate"
+
+	SamplingRate    Sampling = "rate"
+	SamplingDensity Sampling = "density"
+	SamplingMean    Sampling = "mean"
 )
+
+// SamplingModel records the versioned assumptions shared by sampling families.
+type SamplingModel struct {
+	Version           string
+	DensityDispersion float64
+}
+
+// Manifest is the complete, versioned input to feature extraction and sampling.
+type Manifest struct {
+	Definitions   []Definition
+	FunctionWords []string
+	ClauseMarkers []string
+	Sampling      SamplingModel
+}
+
+// CurrentSamplingModel returns the declared, versioned sampling assumptions.
+func CurrentSamplingModel() SamplingModel {
+	return SamplingModel{Version: "sampling-variance-v1", DensityDispersion: 1}
+}
 
 // Definition describes one candidate feature in the manifest.
 type Definition struct {
@@ -37,13 +66,16 @@ type Definition struct {
 	TierProvisional bool
 	Unvalidated     bool
 	Description     string
+	Sampling        Sampling
 }
 
 // FeatureValue is an extracted feature and whether it is defined for the input.
 type FeatureValue struct {
-	ID      ID
-	Value   float64
-	Defined bool
+	ID                      ID
+	Value                   float64
+	Defined                 bool
+	SamplingVariance        float64
+	SamplingVarianceDefined bool
 }
 
 // Vector contains the extracted candidate feature values and token counts.
@@ -65,12 +97,12 @@ func (v Vector) Get(id ID) (FeatureValue, bool) {
 }
 
 var definitions = []Definition{
-	{ID: WordLengthMean, CandidateTier: TierA, TierProvisional: true, Description: "Mean NFC character length of lexical tokens."},
-	{ID: CommaDensity, CandidateTier: TierA, TierProvisional: true, Description: "Comma count per lexical token."},
-	{ID: SemicolonDensity, CandidateTier: TierA, TierProvisional: true, Description: "Semicolon count per lexical token."},
-	{ID: ColonDensity, CandidateTier: TierA, TierProvisional: true, Description: "Colon count per lexical token."},
-	{ID: FunctionWordRate, CandidateTier: TierA, TierProvisional: true, Unvalidated: true, Description: "Function-word membership rate among lexical tokens."},
-	{ID: ClauseMarkerRate, CandidateTier: TierA, TierProvisional: true, Description: "Surface clause-marker membership rate among lexical tokens."},
+	{ID: WordLengthMean, CandidateTier: TierA, TierProvisional: true, Description: "Mean NFC character length of lexical tokens.", Sampling: SamplingMean},
+	{ID: CommaDensity, CandidateTier: TierA, TierProvisional: true, Description: "Comma count per lexical token.", Sampling: SamplingDensity},
+	{ID: SemicolonDensity, CandidateTier: TierA, TierProvisional: true, Description: "Semicolon count per lexical token.", Sampling: SamplingDensity},
+	{ID: ColonDensity, CandidateTier: TierA, TierProvisional: true, Description: "Colon count per lexical token.", Sampling: SamplingDensity},
+	{ID: FunctionWordRate, CandidateTier: TierA, TierProvisional: true, Unvalidated: true, Description: "Function-word membership rate among lexical tokens.", Sampling: SamplingRate},
+	{ID: ClauseMarkerRate, CandidateTier: TierA, TierProvisional: true, Description: "Surface clause-marker membership rate among lexical tokens.", Sampling: SamplingRate},
 }
 
 var functionWords = []string{
@@ -89,6 +121,58 @@ var (
 
 // Definitions returns the manifest in its stable positional order.
 func Definitions() []Definition { return append([]Definition(nil), definitions...) }
+
+// CurrentManifest returns a deep copy of the manifest currently in force.
+func CurrentManifest() Manifest {
+	return Manifest{
+		Definitions:   Definitions(),
+		FunctionWords: FunctionWords(),
+		ClauseMarkers: ClauseMarkers(),
+		Sampling:      CurrentSamplingModel(),
+	}
+}
+
+// ManifestDigest returns the identity of the current feature manifest and model.
+func ManifestDigest() string { return DigestOf(CurrentManifest()) }
+
+// DigestOf returns the stable digest of every field in m.
+func DigestOf(m Manifest) string {
+	parts := []string{"manifest", "definitions", strconv.Itoa(len(m.Definitions))}
+	for _, definition := range m.Definitions {
+		parts = append(parts,
+			"definition",
+			string(definition.ID),
+			string(definition.CandidateTier),
+			strconv.FormatBool(definition.TierProvisional),
+			strconv.FormatBool(definition.Unvalidated),
+			definition.Description,
+			string(definition.Sampling),
+		)
+	}
+	parts = appendVocabulary(parts, "function-words", m.FunctionWords)
+	parts = appendVocabulary(parts, "clause-markers", m.ClauseMarkers)
+	parts = append(parts,
+		"sampling-model",
+		m.Sampling.Version,
+		strconv.FormatFloat(m.Sampling.DensityDispersion, 'g', -1, 64),
+	)
+	return identity.HashBytes(identity.Frame(parts...))
+}
+
+func appendVocabulary(parts []string, domain string, words []string) []string {
+	canonical := canonicalVocabulary(words)
+	return append(parts, append([]string{domain, strconv.Itoa(len(canonical))}, canonical...)...)
+}
+
+func canonicalVocabulary(words []string) []string {
+	set := vocabularySet(words)
+	canonical := make([]string, 0, len(set))
+	for word := range set {
+		canonical = append(canonical, word)
+	}
+	sort.Strings(canonical)
+	return canonical
+}
 
 // FunctionWords returns the versioned function-word vocabulary.
 func FunctionWords() []string { return append([]string(nil), functionWords...) }
@@ -109,6 +193,7 @@ func Extract(tokens []text.Token) Vector {
 	}
 
 	var wordLength, commas, semicolons, colons, functionWords, clauseMarkers int
+	wordLengths := make([]float64, 0, len(tokens))
 	for _, token := range tokens {
 		switch token.Text {
 		case ",":
@@ -123,7 +208,9 @@ func Extract(tokens []text.Token) Vector {
 			continue
 		}
 		v.LexicalTokens++
-		wordLength += utf8.RuneCountInString(norm.NFC.String(token.Text))
+		length := utf8.RuneCountInString(norm.NFC.String(token.Text))
+		wordLength += length
+		wordLengths = append(wordLengths, float64(length))
 
 		word := fold.String(token.Text)
 		if functionWordSet[word] {
@@ -147,10 +234,42 @@ func Extract(tokens []text.Token) Vector {
 		FunctionWordRate: float64(functionWords) / denominator,
 		ClauseMarkerRate: float64(clauseMarkers) / denominator,
 	}
+	meanSamplingVariance, meanSamplingVarianceDefined := sampleMeanVariance(wordLengths)
+	model := CurrentSamplingModel()
 	for i, definition := range definitions {
-		v.Values[i] = FeatureValue{ID: definition.ID, Value: values[definition.ID], Defined: true}
+		value := values[definition.ID]
+		featureValue := FeatureValue{ID: definition.ID, Value: value, Defined: true}
+		switch definition.Sampling {
+		case SamplingRate:
+			featureValue.SamplingVariance = value * (1 - value) / denominator
+			featureValue.SamplingVarianceDefined = true
+		case SamplingDensity:
+			featureValue.SamplingVariance = model.DensityDispersion * value / denominator
+			featureValue.SamplingVarianceDefined = true
+		case SamplingMean:
+			featureValue.SamplingVariance = meanSamplingVariance
+			featureValue.SamplingVarianceDefined = meanSamplingVarianceDefined
+		}
+		v.Values[i] = featureValue
 	}
 	return v
+}
+
+func sampleMeanVariance(values []float64) (float64, bool) {
+	if len(values) < 2 {
+		return 0, false
+	}
+	var sum float64
+	for _, value := range values {
+		sum += value
+	}
+	mean := sum / float64(len(values))
+	var squares float64
+	for _, value := range values {
+		delta := value - mean
+		squares += delta * delta
+	}
+	return squares / float64(len(values)-1) / float64(len(values)), true
 }
 
 func vocabularySet(words []string) map[string]bool {
