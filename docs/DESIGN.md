@@ -154,9 +154,14 @@ Calibration is a release gate, not a report. Ablation of the feature set is expl
 - **Split unit is the whole source document,** held out *before* profiling. Splitting at
   paragraph level would leak: paragraphs from one document share topic, register and
   occasion, which inflates every metric.
-- **Distractors are register-matched** writing by other authors. v1 bundles a small
-  permissively-licensed distractor set; `--distractors <dir>` overrides it. Comparing
-  against mismatched registers measures genre, not authorship.
+- **Distractors are register-matched** writing by other authors, supplied by the user with
+  **`--distractors <dir>`, which is required for calibration**. Comparing against mismatched
+  registers measures genre, not authorship — which is why v1 ships no distractor set at all
+  rather than a mismatched one. Issue #2 surveyed the openly licensed field and nothing
+  cleared: the sources with clean licences are institutional, edited, or single-register, and
+  a figure calibrated against them would measure era or house style. A user's own pile of
+  other people's writing — saved articles, newsletters, received mail — is better
+  register-matched than anything shippable, and never leaves their machine.
 - **Two metrics, not one.** (i) *Discrimination:* pairwise ranking accuracy / AUC of
   held-out author segments against distractors. (ii) *Band calibration:* for each emitted
   band, the observed rate of author versus distractor segments landing in it, with

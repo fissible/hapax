@@ -14,8 +14,13 @@ that no score may be emitted before a protocol exists that gives it meaning.
 
 - **Split unit is the whole source document**, held out *before* profiling. Paragraph-level
   splits leak: paragraphs from one document share topic, register and occasion.
-- **Distractors are register-matched** writing by other authors. A bundled permissively
-  licensed set ships; `--distractors <dir>` overrides.
+- **Distractors are register-matched** writing by other authors. **`--distractors <dir>`
+  is required for calibration; no distractor set ships.** Amended 2026-08-27 on the
+  resolution of issue #2 — this clause previously promised a bundled permissively licensed
+  set. No source surveyed cleared the requirements, and shipping one that did not would
+  have produced a calibration figure measuring genre or era rather than authorship. Without
+  `--distractors`, `eval` reports `uncalibrated`, `score` emits raw distance and per-feature
+  deltas but no band, and `rewrite` refuses.
 - **Two metrics.** *Discrimination:* pairwise ranking accuracy / AUC of held-out author
   segments against distractors. *Band calibration:* per band, the observed author-versus-
   distractor rate with confidence intervals. Discrimination alone cannot justify a label.

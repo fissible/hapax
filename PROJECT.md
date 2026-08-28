@@ -46,6 +46,42 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | needs `profile` (now built) |
 
+## Issue #2 — resolved on the fallback
+
+**Closed 2026-08-27**, four days inside its seven-day timebox, on evidence rather
+than expiry. **v1 ships no bundled distractor set.** `--distractors <dir>` is
+required for calibration; without it `eval` reports `uncalibrated`, `score`
+emits raw distance and per-feature deltas but no band, and `rewrite` refuses.
+
+ADR 0005 and DESIGN Section 2 both promised a bundled set and have been amended.
+
+Nothing in the openly licensed field cleared all six requirements. The sources
+with clean licences are institutional, edited, or single-register, and a figure
+calibrated against them would measure era or house style rather than authorship.
+That is not a failure of the search; it is the search doing its job. A false
+calibration claim is worse than a documented absence.
+
+The two investigations are preserved as **rejected-for-calibration** decisions
+in #2 rather than deleted, because the reasoning is what stops them being
+reopened:
+
+- **ParlaMint-GB 5.0** — CC BY 4.0, native English, 2015-2022, ~1,951 speakers
+  with `@who` labels. Rejected on requirement 3: its source, Hansard, is
+  *substantially verbatim*, edited to a house style that removes repetitions and
+  redundancies and corrects obvious mistakes — precisely the between-speaker
+  variation stylometry measures. Retained in the backlog as an
+  **editorial-normalisation stress test**, a negative control asking what the
+  tool does with prose normalised toward a house style. Not calibration
+  evidence, and not a published figure.
+- **English Wikimedia Talk / Village Pump** — CC BY-SA 4.0, account-level
+  labels, buildable as retained added spans per revision. Viable as a future
+  artifact, not a six-day deliverable: copied and imported material, revert
+  attribution, bot history and public-identity exposure need a measured pilot
+  and legal review.
+
+Acquisition and packaging, if a licensed source is ever adopted, are governed by
+[ADR 0009](docs/adr/0009-share-alike-corpus-acquisition-and-packaging.md).
+
 ---
 
 ## Deferred slices, recorded so they are not forgotten
