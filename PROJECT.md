@@ -119,6 +119,73 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29
+
+**Merged first.** PRs #24 (recovery) then #25 (sampling variance), in that
+order, and verified on `main` rather than trusted: 10 packages present,
+`internal/eval` and the sampling-variance fields both there. The stranding
+incident of the previous session is why this is now checked rather than read
+off the PR list.
+
+**Two design decisions settled, both by the repo owner.**
+
+*Weights.* Section 2 had asserted `w` was "learned, not asserted", fitted on
+Train against author-versus-distractor separation — without stating the
+objective, regularization, constraints or missing-feature rule, and without the
+preconditions holding. **v1 declares uniform weights**, records the scheme and
+its version in the scoring cache identity, and leaves fitting as the intended
+destination. Two reasons, both internal to the design: there is no distractor
+pool with author diversity to separate against (issue #2 closed on the
+no-bundled-corpus fallback), and fitting 150+ weights on a personal corpus's
+Train split is the over-parameterization the same section rejects Mahalanobis
+for. Recorded in REVIEW Round 6.
+
+*`λ` is struck.* It was named as Train-fitted in three places and defined in
+none. Neither reading survives the uniform choice: as a regularization strength
+it has nothing left to restrain, and as a Tier A/B blend it duplicates the
+availability rules and `d_A`'s separate threshold artifact. A future
+fitted-weights slice reintroduces it with a definition.
+
+**Completed: the deviation slice** (PR #26, all three checks green). DESIGN
+Section 2's two corrections, composed in the order Round 5 fixed —
+length-aware standardization, then the empirical-CDF rank transform of *that*
+quantity. Calibrate-only reference, content-addressed and per-feature.
+
+Round 7 settled what the transform returns, which had never been stated: an
+ECDF rank is a percentile, `z_max` winsorization is vacuous on a percentile,
+and `d` averages |z|. The rank is therefore mapped back through the normal
+quantile function. The plotting position is declared because it is visible in
+the output — it caps |deviation| at `Phi^-1(1-1/2m)`, **1.69 at ten reference
+values**, so at small reference sizes the cap and not `z_max` is the operative
+limit.
+
+**Next: the distance `d`.** Everything it needs now exists. Per DESIGN Section 2
+"The distance `d`" as amended in Round 6:
+
+- a weighted robust mean of transformed deviations, Manhattan in transformed
+  space, with **uniform weights** over whichever features a segment makes
+  available
+- deviations winsorized at `z_max`, which is fixed on Train and shipped with a
+  sensitivity analysis over its value — note that the reference cap already
+  bounds |deviation| below `z_max` at small reference sizes, so the interaction
+  needs stating
+- Tier-A-only scores get their own threshold artifact and are reported as such;
+  neither tier meeting its minimum is **insufficient evidence** — no `d`, no
+  band, and `rewrite` passes the segment through untouched
+
+`z_max` is the open question to settle before writing those tests, the way the
+weights question was settled before this slice: it is declared fixed on Train,
+but nothing says what value or how the sensitivity analysis is reported.
+
+**Process notes worth carrying.** Codex has now stopped rather than edited a
+frozen test seven times on this project and has been right every time. It found
+six defects in these tests across four review rounds, and one in my own
+reasoning at the consensus gate: I dismissed a negative-zero hazard in the
+reference identity on a reachability argument that only covered
+`value == mean` with both positive, missing that IEEE `(-0) - (+0)` is `-0`.
+Verify numeric claims against a real Go run, not against reasoning — the same
+lesson as the tokenizer counts.
+
 ### 2026-08-27
 
 **Completed, two slices.**
