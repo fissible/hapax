@@ -435,11 +435,18 @@ therefore mapped back through the normal quantile function, which keeps the comp
 ranking bought while leaving the quantity on the scale the rest of Section 2 assumes.
 
 **The plotting position is declared, because it is visible in the output.** An empirical CDF
-over *n* reference values can return 0 or 1, where the normal quantile is infinite. Ranks
-use the (*r* − ½)/*n* position, which bounds |deviation| at Φ⁻¹(1 − 1/2*n*) — about 2.13 at
-thirty reference segments and 2.58 at a hundred. The reference size therefore caps deviation
-magnitude on its own, and `z_max` only binds above that cap. This is published beside the
-minimum reference size rather than left as an artifact a reader would have to derive.
+over *n* reference values returns 0 for anything below all of them and 1 for anything above,
+and the normal quantile is infinite at both. At thirty reference segments that is not an
+edge case: it is one segment in thirty per tail. The segment is therefore ranked within the
+reference **plus itself** — *m* = *n* + 1 values — at the (*i* − ½)/*m* position, with ties
+taking their midrank. That is symmetric in both tails and never reaches 0 or 1.
+
+The consequence is stated rather than left to be discovered from a surprising histogram: the
+position bounds |deviation| at Φ⁻¹(1 − 1/2*m*), which is about **2.14 at thirty reference
+segments, 2.58 at a hundred, and only 1.69 at ten**. The reference size caps deviation
+magnitude on its own, `z_max` binds only above that cap, and at small reference sizes the
+cap — not `z_max` — is the operative limit. This is published beside the minimum reference
+size, and is a further reason that minimum is a real figure rather than a formality.
 
 **The deviation keeps its sign.** `d` takes absolute values, so the sign does not survive
 into the distance — but a segment below the author's usual comma density and one above it

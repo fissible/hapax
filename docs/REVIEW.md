@@ -327,11 +327,13 @@ scale `z_max`, the Delta analogy, and the band logic all already assume.
 reference segments this is not an edge case — it is every segment more extreme than the
 reference has seen, which at thirty points is one in thirty per tail.
 
-→ The (*r* − ½)/*n* plotting position, declared rather than chosen silently, because it is
-visible in the output: it caps |deviation| at Φ⁻¹(1 − 1/2*n*), about 2.13 at thirty
-reference segments. The reference size bounds deviation magnitude on its own and `z_max`
-binds only above that cap — published beside the minimum reference size, not left for a
-reader to derive from a surprising histogram.
+→ The segment is ranked within the reference plus itself, *m* = *n* + 1 values, at the
+(*i* − ½)/*m* position with midranks for ties — symmetric in both tails and never 0 or 1.
+Ranking against the *n* reference values alone cannot be made symmetric: *n* points leave
+*n* + 1 gaps, so any position over *n* is short a cell at one end. Declared rather than
+chosen silently, because it is visible in the output: it caps |deviation| at
+Φ⁻¹(1 − 1/2*m*) — 2.14 at thirty reference segments, 2.58 at a hundred, 1.69 at ten. At
+small reference sizes that cap, not `z_max`, is the operative limit.
 
 **The sign had no stated fate.** `d` takes absolute values, which invites discarding the
 sign at the source.
