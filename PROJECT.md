@@ -60,6 +60,15 @@ it, and `rewrite` refuses.
 `rewrite` are all buildable against the documented fallback, and should not wait
 on it.
 
+Acquisition and packaging under a share-alike licence are settled by
+[ADR 0009](docs/adr/0009-share-alike-corpus-acquisition-and-packaging.md):
+original documents ship as a separately licensed data artifact outside the
+Apache-licensed distribution; a derived corpus, if one is ever published, goes
+out under CC BY-SA 4.0 with its provenance; and published evaluation reports are
+aggregate-only — never prose, per-document vectors, or recoverable feature
+records. Counsel reviews the manifest and distribution layout before any
+CC BY-SA source ships.
+
 **Only sources meeting the criteria stated in #2 are in scope during the
 window.** In particular requirement 2 — multi-author with per-author labels —
 stands as written. Unlabelled distractors permit a binary AUC, but they
