@@ -24,6 +24,17 @@ const (
 	splitAlgorithmVersion  = "content-sha256-v1"
 )
 
+// OverlapAlgorithm identifies the exact-hash overlap screen and its version.
+const OverlapAlgorithm = "overlap-exact-hash-v1"
+
+// Role states how a snapshot will participate in a calibration comparison.
+type Role string
+
+const (
+	RoleAuthor     Role = "author"
+	RoleDistractor Role = "distractor"
+)
+
 // CheckState records whether an optional qualification check has run.
 type CheckState string
 
@@ -68,6 +79,7 @@ type SplitWeights struct {
 // Policy configures a corpus snapshot.
 type Policy struct {
 	Register         string
+	Role             Role
 	MinLexicalTokens int
 	SplitSeed        string
 	Splits           SplitWeights
@@ -93,6 +105,22 @@ type Snapshot struct {
 	Policy                                                                    Policy
 	Documents                                                                 []Document
 	Contamination, Language, Structure, GitProvenance, NearDuplicateDetection CheckStatus
+	overlaps                                                                  map[string]OverlapReport
+}
+
+// SharedDocument identifies an eligible document that appears in both sides
+// of an overlap screen.
+type SharedDocument struct {
+	ContentHash, AuthorPath, DistractorPath string
+}
+
+// OverlapReport is the per-author attestation from an exact-hash screen.
+type OverlapReport struct {
+	AuthorSnapshotID, DistractorSnapshotID string
+	Algorithm                              string
+	State                                  CheckState
+	AuthorEligible, DistractorEligible     int
+	Shared                                 []SharedDocument
 }
 
 var notPerformed = CheckStatus{
@@ -194,6 +222,9 @@ func Walk(root string, p Policy) (*Snapshot, error) {
 func validatePolicy(p Policy) error {
 	if p.Register == "" {
 		return errors.New("corpus register must not be empty")
+	}
+	if p.Role != RoleAuthor && p.Role != RoleDistractor {
+		return fmt.Errorf("corpus role must be %q or %q", RoleAuthor, RoleDistractor)
 	}
 	if p.MinLexicalTokens < 0 {
 		return errors.New("minimum lexical tokens must not be negative")
@@ -318,6 +349,7 @@ func (s *Snapshot) IdentityInputs() map[string]string {
 		"membership":               membership(s.Documents),
 		"min-lexical-tokens":       strconv.Itoa(s.Policy.MinLexicalTokens),
 		"register":                 s.Policy.Register,
+		"role":                     string(s.Policy.Role),
 		"split-algorithm-version":  splitAlgorithmVersion,
 		"split-seed":               s.Policy.SplitSeed,
 		"split-weights":            fmt.Sprintf("%d,%d,%d", s.Policy.Splits.Train, s.Policy.Splits.Calibrate, s.Policy.Splits.Test),
