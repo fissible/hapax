@@ -2,6 +2,7 @@
 package features
 
 import (
+	"sort"
 	"strconv"
 	"unicode/utf8"
 
@@ -43,6 +44,14 @@ const (
 type SamplingModel struct {
 	Version           string
 	DensityDispersion float64
+}
+
+// Manifest is the complete, versioned input to feature extraction and sampling.
+type Manifest struct {
+	Definitions   []Definition
+	FunctionWords []string
+	ClauseMarkers []string
+	Sampling      SamplingModel
 }
 
 // CurrentSamplingModel returns the declared, versioned sampling assumptions.
@@ -113,14 +122,25 @@ var (
 // Definitions returns the manifest in its stable positional order.
 func Definitions() []Definition { return append([]Definition(nil), definitions...) }
 
-// ManifestDigest returns the identity of the current feature manifest and model.
-func ManifestDigest() string { return DigestOf(Definitions(), CurrentSamplingModel()) }
+// CurrentManifest returns a deep copy of the manifest currently in force.
+func CurrentManifest() Manifest {
+	return Manifest{
+		Definitions:   Definitions(),
+		FunctionWords: FunctionWords(),
+		ClauseMarkers: ClauseMarkers(),
+		Sampling:      CurrentSamplingModel(),
+	}
+}
 
-// DigestOf returns the stable digest of all feature-definition and sampling-model fields.
-func DigestOf(defs []Definition, model SamplingModel) string {
-	parts := make([]string, 0, len(defs)*6+2)
-	for _, definition := range defs {
+// ManifestDigest returns the identity of the current feature manifest and model.
+func ManifestDigest() string { return DigestOf(CurrentManifest()) }
+
+// DigestOf returns the stable digest of every field in m.
+func DigestOf(m Manifest) string {
+	parts := []string{"manifest", "definitions", strconv.Itoa(len(m.Definitions))}
+	for _, definition := range m.Definitions {
 		parts = append(parts,
+			"definition",
 			string(definition.ID),
 			string(definition.CandidateTier),
 			strconv.FormatBool(definition.TierProvisional),
@@ -129,8 +149,29 @@ func DigestOf(defs []Definition, model SamplingModel) string {
 			string(definition.Sampling),
 		)
 	}
-	parts = append(parts, model.Version, strconv.FormatFloat(model.DensityDispersion, 'g', -1, 64))
+	parts = appendVocabulary(parts, "function-words", m.FunctionWords)
+	parts = appendVocabulary(parts, "clause-markers", m.ClauseMarkers)
+	parts = append(parts,
+		"sampling-model",
+		m.Sampling.Version,
+		strconv.FormatFloat(m.Sampling.DensityDispersion, 'g', -1, 64),
+	)
 	return identity.HashBytes(identity.Frame(parts...))
+}
+
+func appendVocabulary(parts []string, domain string, words []string) []string {
+	canonical := canonicalVocabulary(words)
+	return append(parts, append([]string{domain, strconv.Itoa(len(canonical))}, canonical...)...)
+}
+
+func canonicalVocabulary(words []string) []string {
+	set := vocabularySet(words)
+	canonical := make([]string, 0, len(set))
+	for word := range set {
+		canonical = append(canonical, word)
+	}
+	sort.Strings(canonical)
+	return canonical
 }
 
 // FunctionWords returns the versioned function-word vocabulary.
