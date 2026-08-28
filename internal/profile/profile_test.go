@@ -81,7 +81,9 @@ func loose() profile.Requirements {
 
 func corpusPolicy() corpus.Policy {
 	return corpus.Policy{
-		Register:         "essays",
+		Register: "essays",
+		// A profile is built from the author's own writing, by definition.
+		Role:             corpus.RoleAuthor,
 		MinLexicalTokens: 3,
 		SplitSeed:        "profile-test",
 		// Every weight must be positive, so train cannot be made certain by

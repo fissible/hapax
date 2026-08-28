@@ -32,6 +32,7 @@ import (
 func policy() corpus.Policy {
 	return corpus.Policy{
 		Register:         "essays",
+		Role:             corpus.RoleAuthor,
 		MinLexicalTokens: 5,
 		SplitSeed:        "test-seed",
 		Splits:           corpus.SplitWeights{Train: 60, Calibrate: 20, Test: 20},
@@ -570,6 +571,7 @@ func TestSnapshotIdentityInputsAreEnumerated(t *testing.T) {
 		"membership",
 		"min-lexical-tokens",
 		"register",
+		"role",
 		"split-algorithm-version",
 		"split-seed",
 		"split-weights",
