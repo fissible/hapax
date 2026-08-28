@@ -448,8 +448,11 @@ matching the profile's convention, and is therefore undefined at *n* = 1.
 The density model is a **working assumption, recorded as such rather than asserted**.
 Punctuation is syntax-constrained, plausibly zero-inflated and overdispersed relative to
 Poisson, and the numerator counts punctuation across all tokens while the denominator counts
-lexical ones. Quasi-Poisson with lexical exposure is a defensible starting point and is
-subject to the same later calibration as every other declared parameter.
+lexical ones. It is modelled as Poisson with lexical exposure and a **declared dispersion of
+φ = 1** — stated explicitly, because a quasi-Poisson variance is φλ/*n* and asserting λ/*n*
+while calling the model quasi-Poisson would fix φ = 1 without saying so. φ awaits the same
+calibration as every other declared minimum; until it is derived it is 1, and that is a
+stand-in rather than a finding.
 
 The family is part of the feature manifest and therefore part of the profile's cache
 identity: changing a feature's sampling model changes every deviation computed from it, and

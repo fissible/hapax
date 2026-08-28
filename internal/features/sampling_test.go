@@ -16,10 +16,15 @@ package features_test
 //
 // The density model is a WORKING assumption, not an empirical claim, and is
 // recorded as such. Punctuation is syntax-constrained, plausibly zero-inflated
-// and overdispersed relative to Poisson, and the numerator counts commas across
-// all tokens while the denominator counts lexical ones. Treating it as
-// quasi-Poisson with lexical exposure is defensible as a starting point and is
-// subject to the same later calibration as every other declared parameter.
+// and overdispersed, and the numerator counts punctuation across all tokens
+// while the denominator counts lexical ones.
+//
+// It is Poisson with lexical exposure and a DECLARED dispersion of phi = 1, not
+// "quasi-Poisson" — a quasi-Poisson variance is phi*lambda/n, so calling it
+// that while computing lambda/n would assert phi = 1 without saying so, and the
+// overdispersion above makes that distinction material. phi is a parameter
+// awaiting the same calibration as every other declared minimum; until it is
+// derived it is 1, and that is a stated stand-in rather than a finding.
 //
 // The family is part of the feature manifest, so changing a feature's sampling
 // model changes the manifest digest and therefore every profile identity
@@ -155,6 +160,46 @@ func TestSamplingVarianceAgainstHandComputedValues(t *testing.T) {
 		got := samplingVariance(t, v, id)
 		if !got.SamplingVarianceDefined {
 			t.Errorf("%s: sampling variance undefined at 4 lexical tokens", id)
+			continue
+		}
+		if !closeTo(got.SamplingVariance, want) {
+			t.Errorf("%s: sampling variance = %v, want %v", id, got.SamplingVariance, want)
+		}
+	}
+}
+
+// Every family member with a non-zero value. The first fixture leaves the
+// semicolon, colon and clause-marker features at zero, so a dispatch that sent
+// them to the wrong model — or to none — would go unnoticed there.
+//
+//	"a bb; ccc: dddd that" — 5 lexical tokens of lengths 1,2,3,4,4, one
+//	semicolon, one colon, and "that" is both a function word and a clause
+//	marker.
+//
+//	word_length_mean   mean 2.8; sample variance 6.8/4 = 1.7; 1.7/5 = 0.34
+//	semicolon_density  lambda 1/5; (1/5)/5 = 1/25
+//	colon_density      lambda 1/5; (1/5)/5 = 1/25
+//	function_word_rate p 2/5 ("a", "that"); (0.4)(0.6)/5 = 0.048
+//	clause_marker_rate p 1/5 ("that");      (0.2)(0.8)/5 = 0.032
+func TestEveryFamilyMemberWithANonZeroValue(t *testing.T) {
+	v := extract(t, "a bb; ccc: dddd that")
+	if v.LexicalTokens != 5 {
+		t.Fatalf("fixture has %d lexical tokens, want 5", v.LexicalTokens)
+	}
+
+	for id, want := range map[features.ID]float64{
+		features.WordLengthMean:   0.34,
+		features.SemicolonDensity: 1.0 / 25.0,
+		features.ColonDensity:     1.0 / 25.0,
+		features.FunctionWordRate: 0.048,
+		features.ClauseMarkerRate: 0.032,
+	} {
+		got := samplingVariance(t, v, id)
+		if got.Value == 0 {
+			t.Errorf("%s has value 0 in a fixture chosen to make it non-zero", id)
+		}
+		if !got.SamplingVarianceDefined {
+			t.Errorf("%s: sampling variance undefined", id)
 			continue
 		}
 		if !closeTo(got.SamplingVariance, want) {

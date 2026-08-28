@@ -1111,6 +1111,26 @@ func TestProvenanceIsRecorded(t *testing.T) {
 	}
 }
 
+// The profile's recorded digest must be the manifest's own, not a private
+// recomputation. `profile` used to derive it from the definition fields it
+// happened to know about, which could not notice a field added elsewhere — so
+// two profiles built under different sampling models would have collided on one
+// identity while every test here passed.
+func TestTheManifestDigestIsTheManifestsOwn(t *testing.T) {
+	p := build(t, multiParagraphCorpus(8), requirements())
+
+	if p.FeatureManifestDigest != features.ManifestDigest() {
+		t.Errorf("profile records digest %q, the feature manifest reports %q",
+			p.FeatureManifestDigest, features.ManifestDigest())
+	}
+	if p.FeatureManifestDigest == "" {
+		t.Error("no digest recorded")
+	}
+	if got := p.IdentityInputs()["feature-manifest-digest"]; got != features.ManifestDigest() {
+		t.Errorf("identity input feature-manifest-digest = %q, want the manifest's %q", got, features.ManifestDigest())
+	}
+}
+
 func TestIdentityIsDeterministicAndCoversItsInputs(t *testing.T) {
 	files := multiParagraphCorpus(8)
 	root, snap := writeCorpus(t, files, corpusPolicy())
