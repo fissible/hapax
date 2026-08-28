@@ -50,6 +50,8 @@ package features_test
 
 import (
 	"math"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/fissible/hapax/internal/features"
@@ -381,7 +383,7 @@ func TestSamplingVarianceAtTwoLengths(t *testing.T) {
 // about.
 func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 	definitions := features.Definitions()
-	if features.ManifestDigest() != features.DigestOf(definitions, features.CurrentSamplingModel()) {
+	if features.ManifestDigest() != features.DigestOf(features.CurrentManifest()) {
 		t.Fatal("ManifestDigest is not the digest of the current manifest and sampling model")
 	}
 
@@ -393,7 +395,7 @@ func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 		default:
 			altered[i].Sampling = features.SamplingRate
 		}
-		if features.DigestOf(altered, features.CurrentSamplingModel()) == features.ManifestDigest() {
+		if features.DigestOf(withDefinitions(altered)) == features.ManifestDigest() {
 			t.Errorf("changing %s's sampling family did not change the manifest digest", altered[i].ID)
 		}
 	}
@@ -401,7 +403,7 @@ func TestTheManifestDigestCoversTheSamplingFamily(t *testing.T) {
 	// And the digest still covers what it covered before.
 	altered := features.Definitions()
 	altered[0].Description = altered[0].Description + " (reworded)"
-	if features.DigestOf(altered, features.CurrentSamplingModel()) == features.ManifestDigest() {
+	if features.DigestOf(withDefinitions(altered)) == features.ManifestDigest() {
 		t.Error("changing a description did not change the manifest digest")
 	}
 }
@@ -435,8 +437,160 @@ func TestTheManifestDigestCoversTheWholeSamplingModel(t *testing.T) {
 		"a different dispersion": {Version: current.Version, DensityDispersion: 1.5},
 		"a later model version":  {Version: current.Version + "-next", DensityDispersion: current.DensityDispersion},
 	} {
-		if features.DigestOf(definitions, altered) == features.ManifestDigest() {
+		m := features.CurrentManifest()
+		m.Sampling = altered
+		if features.DigestOf(m) == features.ManifestDigest() {
 			t.Errorf("%s did not change the manifest digest", name)
 		}
 	}
+	_ = definitions
+}
+
+// The vocabularies are part of the manifest, and Section 2 says so in as many
+// words: "Adding, removing or redefining any entry below — including a change to
+// the function-word or clause-marker vocabulary — bumps it."
+//
+// They were not in the digest, in the private copy this replaced or in the first
+// version of the shared one. Editing a single function word changes every
+// function_word_rate the tool computes while leaving the profile's identity
+// untouched, so a cache would serve a profile built under one vocabulary to a
+// consumer using another.
+func TestTheManifestDigestCoversTheVocabularies(t *testing.T) {
+	base := features.ManifestDigest()
+
+	for name, mutate := range map[string]func(*features.Manifest){
+		"a function word added":   func(m *features.Manifest) { m.FunctionWords = append(m.FunctionWords, "notwithstanding") },
+		"a function word removed": func(m *features.Manifest) { m.FunctionWords = m.FunctionWords[1:] },
+		"a function word changed": func(m *features.Manifest) { m.FunctionWords[0] = m.FunctionWords[0] + "x" },
+		"a clause marker added":   func(m *features.Manifest) { m.ClauseMarkers = append(m.ClauseMarkers, "whereupon") },
+		"a clause marker removed": func(m *features.Manifest) { m.ClauseMarkers = m.ClauseMarkers[1:] },
+		"a clause marker changed": func(m *features.Manifest) { m.ClauseMarkers[0] = m.ClauseMarkers[0] + "x" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := features.CurrentManifest()
+			mutate(&m)
+			if features.DigestOf(m) == base {
+				t.Errorf("%s did not change the manifest digest", name)
+			}
+		})
+	}
+}
+
+// The digest canonicalizes each vocabulary to the set extraction actually uses.
+// Extraction case-folds and builds a map, so a differently-cased or duplicated
+// entry computes identical values — and an identity that moved for one would
+// invalidate every cache for nothing.
+func TestVocabularyCanonicalizationMatchesExtraction(t *testing.T) {
+	base := features.ManifestDigest()
+
+	for name, mutate := range map[string]func(*features.Manifest){
+		"a function word recased":    func(m *features.Manifest) { m.FunctionWords[0] = strings.ToUpper(m.FunctionWords[0]) },
+		"a clause marker recased":    func(m *features.Manifest) { m.ClauseMarkers[0] = strings.ToUpper(m.ClauseMarkers[0]) },
+		"a duplicated function word": func(m *features.Manifest) { m.FunctionWords = append(m.FunctionWords, m.FunctionWords[0]) },
+		"a duplicated clause marker": func(m *features.Manifest) { m.ClauseMarkers = append(m.ClauseMarkers, m.ClauseMarkers[0]) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := features.CurrentManifest()
+			mutate(&m)
+			if features.DigestOf(m) != base {
+				t.Errorf("%s changed the manifest digest, though extraction folds case and treats the vocabulary as a set", name)
+			}
+		})
+	}
+}
+
+// The sections must be distinguishable, not merely concatenated. Moving a word
+// from one vocabulary to the other leaves the flat sequence of words unchanged,
+// so a digest that framed them without a section boundary would call two
+// materially different manifests the same.
+func TestVocabularySectionsAreDistinguishable(t *testing.T) {
+	m := features.CurrentManifest()
+	// The LAST function word to the FRONT of the clause markers, so the two
+	// vocabularies concatenated are byte-for-byte what they were. Only the
+	// boundary between them moved.
+	moved := m.FunctionWords[len(m.FunctionWords)-1]
+	m.FunctionWords = m.FunctionWords[:len(m.FunctionWords)-1]
+	m.ClauseMarkers = append([]string{moved}, m.ClauseMarkers...)
+
+	if features.DigestOf(m) == features.ManifestDigest() {
+		t.Errorf("moving %q from the function words to the clause markers did not change the digest", moved)
+	}
+}
+
+// CurrentManifest returns a copy. A caller that mutated what it got back would
+// otherwise be editing the live manifest, and every identity computed after
+// that would describe something nobody declared.
+func TestCurrentManifestDoesNotAliasThePackage(t *testing.T) {
+	before := features.ManifestDigest()
+	definitionsBefore := features.Definitions()
+	functionWordsBefore := features.FunctionWords()
+	clauseMarkersBefore := features.ClauseMarkers()
+
+	m := features.CurrentManifest()
+	m.Definitions[0].Description = "tampered"
+	m.Definitions[0].Sampling = features.SamplingRate
+	m.FunctionWords[0] = "tampered"
+	m.ClauseMarkers[0] = "tampered"
+
+	if features.ManifestDigest() != before {
+		t.Error("mutating the manifest returned by CurrentManifest changed the live manifest")
+	}
+	// The whole result, not one field: the mutation above also changes a
+	// sampling family, which a description check would not notice.
+	if !reflect.DeepEqual(features.Definitions(), definitionsBefore) {
+		t.Error("Definitions() reflects a mutation made to a CurrentManifest copy")
+	}
+	if !reflect.DeepEqual(features.FunctionWords(), functionWordsBefore) {
+		t.Error("FunctionWords() reflects a mutation made to a CurrentManifest copy")
+	}
+	if !reflect.DeepEqual(features.ClauseMarkers(), clauseMarkersBefore) {
+		t.Error("ClauseMarkers() reflects a mutation made to a CurrentManifest copy")
+	}
+}
+
+// Reordering a vocabulary is not a change. Both are used as sets, so the same
+// words in a different order compute identical values, and an identity that
+// moved would invalidate every cache for nothing.
+func TestReorderingAVocabularyIsNotAChange(t *testing.T) {
+	m := features.CurrentManifest()
+	reverse := func(words []string) []string {
+		out := make([]string, len(words))
+		for i, w := range words {
+			out[len(words)-1-i] = w
+		}
+		return out
+	}
+	m.FunctionWords = reverse(m.FunctionWords)
+	m.ClauseMarkers = reverse(m.ClauseMarkers)
+
+	if features.DigestOf(m) != features.ManifestDigest() {
+		t.Error("reversing the vocabularies changed the manifest digest; they are sets, and the same set computes the same values")
+	}
+}
+
+// CurrentManifest must be the manifest actually in force, not a description of
+// it that could drift.
+func TestCurrentManifestIsTheLiveManifest(t *testing.T) {
+	m := features.CurrentManifest()
+
+	if !reflect.DeepEqual(m.Definitions, features.Definitions()) {
+		t.Error("CurrentManifest's definitions are not Definitions()")
+	}
+	if !reflect.DeepEqual(m.FunctionWords, features.FunctionWords()) {
+		t.Error("CurrentManifest's function words are not FunctionWords()")
+	}
+	if !reflect.DeepEqual(m.ClauseMarkers, features.ClauseMarkers()) {
+		t.Error("CurrentManifest's clause markers are not ClauseMarkers()")
+	}
+	if m.Sampling != features.CurrentSamplingModel() {
+		t.Error("CurrentManifest's sampling model is not CurrentSamplingModel()")
+	}
+}
+
+// A helper for the definition-mutation cases above: the current manifest with
+// its definitions replaced.
+func withDefinitions(defs []features.Definition) features.Manifest {
+	m := features.CurrentManifest()
+	m.Definitions = defs
+	return m
 }
