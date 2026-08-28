@@ -129,15 +129,21 @@ const (
 
 // multiParagraph writes n documents of three paragraphs each, of DIFFERING
 // lengths so a size floor can be shown to change the population, and distinct
-// per document so admission does not dedupe them. The index is carried in a
-// word rather than a bare number so every body differs for any n.
+// per document so admission does not dedupe them.
+//
+// The prefix must appear in the CONTENT, not only the filename. An earlier
+// version put it in the filename alone, so the author's and the distractors'
+// documents were byte-identical, the overlap screen correctly found the
+// author's writing in the distractor set, and every success case refused. The
+// tag is a word rather than a bare number so it does not change the lexical
+// counts the floor tests depend on.
 func multiParagraph(prefix string, n int) map[string]string {
 	files := make(map[string]string, n)
 	for i := 0; i < n; i++ {
 		word := strings.Repeat("w", i%5+2)
 		files[prefix+pad(i)+".md"] = "Short one holds " + word + " here.\n\n" +
 			"Medium paragraph two holds " + word + " and " + word + " again, here.\n\n" +
-			"The long third paragraph d" + pad(i) + " holds " + word + " and " + word +
+			"The long third paragraph " + prefix + pad(i) + " holds " + word + " and " + word +
 			" and " + word + " once more, with a comma.\n"
 	}
 	return files
@@ -524,11 +530,22 @@ func TestExtractRefuses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A distractor set that actually contains the author's writing.
+	// A distractor set that actually contains the author's writing. The screen
+	// must have DETECTED that, not merely be absent: without this, the refusal
+	// below would pass equally on a missing attestation, and the case would
+	// prove nothing about overlap being caught.
 	dirtyRoot := write(t, multiParagraph("mine", 18))
 	dirty := walk(t, dirtyRoot, corpus.RoleDistractor)
-	if _, err := dirty.ScreenOverlap(f.author); err != nil {
+	dirtyReport, err := dirty.ScreenOverlap(f.author)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if dirtyReport.State != corpus.CheckFailed {
+		t.Fatalf("the dirty distractor set screened %q; the fixture is not dirty", dirtyReport.State)
+	}
+	if len(dirtyReport.Shared) != len(f.author.Eligible()) {
+		t.Fatalf("the screen found %d shared documents, want all %d — the fixture must be wholly overlapping",
+			len(dirtyReport.Shared), len(f.author.Eligible()))
 	}
 
 	// Sentinel errors rather than substrings. Matching on wording proves a
