@@ -440,10 +440,22 @@ every other minimum.
 **Each feature declares its sampling-variance family**, because correction 1's denominator
 is not one formula. The manifest distinguishes a bounded membership **rate**, whose sampling
 variance at *n* lexical tokens is the binomial *p*(1−*p*)/*n*; an unbounded per-token
-**density**, whose count model gives λ/*n*; and a **mean**, which needs the within-segment
-variance of the quantity being averaged and therefore requires `features` to expose it. The
-family is part of the feature manifest and therefore part of the profile's cache identity:
-changing a feature's sampling model changes every deviation computed from it.
+**density**, modelled conditionally on the lexical-token count as exposure, giving λ/*n*; and
+a **mean**, which needs the within-segment variance of the quantity being averaged and
+therefore requires `features` to expose it. The mean uses the sample (*n*−1) variance,
+matching the profile's convention, and is therefore undefined at *n* = 1.
+
+The density model is a **working assumption, recorded as such rather than asserted**.
+Punctuation is syntax-constrained, plausibly zero-inflated and overdispersed relative to
+Poisson, and the numerator counts punctuation across all tokens while the denominator counts
+lexical ones. Quasi-Poisson with lexical exposure is a defensible starting point and is
+subject to the same later calibration as every other declared parameter.
+
+The family is part of the feature manifest and therefore part of the profile's cache
+identity: changing a feature's sampling model changes every deviation computed from it, and
+a cache must not serve one for the other. The manifest digest is computed by `features`,
+which owns the manifest — an earlier arrangement had `profile` recompute it from the fields
+it happened to know about, which cannot notice a field added elsewhere.
 
 ### The distance `d`
 
