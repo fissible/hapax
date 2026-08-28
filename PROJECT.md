@@ -46,6 +46,28 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | needs `profile` (now built) |
 
+## Issue #2 timebox — running
+
+**Started 2026-08-27.** **Expires 2026-09-03.** On expiry the fallback in
+[#2](https://github.com/fissible/hapax/issues/2) is adopted automatically. It is
+not a decision to revisit or extend.
+
+The fallback: ship with **no bundled distractor set**. `--distractors <dir>`
+becomes required for calibration, `hapax eval` reports `uncalibrated` without
+it, and `rewrite` refuses.
+
+**This is a release blocker, not a development blocker.** `eval`, `score` and
+`rewrite` are all buildable against the documented fallback, and should not wait
+on it.
+
+**Only sources meeting the criteria stated in #2 are in scope during the
+window.** In particular requirement 2 — multi-author with per-author labels —
+stands as written. Unlabelled distractors permit a binary AUC, but they
+establish neither the pool's author diversity nor the clustered-bootstrap
+uncertainty treatment DESIGN Section 2 declares. Relaxing that would be a design
+change needing its own decision and REVIEW entry; it is not a reinterpretation
+ADR 0005 already authorizes, and it must not become the plan by default.
+
 ---
 
 ## Deferred slices, recorded so they are not forgotten
