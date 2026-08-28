@@ -1,4 +1,4 @@
-// Package profile builds provenance-carrying, document-unit feature profiles.
+// Package profile builds provenance-carrying, paragraph-unit feature profiles.
 package profile
 
 import (
@@ -24,8 +24,10 @@ const profileSchemaVersion = 1
 type Unit string
 
 const (
-	// UnitDocument is temporary plumbing until paragraph segmentation exists.
+	// UnitDocument identifies profiles persisted before paragraph measurement.
 	UnitDocument Unit = "document"
+	// UnitParagraph identifies profiles built from included text leaves.
+	UnitParagraph Unit = "paragraph"
 )
 
 // VarianceConvention identifies how profile variances are calculated.
@@ -46,7 +48,9 @@ const (
 // Requirements are the explicit build-time floors and optional trimming rule.
 type Requirements struct {
 	MinDocuments              int
+	MinParagraphs             int
 	MinObservationsPerFeature int
+	MinParagraphLexicalTokens int
 	OutlierMADs               float64
 }
 
@@ -74,10 +78,13 @@ type Profile struct {
 	OutlierAlgorithm         string
 	Requirements             Requirements
 	Documents                int
+	Paragraphs               int
+	ParagraphsBelowFloor     int
+	ParagraphFloorDerived    bool
 	Stats                    []Stats
 }
 
-// Build calculates train-split document statistics for a snapshot.
+// Build calculates train-split paragraph statistics for a snapshot.
 func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, error) {
 	if err := validateRequirements(req); err != nil {
 		return nil, err
@@ -105,33 +112,45 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 
 	values := make(map[features.ID][]float64, len(features.Definitions()))
 	undefined := make(map[features.ID]int, len(features.Definitions()))
+	paragraphs := 0
+	paragraphsBelowFloor := 0
 	for _, document := range train {
-		raw, err := readVerified(root, document)
+		admitted, err := readVerified(root, document)
 		if err != nil {
 			return nil, err
 		}
-		admitted, err := text.Admit(raw)
-		if err != nil {
-			return nil, fmt.Errorf("admit snapshot document %q: %w", document.Path, err)
-		}
-		vector := features.Extract(admitted.Tokens())
-		for _, definition := range features.Definitions() {
-			value, ok := vector.Get(definition.ID)
-			if !ok || !value.Defined {
-				undefined[definition.ID]++
+		for _, leaf := range admitted.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+			tokens, err := admitted.RunTokens(leaf)
+			if err != nil {
+				return nil, fmt.Errorf("read paragraph in snapshot document %q: %w", document.Path, err)
+			}
+			vector := features.Extract(tokens)
+			if vector.LexicalTokens < req.MinParagraphLexicalTokens {
+				paragraphsBelowFloor++
 				continue
 			}
-			values[definition.ID] = append(values[definition.ID], value.Value)
+			paragraphs++
+			for _, definition := range features.Definitions() {
+				value, ok := vector.Get(definition.ID)
+				if !ok || !value.Defined {
+					undefined[definition.ID]++
+					continue
+				}
+				values[definition.ID] = append(values[definition.ID], value.Value)
+			}
 		}
+	}
+	if paragraphs < req.MinParagraphs {
+		return nil, fmt.Errorf("profile requires at least %d paragraphs; train documents have %d", req.MinParagraphs, paragraphs)
 	}
 
 	p := &Profile{
 		SnapshotID:            snap.ID,
 		Register:              snap.Policy.Register,
 		Split:                 corpus.Train,
-		Unit:                  UnitDocument,
+		Unit:                  UnitParagraph,
 		ProductionReady:       false,
-		NotProductionReason:   "paragraph unit is unavailable until paragraph segmentation exists",
+		NotProductionReason:   "profile minimums are declared, not derived",
 		FeatureSetVersion:     features.SetVersion,
 		FeatureManifestDigest: featureManifestDigest(),
 		SchemaVersion:         profileSchemaVersion,
@@ -139,6 +158,9 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		OutlierAlgorithm:      NoTrimming,
 		Requirements:          req,
 		Documents:             len(train),
+		Paragraphs:            paragraphs,
+		ParagraphsBelowFloor:  paragraphsBelowFloor,
+		ParagraphFloorDerived: false,
 		Stats:                 make([]Stats, 0, len(features.Definitions())),
 	}
 	if req.OutlierMADs > 0 {
@@ -168,6 +190,8 @@ func (p *Profile) IdentityInputs() map[string]string {
 		"feature-manifest-digest":      p.FeatureManifestDigest,
 		"min-documents":                strconv.Itoa(p.Requirements.MinDocuments),
 		"min-observations-per-feature": strconv.Itoa(p.Requirements.MinObservationsPerFeature),
+		"min-paragraph-lexical-tokens": strconv.Itoa(p.Requirements.MinParagraphLexicalTokens),
+		"min-paragraphs":               strconv.Itoa(p.Requirements.MinParagraphs),
 		"outlier-algorithm":            p.OutlierAlgorithm,
 		"outlier-mads":                 strconv.FormatFloat(p.Requirements.OutlierMADs, 'g', -1, 64),
 		"profile-schema-version":       strconv.Itoa(p.SchemaVersion),
@@ -183,8 +207,14 @@ func validateRequirements(req Requirements) error {
 	if req.MinDocuments <= 0 {
 		return errors.New("minimum documents must be positive")
 	}
+	if req.MinParagraphs <= 0 {
+		return errors.New("minimum paragraphs must be positive")
+	}
 	if req.MinObservationsPerFeature <= 0 {
 		return errors.New("minimum observations per feature must be positive")
+	}
+	if req.MinParagraphLexicalTokens <= 0 {
+		return errors.New("minimum paragraph lexical tokens must be positive")
 	}
 	if req.OutlierMADs < 0 {
 		return errors.New("outlier MADs must not be negative")
@@ -192,7 +222,7 @@ func validateRequirements(req Requirements) error {
 	return nil
 }
 
-func readVerified(root string, document corpus.Document) ([]byte, error) {
+func readVerified(root string, document corpus.Document) (*text.Document, error) {
 	path := filepath.Join(root, filepath.FromSlash(document.Path))
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -208,7 +238,7 @@ func readVerified(root string, document corpus.Document) ([]byte, error) {
 	if digest != document.ContentHash {
 		return nil, fmt.Errorf("snapshot document %q changed since the snapshot", document.Path)
 	}
-	return raw, nil
+	return admitted, nil
 }
 
 func makeStats(id features.ID, values []float64, undefined, excluded, minimum int) Stats {

@@ -163,7 +163,7 @@ func (d *Document) RunText(node *Node) (string, error) {
 	var out strings.Builder
 	at := node.Span.Offset
 	for _, excision := range node.Excisions {
-		if excision.Length <= 0 || excision.Offset < at || excision.Offset+excision.Length > node.Span.Offset+node.Span.Length {
+		if !validExcision(node.Span, excision, at) {
 			return "", ErrSpanOutOfBounds
 		}
 		out.Write(d.raw[at:excision.Offset])
@@ -171,6 +171,52 @@ func (d *Document) RunText(node *Node) (string, error) {
 	}
 	out.Write(d.raw[at : node.Span.Offset+node.Span.Length])
 	return normNFC(out.String()), nil
+}
+
+// RunTokens returns the document's recorded tokens for one leaf after its
+// explicitly recorded markup has been removed. Tokens are never retokenized:
+// their classes and spans remain the document-level evidence consumers use.
+func (d *Document) RunTokens(node *Node) ([]Token, error) {
+	if node == nil || node.Kind != KindLeaf {
+		return nil, errors.New("RunTokens requires a leaf node")
+	}
+	if _, err := d.Resolve(node.Span); err != nil {
+		return nil, err
+	}
+
+	at := node.Span.Offset
+	for _, excision := range node.Excisions {
+		if !validExcision(node.Span, excision, at) {
+			return nil, ErrSpanOutOfBounds
+		}
+		at = excision.Offset + excision.Length
+	}
+
+	var tokens []Token
+	for _, token := range d.runTokenCandidates(node.Span) {
+		if spanContains(node.Span, token.Span) && !overlapsAny(token.Span, node.Excisions) {
+			tokens = append(tokens, token)
+		}
+	}
+	return tokens, nil
+}
+
+// runTokenCandidates bounds a run's scan to tokens beginning within its span.
+// Tokens are emitted in ascending raw-byte offset order.
+func (d *Document) runTokenCandidates(run Span) []Token {
+	tokens := d.cachedTokens()
+	first := sort.Search(len(tokens), func(i int) bool {
+		return tokens[i].Span.Offset >= run.Offset
+	})
+	last := sort.Search(len(tokens), func(i int) bool {
+		return tokens[i].Span.Offset >= run.Offset+run.Length
+	})
+	return tokens[first:last]
+}
+
+func validExcision(run, excision Span, at int) bool {
+	runEnd := run.Offset + run.Length
+	return excision.Length > 0 && excision.Offset >= at && excision.Offset <= runEnd && excision.Length <= runEnd-excision.Offset
 }
 
 func structureOptions(options StructureOptions) StructureOptions {
@@ -306,7 +352,7 @@ func (d *Document) leaf(role Role, span Span, excisions []Span, path []Container
 	if err != nil {
 		panic("text: structurally invalid leaf: " + err.Error())
 	}
-	for _, token := range d.Tokens() {
+	for _, token := range d.runTokenCandidates(span) {
 		if token.Lexical && spanContains(span, token.Span) && !overlapsAny(token.Span, excisions) {
 			leaf.Words++
 		}

@@ -19,11 +19,11 @@ model, then review.
 
 | # | Component | Status | Notes |
 |---|---|---|---|
-| 0 | `text` | **built** | admission + spans (2a-1), tokenization (2a) |
+| 0 | `text` | **built** | admission + spans (2a-1), tokenization (2a), structural tree (2d), run tokens |
 | 1 | `tells` | **built** | schema, regex matcher, screening model |
 | 2 | `corpus` | **built** | walk, dedupe, split, snapshot identity |
 | 3 | `features` | **built** | Tier A candidates |
-| 4 | `profile` | **built**, PR #13 | fenced: document-unit, not production-ready |
+| 4 | `profile` | **built** | paragraph-unit. Readiness withheld until the minimums are derived |
 | 5 | `eval` | not started | blocked in practice — see below |
 | 6 | `score` | not started | needs `eval` thresholds |
 | 7 | `select` | not started | needs `profile` |
@@ -55,13 +55,12 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
   decidable once each class has a pinned grammar.
 - **text 2c** — sentence segmentation. Needs a hand-annotated fixture and a
   published error rate; unblocks sentence-length features.
-- **text 2d** — the structural tree. **Unblocks the paragraph unit**, which is
-  what makes `profile` production-ready.
 - **Contraction rate** — needs the contractible-opportunity denominator and a
   bidirectional lexicon.
 - **Structural tell matchers** — triplet stacking, repeated openers, em-dash
   density. Schema admits them; loader rejects them as unimplemented.
-- **Code-fence awareness** for tell suppression — needs the structural tree.
+- **Code-fence awareness** for tell suppression — the structural tree now
+  exists, so this is actionable.
 - **Git-date provenance** in `corpus` — a per-file `git log` shell-out is a
   performance decision worth its own slice.
 - **CI guard forcing a `SetVersion` bump** when feature computation changes.
@@ -84,60 +83,97 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 
 ## Session handoff notes
 
-### 2026-08-26
+### 2026-08-27
 
-**Completed this session.** The project went from an idea to seven built
-components. Prior-art research, the full three-section design, eight ADRs, five
-issues, CI, and then — in dependency order — `text` (admission, spans,
-tokenization), `fixtures`, `features` Tier A, `corpus`, `tells`, and `profile`.
-PRs #6–#12 merged; **PR #13 (`profile`) is open and green, awaiting merge**.
+**Completed, two slices.**
 
-**Next task.** A deliberate fork, and worth choosing fresh rather than by
-default:
+**text slice 2d — the structural tree** (merged, PR #15). Markdown parses into
+containers and leaf text runs, each leaf carrying a role, an inclusion verdict,
+a machine-readable exclusion reason and the evidence the verdict came from.
+Every row of DESIGN Section 3's leaf-role table is implemented. goldmark with
+the table, footnote and definition-list extensions, parsing the raw admitted
+bytes so every offset is already a raw offset.
 
-- **text slice 2d — the structural tree** converts `profile` from fenced to
-  real by supplying the paragraph unit, and unblocks the rest of Tier A. My
-  recommendation: it turns an already-built component into a correct one rather
-  than adding another fenced one. It is a large slice and shares fixture work
-  with 2c.
-- **`eval` (component 5)** is next in the numbering and its dependencies exist,
-  but it is blocked in practice: it needs the distractor corpus from #2, and it
-  would be calibrating a profile that declares itself not production-ready.
+**`profile` rewired onto the paragraph unit** (branch
+`feat/profile-paragraph-unit`), plus the primitive it needed: `text.RunTokens`,
+the document's own tokens inside a leaf's span and outside its excisions. The
+fence 2d existed to remove is gone.
 
-**Decisions made this session, with reasons.**
+**Next task.** `eval` (component 5) is next in the numbering and its
+dependencies now exist in the right shape, but it remains blocked in practice on
+the register-matched distractor corpus in **issue #2**, whose binding seven-day
+timebox has **still not started** — it begins at the first commit referencing
+that issue. Two candidates could reasonably go first:
 
-- **The profile is built on the TRAIN split only.** It is fitted state; building
-  it on Calibrate or Test leaks into the figures `eval` reports.
-- **Sample variance, not population.** The profile generalises to future
-  writing; population variance is 20% too small at N=5.
-- **Document-unit profiles are fenced, not deferred.** A document-level mean is
-  a *different statistic* from a paragraph-level one — it averages away the
-  within-document variation the design measures, so variances come out too
-  small. `ProductionReady=false` with a reason; consumers must refuse.
-- **`tells` ships no word list.** Banned-word lists are what every competitor
-  ships, and issue #4 requires rules to be derived from paired data. Every rule
-  declares provenance and category; the linter withholds verdicts it has not
-  earned. A formatting rule is never evidence of machine authorship however well
-  derived.
-- **The corpus contamination hole is closed by source provenance and
-  quarantine**, not by the linter. `tells` is a backstop.
-- **ADR 0006's acceptance rule was wrong twice.** A scalar tell count lets one
-  severe finding be traded for several minor ones; a componentwise "no severity
-  may increase" rule inverts the question. It is now severity-lexicographic over
-  derived, verdict-eligible findings only — which means **the gate is currently
-  inert**, since every shipped rule is unvalidated.
+- **Derive the minimums.** The per-feature minimum sample sizes and the
+  paragraph size floor are both declared stand-ins, and they are the only reason
+  the profile still withholds readiness. Section 2 specifies the derivation.
+- **Issue #5, the author-specific orthographic profile**, which needed
+  `profile` and is now unblocked.
 
-**Blockers and known gaps.**
+**Decisions made, with reasons.**
 
-- `profile` is not production-ready by its own declaration until 2d lands.
-- `corpus` still reports contamination screening as `NotPerformed`; wiring
-  `tells` in is small, but per the reframe above it is not the real fix.
-- Issue #2's binding seven-day timebox has **not started** — it begins at the
-  first commit referencing that issue.
-- No CLI exists. The README's command block is the planned interface.
+- **Structural parsing runs over the raw admitted bytes.** Section 3 required a
+  normalized-to-raw offset map; that is only needed for a parser consuming the
+  normalized form, so the map would always be the identity — a place for a bug
+  to hide. Amended; logged as Section 3 Round 4 in REVIEW.md.
+- **A run with no words left after excision is outside the population**,
+  wherever it sits: admitting it adds a paragraph observation carrying no
+  measurement. Only a role exclusion outranks it.
+- **Empty blocks emit no leaf.** "Non-included leaves are recorded" governs text
+  runs excluded by policy, not blocks with no run to record.
+- **Sententiality is a declared heuristic with a published error rate.** A
+  proper per-item prose decision needs a finite-verb test, which needs POS
+  tagging, which ADR 0001 rules out. The rule is `(EndsTerminal AND Words >= 4)
+  OR Words >= 8`, closers peeled first, measured against a 30-item hand-annotated
+  fixture: **13.3% error against a declared 20% ceiling**, with both misses and
+  both false positives recorded in the fixture.
+- **Paragraphs pool unweighted.** One paragraph is one observation, which
+  estimates "a randomly chosen paragraph by this author" — what `score`
+  measures, so estimator and target match. Document weighting would estimate a
+  different quantity and inflate short documents' influence.
+- **Readiness stays withheld**, because Section 2 requires derived minimums and
+  none is derived. The reason changed, not the answer: from "the unit is wrong",
+  a defect in the statistic, to "the minimums are declared, not derived".
+- **Split assignment stays at document level.** A paragraph inherits its
+  document's split and never crosses one.
 
-**Process note.** The `duet` skill was written and revised this session. Its
-freeze step now **commits** the tests rather than only hashing them, because a
-mid-flight test amendment made the hash file stale and there was no way to tell
-a legitimate amendment from an implementer edit. That change earned itself
-twice in later slices.
+**Known limitations, all deliberate.**
+
+- One `panic` remains in `text`'s leaf constructor, on an internal invariant. It
+  is a consequence of `Structure` having no error return. A 28,818-input sweep
+  no longer reaches it, but it is **not** claimed unreachable — that claim was
+  made once and disproved.
+- A container's span is the enclosure of its descendant leaves, not its own
+  source extent, so quote and list markers are not represented.
+- `Profile.Documents` counts eligible train documents READ, not documents that
+  contributed a retained paragraph.
+- `Stats.Undefined` is forward-compatible accounting: every current feature is
+  defined whenever a paragraph has one lexical token, and the floor guarantees
+  that, so the tally is always zero today.
+- `text.Node` carries no document provenance, so a node from another document
+  with a coincidentally valid span is undetectable. Closing it means reopening
+  2d's frozen Node schema.
+
+**Performance note, worth remembering.** `Document.Tokens()` returns a *copy* of
+the token slice. Calling it once per leaf made `Structure()` quadratic in
+allocation: on the 1.1 MB Federalist fixture, 3.39 s and 20.5 GB, with a
+profile pass adding as much again. An internal cached-token accessor plus a
+binary search bounding each scan to the run brought it to 282 ms / 73.6 MB and
+5.5 ms / 36.5 MB. The defect entered in 2d when a per-leaf `Admit()` was
+replaced by a per-leaf `Tokens()` without anyone measuring that `Tokens()`
+copies.
+
+**Process note.** Both slices used the `duet` process: tests written and
+adversarially reviewed before any implementation existed, frozen by commit,
+implemented by a second model, then reviewed. The implementer stopped rather
+than editing a frozen test **five times across the two slices** and was right
+every time — a wrong NFC expectation, two sententiality expectations the
+declared rule contradicts, and two fixtures that silently deduped. Every
+amendment was made by consensus, committed on its own and re-frozen, so the
+history distinguishes an agreed amendment from an implementer edit.
+
+The other lesson is that frozen tests are not enough on their own.
+Adversarial *input* sweeps found five defect classes in 2d that thirteen review
+rounds had missed, and a measurement found a 20 GB allocation that no test would
+ever have failed on.
