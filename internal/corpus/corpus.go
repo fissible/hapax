@@ -4,7 +4,6 @@ package corpus
 import (
 	"crypto/sha256"
 	"encoding/binary"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -15,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -215,7 +215,7 @@ func Walk(root string, p Policy) (*Snapshot, error) {
 		GitProvenance:          notPerformed,
 		NearDuplicateDetection: notPerformed,
 	}
-	s.ID = hashInputs(s.IdentityInputs())
+	s.ID = identity.HashInputs(s.IdentityInputs())
 	return s, nil
 }
 
@@ -264,7 +264,7 @@ func readDocument(root, path string, p Policy) (Document, error) {
 	}
 	admitted, err := text.Admit(raw)
 	if err != nil {
-		doc.ContentHash = hashBytes(raw)
+		doc.ContentHash = identity.HashBytes(raw)
 		doc.Bytes = len(raw)
 		var admissionErr *text.AdmissionError
 		if errors.As(err, &admissionErr) {
@@ -276,7 +276,7 @@ func readDocument(root, path string, p Policy) (Document, error) {
 		return Document{}, fmt.Errorf("admit corpus file %q: %w", path, err)
 	}
 	analysis := admitted.Raw()
-	doc.ContentHash = hashBytes(analysis)
+	doc.ContentHash = identity.HashBytes(analysis)
 	doc.Bytes = len(analysis)
 	tokens := admitted.Tokens()
 	doc.Tokens = len(tokens)
@@ -296,14 +296,9 @@ func slashPath(root, path string) string {
 	return filepath.ToSlash(rel)
 }
 
-func hashBytes(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
-}
-
 func splitFor(contentHash string, p Policy) Split {
 	// Explicit length framing makes the domain-separated inputs unambiguous.
-	digest := sha256.Sum256(frame(splitAlgorithmVersion, p.SplitSeed, contentHash))
+	digest := sha256.Sum256(identity.Frame(splitAlgorithmVersion, p.SplitSeed, contentHash))
 	// The first 64 bits are enough for a uniform bucket while avoiding integer
 	// conversion of the entire digest or a fallible hex round trip.
 	bucket := binary.BigEndian.Uint64(digest[:8])
@@ -360,30 +355,7 @@ func (s *Snapshot) IdentityInputs() map[string]string {
 func membership(documents []Document) string {
 	parts := make([]string, 0, len(documents))
 	for _, doc := range documents {
-		parts = append(parts, string(frame(doc.Path, doc.ContentHash, string(doc.Admission), doc.DuplicateOf, strconv.Itoa(doc.RejectionOffset))))
+		parts = append(parts, string(identity.Frame(doc.Path, doc.ContentHash, string(doc.Admission), doc.DuplicateOf, strconv.Itoa(doc.RejectionOffset))))
 	}
-	return string(frame(parts...))
-}
-
-func hashInputs(inputs map[string]string) string {
-	keys := make([]string, 0, len(inputs))
-	for key := range inputs {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys)*2)
-	for _, key := range keys {
-		parts = append(parts, key, inputs[key])
-	}
-	return hashBytes(frame(parts...))
-}
-
-func frame(parts ...string) []byte {
-	var builder strings.Builder
-	for _, part := range parts {
-		builder.WriteString(strconv.Itoa(len(part)))
-		builder.WriteByte(':')
-		builder.WriteString(part)
-	}
-	return []byte(builder.String())
+	return string(identity.Frame(parts...))
 }
