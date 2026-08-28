@@ -179,22 +179,17 @@ func valuesFor(t *testing.T, root string, docs []corpus.Document, floor int) map
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Through the package's own exported paragraph path, deliberately. If
+		// Build ever computes its population by a different route, these
+		// statistics stop matching — which is the only way to notice that the
+		// profile was fitted on one definition of a paragraph while consumers
+		// measure against another.
+		paragraphs, err := profile.ParagraphVectors(doc, floor)
+		if err != nil {
+			t.Fatalf("ParagraphVectors: %v", err)
+		}
 		perDoc := map[features.ID][]float64{}
-		for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
-			tokens, err := doc.RunTokens(leaf)
-			if err != nil {
-				t.Fatalf("RunTokens: %v", err)
-			}
-			lexical := 0
-			for _, tok := range tokens {
-				if tok.Lexical {
-					lexical++
-				}
-			}
-			if lexical < floor {
-				continue
-			}
-			v := features.Extract(tokens)
+		for _, v := range paragraphs.Vectors {
 			for _, def := range features.Definitions() {
 				if fv, ok := v.Get(def.ID); ok && fv.Defined {
 					perDoc[def.ID] = append(perDoc[def.ID], fv.Value)

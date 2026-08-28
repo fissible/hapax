@@ -2,19 +2,16 @@
 package profile
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"math"
-	"os"
-	"path/filepath"
 	"sort"
 	"strconv"
-	"strings"
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/features"
+	"github.com/fissible/hapax/internal/identity"
+	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -84,6 +81,38 @@ type Profile struct {
 	Stats                    []Stats
 }
 
+// Paragraphs is the paragraph-scale feature population admitted by a lexical
+// token floor. Keeping this path shared prevents profile fitting and evaluation
+// from silently adopting different definitions of a paragraph.
+type Paragraphs struct {
+	Vectors    []features.Vector
+	BelowFloor int
+}
+
+// ParagraphVectors extracts vectors for included paragraph leaves that meet
+// minLexicalTokens. It reports excluded leaves separately so callers can retain
+// their own accounting without reimplementing the admission rule.
+func ParagraphVectors(doc *text.Document, minLexicalTokens int) (Paragraphs, error) {
+	if doc == nil {
+		return Paragraphs{}, errors.New("paragraph document must not be nil")
+	}
+
+	paragraphs := Paragraphs{}
+	for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		tokens, err := doc.RunTokens(leaf)
+		if err != nil {
+			return Paragraphs{}, fmt.Errorf("read paragraph: %w", err)
+		}
+		vector := features.Extract(tokens)
+		if vector.LexicalTokens < minLexicalTokens {
+			paragraphs.BelowFloor++
+			continue
+		}
+		paragraphs.Vectors = append(paragraphs.Vectors, vector)
+	}
+	return paragraphs, nil
+}
+
 // Build calculates train-split paragraph statistics for a snapshot.
 func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, error) {
 	if err := validateRequirements(req); err != nil {
@@ -119,16 +148,12 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		if err != nil {
 			return nil, err
 		}
-		for _, leaf := range admitted.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
-			tokens, err := admitted.RunTokens(leaf)
-			if err != nil {
-				return nil, fmt.Errorf("read paragraph in snapshot document %q: %w", document.Path, err)
-			}
-			vector := features.Extract(tokens)
-			if vector.LexicalTokens < req.MinParagraphLexicalTokens {
-				paragraphsBelowFloor++
-				continue
-			}
+		paragraphVectors, err := ParagraphVectors(admitted, req.MinParagraphLexicalTokens)
+		if err != nil {
+			return nil, fmt.Errorf("read paragraphs in snapshot document %q: %w", document.Path, err)
+		}
+		paragraphsBelowFloor += paragraphVectors.BelowFloor
+		for _, vector := range paragraphVectors.Vectors {
 			paragraphs++
 			for _, definition := range features.Definitions() {
 				value, ok := vector.Get(definition.ID)
@@ -170,7 +195,7 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		kept, excluded := trim(values[definition.ID], req.OutlierMADs)
 		p.Stats = append(p.Stats, makeStats(definition.ID, kept, undefined[definition.ID], excluded, req.MinObservationsPerFeature))
 	}
-	p.ID = hashInputs(p.IdentityInputs())
+	p.ID = identity.HashInputs(p.IdentityInputs())
 	return p, nil
 }
 
@@ -223,22 +248,7 @@ func validateRequirements(req Requirements) error {
 }
 
 func readVerified(root string, document corpus.Document) (*text.Document, error) {
-	path := filepath.Join(root, filepath.FromSlash(document.Path))
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("read snapshot document %q: %w", document.Path, err)
-	}
-	admitted, err := text.Admit(raw)
-	if err != nil {
-		return nil, fmt.Errorf("admit snapshot document %q: %w", document.Path, err)
-	}
-	// corpus.ContentHash is the hash of admitted raw bytes for admitted documents,
-	// so this comparison intentionally verifies that same BOM-stripped representation.
-	digest := hashBytes(admitted.Raw())
-	if digest != document.ContentHash {
-		return nil, fmt.Errorf("snapshot document %q changed since the snapshot", document.Path)
-	}
-	return admitted, nil
+	return snapshot.ReadVerified(root, document.Path, document.ContentHash)
 }
 
 func makeStats(id features.ID, values []float64, undefined, excluded, minimum int) Stats {
@@ -305,32 +315,4 @@ func median(values []float64) float64 {
 		return sorted[middle]
 	}
 	return (sorted[middle-1] + sorted[middle]) / 2
-}
-
-func hashInputs(inputs map[string]string) string {
-	keys := make([]string, 0, len(inputs))
-	for key := range inputs {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	parts := make([]string, 0, len(keys)*2)
-	for _, key := range keys {
-		parts = append(parts, key, inputs[key])
-	}
-	return hashBytes(frame(parts...))
-}
-
-func frame(parts ...string) []byte {
-	var builder strings.Builder
-	for _, part := range parts {
-		builder.WriteString(strconv.Itoa(len(part)))
-		builder.WriteByte(':')
-		builder.WriteString(part)
-	}
-	return []byte(builder.String())
-}
-
-func hashBytes(data []byte) string {
-	digest := sha256.Sum256(data)
-	return hex.EncodeToString(digest[:])
 }
