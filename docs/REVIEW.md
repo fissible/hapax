@@ -311,6 +311,62 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 7 — VERDICT: REVISE (raised while scoping the deviation slice)
+
+**The transformed deviation had no declared scale, and two later rules presuppose one.**
+Correction 2 outputs an empirical-CDF rank, which is a percentile in [0,1]. `z_max`
+winsorization is vacuous on a bounded percentile, and a mean of percentiles is not "the same
+form as Burrows' Delta", which averages |z|. Round 5 fixed the order the corrections compose
+in and left the codomain unstated, which is the same class of omission one step further on.
+
+→ The rank is mapped back through the normal quantile function. Comparability across
+features is what ranking buys and it survives the mapping; the quantity lands back on the
+scale `z_max`, the Delta analogy, and the band logic all already assume.
+
+**An empirical CDF returns 0 and 1, where the normal quantile is infinite.** With thirty
+reference segments this is not an edge case — it is every segment more extreme than the
+reference has seen, which at thirty points is one in thirty per tail.
+
+→ The (*r* − ½)/*n* plotting position, declared rather than chosen silently, because it is
+visible in the output: it caps |deviation| at Φ⁻¹(1 − 1/2*n*), about 2.13 at thirty
+reference segments. The reference size bounds deviation magnitude on its own and `z_max`
+binds only above that cap — published beside the minimum reference size, not left for a
+reader to derive from a surprising histogram.
+
+**The sign had no stated fate.** `d` takes absolute values, which invites discarding the
+sign at the source.
+
+→ Kept. Below the author's usual comma density and above it are different facts, and
+`rewrite` needs the direction. It costs a sign bit and cannot be recovered later.
+
+## Round 6 — VERDICT: REVISE (raised while scoping the distance `d`)
+
+**The weighting scheme was asserted as fitted without the conditions for fitting.** Section 2
+declared `w` "learned, not asserted", fitted on Train against author-versus-distractor
+separation with regularization and constraints stated. None of those terms was stated
+anywhere, and two of the preconditions do not currently hold: there is no distractor pool
+with author diversity to separate against, and fitting 150+ weights on a personal corpus's
+Train split is the over-parameterization the same section rejects Mahalanobis for. A design
+cannot reject a covariance estimate at 150+ dimensions as unsupportable and then require a
+weight vector of the same dimension from the same data.
+
+→ v1 declares uniform weights, records the choice in the profile artifact and the reported
+record, and puts the scheme and its version in the scoring cache identity so a later fitted
+scheme cannot be served from a cache built under this one. Fitting stays the intended
+destination and arrives with its objective, regularization, constraints, and missing-feature
+rule actually stated.
+
+**`λ` was named in three places and defined in none.** It appeared in the Train-fitted list,
+in the weighting paragraph, and in the cache identity. Nothing said what quantity it
+weighted. A symbol that reaches the reported record without a definition is a field no one
+can fill in.
+
+→ Struck. Neither available reading survives the uniform choice: as a regularization
+strength it has nothing left to restrain, and as a Tier A/Tier B blend it duplicates
+machinery that already exists, since `d` averages over whichever features a segment makes
+available and a Tier-A-only score already carries its own threshold artifact. A future
+fitted-weights slice reintroduces it with a definition.
+
 ## Round 5 — VERDICT: REVISE (raised while scoping the eval deviation slice)
 
 **Two corrections were named without saying how they compose.** Section 2 gives a
