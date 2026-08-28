@@ -119,6 +119,49 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-28
+
+**Merge order matters right now.** Two PRs are open and green:
+
+1. **#24** — recovery. The whole of eval slice 1 (`internal/eval`,
+   `internal/identity`, `internal/snapshot`, `profile.ParagraphVectors`) was
+   stranded: #23 was stacked on #21, #21 merged first, and #23 then merged into a
+   base already forwarded to `main`. GitHub reports both merged; `main` had
+   neither. Nothing new in #24, no re-review needed.
+2. **#25** — per-feature sampling variance. Contains a merge of #24's work, so
+   **it must land second** or its diff duplicates that.
+
+Do not stack PRs in this repo again without stating the landing order.
+
+**Completed since the last note.** `eval` slice 1, the held-out segment
+population — `NonOverlappingWith`'s first caller. And `features` slice: each
+feature declares a sampling-variance family (rate `p(1-p)/n`, density
+`phi*lambda/n` with declared `phi = 1`, mean `s^2/n` on the sample variance,
+undefined at n = 1), with the manifest digest moved to `features` and widened to
+cover the vocabularies.
+
+**Next task: the deviation itself.** DESIGN Section 2, as amended in REVIEW
+Round 5: standardize with the length-aware denominator, then apply the
+empirical-CDF rank transform to *that* quantity. The reference distribution is
+built on Calibrate and figures are reported on Test.
+
+Everything it needs now exists: `eval.Extract` supplies the labelled population,
+`features` supplies the sampling variance, `profile` supplies the fitted means
+and variances.
+
+**A decision is needed before that slice can be scoped.** Section 2 says the
+weights `w` and `lambda` in `d` are "learned, not asserted", fitted on Train
+against author-versus-distractor separation. Fitting them is a large slice of its
+own. The alternative is to declare uniform weights for v1 and record the choice,
+which Section 2 explicitly permits — "Uniform, expert, inverse-redundancy and
+learned weights are materially different models; the choice is recorded, not
+implied". That decision changes what the deviation slice contains and must be
+made before tests are written.
+
+**Also open, none blocking:** #17 and #18 (both waiting on later components),
+#22 (ParlaMint editorial-normalisation stress test, waiting on `eval`), #1, #3,
+#5. Issue #2 is closed on the fallback.
+
 ### 2026-08-27
 
 **Completed, two slices.**
