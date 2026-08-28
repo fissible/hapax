@@ -44,7 +44,9 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#2](https://github.com/fissible/hapax/issues/2) | Select and licence-verify a register-matched distractor corpus | nothing — actionable, blocks release |
 | [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `text` contract versioning exists; actionable |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
-| [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | needs `profile` (now built) |
+| [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
+| [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | `eval` (component 5) |
+| [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | `rewrite` (component 10) |
 
 ---
 
@@ -110,6 +112,13 @@ that issue. Two candidates could reasonably go first:
   the profile still withholds readiness. Section 2 specifies the derivation.
 - **Issue #5, the author-specific orthographic profile**, which needed
   `profile` and is now unblocked.
+
+**Issue #2 has been rescoped** so its timebox can govern it. Two of its acceptance
+criteria could not be evaluated until components 5 and 10 existed, so the fallback
+could be adopted on day seven and the issue would still have stayed open — the
+forcing function guaranteed nothing. Distractor sufficiency is now #17 and the
+rewrite-quality contamination caveat is #18; neither blocks the licence decision,
+and what remains in #2 is exactly what seven days is meant to settle.
 
 **Decisions made, with reasons.**
 
