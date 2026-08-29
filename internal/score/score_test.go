@@ -75,10 +75,7 @@ import (
 // A profile, a reference and a release to score against
 // ---------------------------------------------------------------------------
 
-const (
-	testProfileID   = "profile-under-test"
-	testReferenceID = "reference-under-test"
-)
+const testProfileID = "profile-under-test"
 
 func testProfile() *profile.Profile {
 	stats := make([]profile.Stats, 0, len(features.Definitions()))
@@ -139,13 +136,15 @@ func standardize(t *testing.T, prof *profile.Profile, src string, split corpus.S
 	return out
 }
 
-// held builds one Test-split classed distance for the gates.
-func held(class eval.Class, value float64, document string) eval.ClassedDistance {
+// held builds one Test-split classed distance for the gates. The reference ID is
+// the real, content-derived one: a literal would not match the reference score
+// is given, and the compatibility check would then refuse every ordinary score.
+func held(class eval.Class, value float64, referenceID, document string) eval.ClassedDistance {
 	return eval.ClassedDistance{
 		Class:    class,
 		Document: document,
 		Distance: deviation.Distance{
-			ProfileID: testProfileID, ReferenceID: testReferenceID,
+			ProfileID: testProfileID, ReferenceID: referenceID,
 			FeatureManifestDigest: features.ManifestDigest(), Split: corpus.Test,
 			Value: value, Defined: true,
 			Features:     []features.ID{features.WordLengthMean},
@@ -155,10 +154,10 @@ func held(class eval.Class, value float64, document string) eval.ClassedDistance
 	}
 }
 
-func heldOut(class eval.Class, from, to int) []eval.ClassedDistance {
+func heldOut(ref *deviation.Reference, class eval.Class, from, to int) []eval.ClassedDistance {
 	out := make([]eval.ClassedDistance, 0, to-from+1)
 	for v := from; v <= to; v++ {
-		out = append(out, held(class, float64(v), label(v)))
+		out = append(out, held(class, float64(v), ref.ID, label(v)))
 	}
 	return out
 }
@@ -180,10 +179,12 @@ func label(n int) string {
 
 // release builds a release that passes both gates: authors far below
 // distractors, eighty and forty clusters.
-func testRelease(t *testing.T) eval.Release {
+func testRelease(t *testing.T, ref *deviation.Reference) eval.Release {
 	t.Helper()
-	population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)
-	return releaseOver(t, population)
+	return releaseOver(t, append(
+		heldOut(ref, eval.ClassAuthor, 1, 80),
+		heldOut(ref, eval.ClassDistractor, 201, 240)...,
+	))
 }
 
 func releaseOver(t *testing.T, population []eval.ClassedDistance) eval.Release {
@@ -229,7 +230,8 @@ Every reading of this passage runs into the same wall, which is that it never sa
 func scoreDraft(t *testing.T, source string) score.Report {
 	t.Helper()
 	prof := testProfile()
-	got, err := score.Score([]byte(source), prof, testReference(t, prof), testRelease(t))
+	ref := testReference(t, prof)
+	got, err := score.Score([]byte(source), prof, ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -342,11 +344,12 @@ func TestAReferenceSurvivesBeingPersisted(t *testing.T) {
 		}
 	}
 
-	before, err := score.Score([]byte(draft), prof, live, testRelease(t))
+	release := testRelease(t, live)
+	before, err := score.Score([]byte(draft), prof, live, release)
 	if err != nil {
 		t.Fatalf("Score against the live reference: %v", err)
 	}
-	after, err := score.Score([]byte(draft), prof, &restored, testRelease(t))
+	after, err := score.Score([]byte(draft), prof, &restored, release)
 	if err != nil {
 		t.Fatalf("Score against the restored reference: %v", err)
 	}
@@ -407,7 +410,8 @@ func TestParagraphsBelowTheFloorAreExcludedAndCounted(t *testing.T) {
 // floor to disagree with it.
 func TestTheFloorIsTheProfilesOwn(t *testing.T) {
 	prof := withFloor(testProfile(), 500)
-	got, err := score.Score([]byte(draft), prof, testReference(t, testProfile()), testRelease(t))
+	ref := testReference(t, testProfile())
+	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -506,7 +510,8 @@ func TestAnUnmeasurableFeatureStatesItsReason(t *testing.T) {
 		}
 	}
 
-	got, err := score.Score([]byte(draft), prof, testReference(t, prof), testRelease(t))
+	ref := testReference(t, prof)
+	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -563,15 +568,17 @@ func TestBandsComeFromTheRelease(t *testing.T) {
 // and the band is withheld — which is one report shape, not two. A reader asks
 // whether the band is defined.
 func TestAnUncalibratedProfileStillReportsDistancesAndDeltas(t *testing.T) {
+	prof := testProfile()
+	ref := testReference(t, prof)
+
 	// Author and distractor distances interleaved, so discrimination fails.
-	population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 2, 41)...)
+	population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 2, 41)...)
 	release := releaseOver(t, population)
 	if release.Discrimination.Discriminates {
 		t.Fatalf("this fixture must fail discrimination; the bound is %v", release.Discrimination.LowerBound)
 	}
 
-	prof := testProfile()
-	got, err := score.Score([]byte(draft), prof, testReference(t, prof), release)
+	got, err := score.Score([]byte(draft), prof, ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -616,7 +623,8 @@ func TestASegmentWithInsufficientEvidenceIsReportedAsSuch(t *testing.T) {
 		}
 	}
 
-	got, err := score.Score([]byte(draft), prof, testReference(t, prof), testRelease(t))
+	ref := testReference(t, prof)
+	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -673,7 +681,7 @@ func TestScoringIsTierAOnlyWhileTheManifestSaysSo(t *testing.T) {
 func TestTheReportCarriesItsProvenance(t *testing.T) {
 	prof := testProfile()
 	ref := testReference(t, prof)
-	release := testRelease(t)
+	release := testRelease(t, ref)
 
 	got, err := score.Score([]byte(draft), prof, ref, release)
 	if err != nil {
@@ -705,7 +713,7 @@ func TestTheReportCarriesItsProvenance(t *testing.T) {
 func TestScoreRefusesMismatchedArtifacts(t *testing.T) {
 	prof := testProfile()
 	ref := testReference(t, prof)
-	release := testRelease(t)
+	release := testRelease(t, ref)
 
 	t.Run("a reference from another profile", func(t *testing.T) {
 		other := testProfile()
@@ -716,7 +724,7 @@ func TestScoreRefusesMismatchedArtifacts(t *testing.T) {
 	})
 
 	t.Run("a release from another reference", func(t *testing.T) {
-		population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)
+		population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 240)...)
 		for i := range population {
 			population[i].Distance.ReferenceID = "another-reference"
 		}
@@ -817,7 +825,7 @@ func TestNothingScoredIsNonFinite(t *testing.T) {
 func TestTheReportIsTheCompositionOfItsParts(t *testing.T) {
 	prof := testProfile()
 	ref := testReference(t, prof)
-	release := testRelease(t)
+	release := testRelease(t, ref)
 
 	got, err := score.Score([]byte(draft), prof, ref, release)
 	if err != nil {
@@ -914,9 +922,17 @@ func TestTheReportIsTheCompositionOfItsParts(t *testing.T) {
 // An implementation reaching for Thresholds.Band, or for Calibration's
 // boundaries directly, emits the refused label here.
 func TestARefusedBandNeverReachesAReport(t *testing.T) {
-	// Distractors sitting below every author distance make in-range leak
-	// completely, so the band gate refuses it while not-you holds.
-	population := append(heldOut(eval.ClassAuthor, 201, 280), heldOut(eval.ClassDistractor, 1, 40)...)
+	prof := testProfile()
+	ref := testReference(t, prof)
+
+	// Refusing a claiming band on RATE while discrimination passes is not
+	// constructible: in-range leaks only when distractors fall below t_low,
+	// which is the separation discrimination measures. The floor is the
+	// independent lever. Eighty author clusters clear not-you's 3/80 = 0.0375
+	// against 0.05; twenty distractor clusters fail in-range's 3/20 = 0.15
+	// against 0.10; and twenty clusters per class clear discrimination's cap of
+	// 1 - 3/20 = 0.85 against a floor of 0.80.
+	population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 220)...)
 	release := releaseOver(t, population)
 
 	if !release.Discrimination.Discriminates {
@@ -935,8 +951,7 @@ func TestARefusedBandNeverReachesAReport(t *testing.T) {
 		t.Fatalf("this fixture needs the calibration to survive")
 	}
 
-	prof := testProfile()
-	got, err := score.Score([]byte(draft), prof, testReference(t, prof), release)
+	got, err := score.Score([]byte(draft), prof, ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -1007,7 +1022,8 @@ func TestTheSplitBoundariesAreCompleteInBothDirections(t *testing.T) {
 		}
 	})
 
-	population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)
+	ref := testReference(t, prof)
+	population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 240)...)
 	thresholds, err := eval.Calibrate(calibrationPopulation(population), eval.Source{
 		Cohort: "cohort-under-test", DistractorPool: "pool-under-test",
 	}, eval.DefaultTargets())
@@ -1069,7 +1085,10 @@ func name(split corpus.Split) string {
 // claiming bands are refused on the rule-of-three floor however clean the
 // observation — and the profile is uncalibrated with discrimination intact.
 func TestAReportIsUncalibratedWhenTheBandGateFailsAlone(t *testing.T) {
-	population := append(heldOut(eval.ClassAuthor, 1, 20), heldOut(eval.ClassDistractor, 201, 220)...)
+	prof := testProfile()
+	ref := testReference(t, prof)
+
+	population := append(heldOut(ref, eval.ClassAuthor, 1, 20), heldOut(ref, eval.ClassDistractor, 201, 220)...)
 	release := releaseOver(t, population)
 
 	if !release.Discrimination.Discriminates {
@@ -1079,8 +1098,7 @@ func TestAReportIsUncalibratedWhenTheBandGateFailsAlone(t *testing.T) {
 		t.Fatalf("this fixture needs the band gate to fail")
 	}
 
-	prof := testProfile()
-	got, err := score.Score([]byte(draft), prof, testReference(t, prof), release)
+	got, err := score.Score([]byte(draft), prof, ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -1104,17 +1122,17 @@ func TestAReportIsUncalibratedWhenTheBandGateFailsAlone(t *testing.T) {
 // Report.Calibrated tracks the release's own verdict rather than being computed
 // a second time, across every combination this design can produce.
 func TestReportedCalibrationFollowsTheRelease(t *testing.T) {
+	prof := testProfile()
+	ref := testReference(t, prof)
+
 	cases := []struct {
 		name       string
 		population []eval.ClassedDistance
 	}{
-		{name: "both gates pass", population: append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)},
-		{name: "the band gate fails alone", population: append(heldOut(eval.ClassAuthor, 1, 20), heldOut(eval.ClassDistractor, 201, 220)...)},
-		{name: "discrimination fails", population: append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 2, 41)...)},
+		{name: "both gates pass", population: append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 240)...)},
+		{name: "the band gate fails alone", population: append(heldOut(ref, eval.ClassAuthor, 1, 20), heldOut(ref, eval.ClassDistractor, 201, 220)...)},
+		{name: "discrimination fails", population: append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 2, 41)...)},
 	}
-
-	prof := testProfile()
-	ref := testReference(t, prof)
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			release := releaseOver(t, c.population)
@@ -1140,7 +1158,7 @@ func TestReportedCalibrationFollowsTheRelease(t *testing.T) {
 func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 	prof := testProfile()
 	ref := testReference(t, prof)
-	release := testRelease(t)
+	release := testRelease(t, ref)
 
 	empty := [][]byte{[]byte(""), []byte("Too short.\n\nAlso brief.\n")}
 
@@ -1154,7 +1172,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 		})
 
 		t.Run("another reference", func(t *testing.T) {
-			population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)
+			population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 240)...)
 			for i := range population {
 				population[i].Distance.ReferenceID = "another-reference"
 			}
@@ -1177,7 +1195,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 		})
 
 		t.Run("another reference", func(t *testing.T) {
-			population := append(heldOut(eval.ClassAuthor, 1, 80), heldOut(eval.ClassDistractor, 201, 240)...)
+			population := append(heldOut(ref, eval.ClassAuthor, 1, 80), heldOut(ref, eval.ClassDistractor, 201, 240)...)
 			for i := range population {
 				population[i].Distance.ReferenceID = "another-reference"
 			}
