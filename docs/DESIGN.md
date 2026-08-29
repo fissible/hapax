@@ -927,10 +927,15 @@ fencing is mechanical rather than conventional.
 
 **The fence is a line prefix, because a line prefix cannot be escaped out of.** A delimiter
 pair can be broken by exemplar text that contains the delimiter, and escaping that text is a
-second mechanism with its own failure modes. Every line of every exemplar is instead emitted
-behind a marker, so content that reads as an instruction stays behind it exactly as ordinary
-content does. The draft passage is marked distinctly from the exemplars, so the two are never
-confusable by position alone.
+second mechanism with its own failure modes. **Every** line of every exemplar is instead
+emitted behind the prefix — blank lines included, since a blank line is where a delimiter-based
+fence would be most tempting to close — so content that reads as an instruction stays behind
+it exactly as ordinary content does.
+
+**The passage carries its own marker.** Distinguishing it from the exemplars by position alone
+would be a convention again: a prompt that simply put the passage first would satisfy "not
+fenced" while telling the model nothing about which text it is being asked to rewrite. The
+marker is explicit and is not the fence prefix.
 
 **Exemplars arrive exactly as requested, or not at all.** A selector returning fewer than
 asked for is a silent reduction of the anchor to the author's own prose, and a substitution is
