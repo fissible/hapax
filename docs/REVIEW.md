@@ -311,6 +311,37 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 15 — VERDICT: REVISE (raised while scoping `preserve`)
+
+**"Must survive" is the wrong test in one direction.** ADR 0006 states preservation as
+survival, which catches loss and permits invention — a rewrite that adds a number, a URL or a
+quotation fabricates a fact, and one that adds a negation inverts a claim.
+
+→ Multiset equality in both directions, for all five classes. The cost is stated rather than
+hidden: a meaning-preserving rephrasing that removes a negation is rejected. A gate that
+allowed negation changes would allow a rewrite to invert what the author said.
+
+**Three of the five classes have no deterministic definition at all**, and the design named
+them as though they did. A named entity without a model is a guess.
+
+→ Each is written down as a surface proxy with its failure modes named. The entity proxy —
+capitalised and not a function word — over-collects ordinary capitalised nouns, which makes
+the gate stricter, and under-collects lower-case entities, which is the dangerous direction
+and is a stated limitation rather than a defect to be discovered.
+
+**The tokenizer shreds URLs**, which the design would have had this component find out the
+hard way. `https://example.com/x` becomes eleven tokens, so a URL is not a token and cannot be
+compared as one. Checked against the real tokenizer rather than assumed.
+
+→ URLs and quoted strings are matched over the text; numbers, negations and entities use the
+token stream, which keeps `1,000` and `Don't` whole.
+
+**Single quotes cannot be handled deterministically.** An apostrophe and a closing single
+quote are the same character.
+
+→ Double-quoted spans only, straight or curly, stated as an exclusion rather than an
+oversight.
+
 ## Round 14 (final) — raised at the implementation consensus gate
 
 **The request handed providers the raw exemplars alongside the assembled prompt.** Which
