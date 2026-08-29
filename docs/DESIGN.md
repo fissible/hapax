@@ -841,6 +841,64 @@ SplitMix64 is a published algorithm, so this is a specification a second impleme
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
 
+### `rewrite`: the acceptance loop
+
+ADR 0006 specifies the decision completely and leaves three quantities unstated. Two are
+settled here; the third turned out to be the wrong shape.
+
+**ε is a tolerance, not a threshold.** ADR 0006 says `d(candidate) ≤ d(current) − ε` and that
+ties inside ε are rejections. A declared value in the range that looks natural — 0.01, say —
+would be a constant compared against a quantity whose resolution changes with the corpus.
+`d` is a mean over *k* features of deviations that are ranks against a reference of *n*
+values, so its finest expressible change is about 2.5/((*n*+1)·*k*): **0.0135 at a reference
+of thirty, 0.0041 at a hundred**. An ε of 0.01 therefore accepts a single-rank improvement on
+a small corpus and silently rejects the same improvement on a larger one — the tool getting
+*less* willing to improve as the evidence behind it grows.
+
+So ε is a floating-point tolerance, `1e-9`, and its job is exactly the one the ADR names:
+make ties rejections. The substantive protection against churn is the pass cap, which bounds
+the number of accepted rewrites directly rather than by proxy.
+
+**The pass cap is three**, declared rather than derived. Each pass is a generator call; the
+loop is monotone in `d`, so further passes can only help the number while cost and drift
+rise. A cap is a safety envelope, not an optimum, and this is a stand-in like every other
+declared figure here.
+
+**A candidate must admit exactly one segment.** A rewrite of a paragraph that arrives as two
+paragraphs, or as something the lexical-token floor excludes, is not a rewrite of that
+paragraph — it is a different edit whose `d` is not comparable to the original's. Candidates
+are measured by the same path the original was, through `score`, and one that does not yield
+exactly one segment is rejected without being scored.
+
+**Refusal is passing through untouched.** Where `d` is unavailable on either side — the
+segment unscoreable, or the profile uncalibrated — no acceptance is possible and the segment
+is returned unchanged, reported as such. Absence of measurement is never improvement.
+
+**Comparability is checked, not assumed.** Two distances built on different contributing
+features are not comparable, and accepting on a fall in `d` between them would be accepting a
+rewrite that moved the denominator. The contributing set travels on the distance for exactly
+this, and a candidate whose set differs is rejected.
+
+**The two non-regression guards, and their honest state.** `preserve` is deterministic —
+numbers, named entities, negations, URLs and quoted strings must survive — and does not exist
+yet; it arrives as its own component behind the interface this one defines. The tells guard
+does exist: `tells.Comparison.Compare` orders derived, verdict-eligible findings
+severity-lexicographically and refuses to compare reports from different rule sets, different
+options, with suppressions honoured, or truncated. ADR 0006 already records that this gate is
+**inert while every shipped rule is unvalidated**, and that remains true; it is wired in so
+that validating a rule turns it on rather than requiring the loop to be rebuilt.
+
+**The generator is an interface and the loop never sees a network.** `rewrite` is the only
+component that touches an LLM, and it touches it through one method that takes the current
+text and returns a candidate. Everything else in the loop is deterministic, which is what
+lets the acceptance rule be tested exactly against a fake that returns scripted candidates.
+
+**Reassembling a document is a separate concern and is not in this component.** The loop
+decides, per segment, what the text should be. Splicing accepted text back into the original
+bytes needs raw offsets and has to preserve the excisions `text` removes from a leaf's token
+view — a hazard of its own, and one that would be hidden inside an acceptance loop rather
+than tested on its own terms.
+
 ### `score`, and two things it found underneath it
 
 `score` measures a draft against a profile and emits, per paragraph, a calibrated band, the

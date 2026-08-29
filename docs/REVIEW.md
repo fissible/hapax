@@ -311,6 +311,34 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 14 — VERDICT: REVISE (raised while scoping `rewrite`)
+
+**ε was the wrong shape, and a plausible value for it would have made the tool worse as its
+evidence improved.** ADR 0006 leaves ε undeclared. Picking an absolute figure — 0.01 was the
+one that looked natural — compares a constant against a quantity whose resolution depends on
+the corpus: `d` is a mean over *k* features of ranks against a reference of *n* values, so its
+finest expressible change is about 2.5/((*n*+1)·*k*). Measured: 0.047 at a reference of eight,
+0.0135 at thirty, 0.0041 at a hundred. An ε of 0.01 accepts a single-rank improvement on a
+small corpus and rejects the identical improvement once the reference passes about seventy.
+
+→ ε is a floating-point tolerance, 1e-9, doing exactly the job the ADR names for it: making
+ties rejections. Churn is bounded by the pass cap, which limits accepted rewrites directly
+rather than through a proxy that drifts with corpus size.
+
+**The pass cap had no value.** Three, declared, a safety envelope rather than an optimum.
+
+**Nothing said what a candidate that is not one paragraph means.** A generator can return two
+paragraphs, or something the lexical floor excludes.
+
+→ Rejected without being scored. A candidate that does not admit exactly one segment is not a
+rewrite of this paragraph, and its `d` would not be comparable to the original's.
+
+**A correction to the previous handoff.** It listed the tells vector comparison as missing. It
+is not: `tells.Comparison.Compare` already orders derived, verdict-eligible findings
+severity-lexicographically and refuses reports from different rule sets or options, with
+suppressions honoured, or truncated. Only `preserve` is genuinely absent, and it arrives
+behind the interface this component defines rather than before it.
+
 ## Round 13 — VERDICT: REVISE (raised while scoping `score`)
 
 **The split vocabulary had no word for the thing the tool is for.** A standardized segment
