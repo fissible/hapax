@@ -899,6 +899,10 @@ rate, and there is no sample size below this at which such a claim can be made. 
 is reported so a user knows what a band needs, and not tested separately, because one rule
 that implies the other is better than two that could disagree.
 
+**An unscoreable segment needs no cluster label.** It carries no distance, so it is excluded
+before anything is clustered and is evidence about nothing. Requiring a label for it would
+refuse a population over data the gate does not use.
+
 **A class with no held-out segments at all bounds nothing**, and 3/0 is not a number. The
 bound is reported as 1 — the widest a rate can be — which fails every target below it and
 refuses the band. Reporting 0 there would be the same over-confidence the floor exists to
