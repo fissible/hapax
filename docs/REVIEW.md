@@ -311,6 +311,132 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 14 (final) — raised at the implementation consensus gate
+
+**The request handed providers the raw exemplars alongside the assembled prompt.** Which
+restores exactly the problem moving prompt assembly into this component was meant to remove: a
+provider can ignore the prompt and build its outbound request from the unfenced strings, and
+the mechanical fence becomes a convention again. The frozen suite had blessed it — a test of
+mine asserted the parts travelled with the prompt, on the reasoning that a provider might not
+want to re-parse, which is a convenience argument against a safety property.
+
+→ The request carries the prompt and the non-prose identity and settings, and no raw prose.
+A provider needing a structured split is given assembled parts, not ingredients.
+
+## Round 14 (cont.) — raised at the implementation consensus gate
+
+**Exemplars were selected once per attempt rather than once per invocation.** ADR 0004 says
+*exemplars are stable per profile and largely cacheable, rather than recomputed per draft*,
+and this section had not carried that across. A loop asking the selector again on each attempt
+lets a stateful selector change the author's own writing underneath a running rewrite: the
+second attempt would be anchored to a sample the first never saw.
+
+→ Selected and count-checked once, before the loop, and reused for every request.
+
+Worth recording how this was reached, because both parties were wrong first. I defended
+per-attempt selection on the grounds that neither the design nor ADR 0007 required otherwise,
+and the reviewer agreed — but neither of us had read ADR 0004, which decides it in one
+sentence. The reviewer then reversed its own agreement, and checking the source rather than
+either recollection settled it. **A claim about what the design permits is worth exactly as
+much as the reading behind it**, and "the ADR I checked does not say" is not the same as "no
+ADR says".
+
+**Zero exemplars was an accepted configuration**, and `DefaultOptions` shipped it. Found at
+the same gate. A prompt with no exemplars asks a model to write in a style it has not been
+shown, so the anchor to the author's own prose would have been absent from the configuration a
+caller is most likely to reach for — silently, since nothing refused it.
+
+→ A non-positive count is refused, and the declared default is three.
+
+## Round 14 (further) — raised by the reviewer of the frozen-first test suite
+
+**A request carrying raw exemplar strings cannot enforce fencing.** The corrected design made
+fencing "the provider interface's obligation", which is a convention rather than a mechanism:
+every implementation would have to remember it, and one that forgot would have no failing
+test. This is the same shape as the finding that the provider contract had deleted `Selector`
+— a rule stated where nothing can check it.
+
+→ Prompt assembly moves into `rewrite`. The request carries an assembled prompt, and the fence
+is a **line prefix** rather than a delimiter pair, because a delimiter can be broken by
+exemplar text containing it while a prefix applied to every line cannot be escaped out of.
+
+**A selector returning fewer exemplars than asked for is a silent reduction.** The suite's own
+fake truncated quietly, which is exactly the behaviour the loop must refuse.
+
+→ The requested count is required. Fewer is an error, not a weaker prompt nobody chose.
+
+## Round 14 (continued) — raised on review of the rewrite design, before any test existed
+
+**The provider contract deleted `Selector` from the design.** The component table declares
+`rewrite` as depending on five interfaces — `Scorer`, `Selector`, `Gate`, `Provider`, `Store`
+— and the first draft of this section reduced the provider to one method taking the current
+text and returning a candidate. A provider written against that could not receive exemplars
+at all, which makes ADR 0007's boundary inexpressible: *only the draft passage and a handful
+of exemplars are ever sent, never the corpus*. A provider handed only a passage has nothing
+else it could send, so the rule would have been satisfied vacuously rather than honoured, and
+the anchor to the author's own prose would have been quietly removed.
+
+→ `RewriteRequest` carries the segment, the selected exemplars, the profile and invocation
+identity, and the provider settings including `--local-only`. Prompt assembly is a named
+boundary and fencing exemplars as untrusted data is the interface's obligation, not a
+convention implementations are trusted to remember.
+
+**Reassembly was declared "separate" with no owner, which is a gap rather than a boundary.**
+`hapax rewrite draft.md` had no component able to produce its output.
+
+→ `assemble` owns it, with a stated contract: ordered non-overlapping raw spans; every
+untouched byte and every excision inside a replaced span preserved exactly, a replacement
+spanning an excision being refused rather than resolved; and all-or-nothing output, since a
+file half in the author's voice and half in the model's is worse than an error.
+
+**"Retains before/after artifacts" and the store's privacy invariant were in direct
+tension.** The invariant forbids any reversible prose representation across the database, its
+sidecars, exports, logs and diagnostics. Left unresolved, "auditable" is the word under which
+prose gets persisted.
+
+→ The audit record is a whitelist: span reference, content hashes of both sides, distance and
+band, preserve verdict and what it found missing, tells comparison, rejection code, and
+provider and invocation identity. Candidate text lives only in the output the user asked for,
+and a **rejected** candidate is not retained at all — it is precisely prose the user never
+chose to keep.
+
+**The cap had no operational semantics, and the obvious reading does not terminate.** It was
+described as bounding accepted rewrites while each pass was called a generator call.
+
+→ It counts attempts, accepted or rejected: a cap on acceptances alone lets a provider that
+never produces an acceptable candidate loop for ever. `current` advances only on acceptance;
+a rejection leaves it unchanged and the provider is asked again against the same text, since
+a rejection is a property of one candidate rather than of the segment. The loop stops at the
+cap or when the provider returns no candidate.
+
+## Round 14 — VERDICT: REVISE (raised while scoping `rewrite`)
+
+**ε was the wrong shape, and a plausible value for it would have made the tool worse as its
+evidence improved.** ADR 0006 leaves ε undeclared. Picking an absolute figure — 0.01 was the
+one that looked natural — compares a constant against a quantity whose resolution depends on
+the corpus: `d` is a mean over *k* features of ranks against a reference of *n* values, so its
+finest expressible change is about 2.5/((*n*+1)·*k*). Measured: 0.047 at a reference of eight,
+0.0135 at thirty, 0.0041 at a hundred. An ε of 0.01 accepts a single-rank improvement on a
+small corpus and rejects the identical improvement once the reference passes about seventy.
+
+→ ε is a floating-point tolerance, 1e-9, doing exactly the job the ADR names for it: making
+ties rejections. Churn is bounded by the pass cap, which limits accepted rewrites directly
+rather than through a proxy that drifts with corpus size.
+
+**The pass cap had no value.** Three, declared, a safety envelope rather than an optimum.
+
+**Nothing said what a candidate that is not one paragraph means.** A generator can return two
+paragraphs, or something the lexical floor excludes.
+
+→ Rejected without being scored. A candidate that does not admit exactly one segment is not a
+rewrite of this paragraph, and its `d` would not be comparable to the original's.
+
+**A correction to the previous handoff.** It listed the tells vector comparison as missing. It
+is not: `tells.Comparison.Compare` already orders derived, verdict-eligible findings
+severity-lexicographically and refuses reports from different rule sets or options, with
+suppressions honoured, or truncated. Only `preserve` is genuinely absent, and it arrives
+behind the interface this component defines rather than before it.
+
 ## Round 13 — VERDICT: REVISE (raised while scoping `score`)
 
 **The split vocabulary had no word for the thing the tool is for.** A standardized segment

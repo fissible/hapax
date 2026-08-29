@@ -119,6 +119,73 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (rewrite)
+
+**Completed: the monotonic acceptance loop** (PR #33, all three checks green).
+The last component the release gates existed to protect.
+
+**Epsilon was the wrong shape.** An absolute value compares a constant against a
+quantity whose resolution moves with the corpus: `d`'s finest expressible change
+is about 2.5/((n+1)·k), so 0.01 accepts a single-rank improvement at a reference
+of thirty and rejects the identical improvement past about seventy — the tool
+growing *less* willing to improve as its evidence improved. It is a tolerance;
+churn is bounded by the cap, which counts attempts rather than acceptances.
+
+**Reviewing the design before writing tests paid for itself.** Four defects
+found with no code in existence: the provider contract had deleted `Selector`,
+reassembly had no owner, the audit record conflicted with the store's privacy
+invariant, and the cap's obvious reading did not terminate. Do this again.
+
+**Next, in order:**
+
+1. **`preserve`** (component 8) — deterministic, and the interface it implements
+   already exists and is exercised by rewrite's fakes. Numbers, named entities,
+   negations, URLs and quoted strings must survive an edit. Its own design
+   questions: what counts as a named entity without a model, and whether "5" and
+   "five" are the same number.
+2. **`assemble`** (component 11) — added to the table this slice. Ordered
+   non-overlapping raw spans, every untouched byte and every excision inside a
+   replaced span preserved, all-or-nothing output. `score` does not currently
+   expose leaf spans, so that gap is part of the slice.
+3. **`select`** (component 7) — medoids and high-density regions of the named
+   profile, never nearest-neighbour to the draft. ADR 0004 also settles that
+   exemplars are stable per profile, which rewrite now relies on.
+4. **`llm`** (component 9) — Ollama first, Anthropic as the one cloud provider.
+   ADR 0007's local-only assertions belong here: no provider constructed, no
+   credential read, no dial, no telemetry, **asserted by test**.
+5. **`cli`** (component 12) — the table says build it early against stub
+   interfaces. That advice was not taken and the interfaces exist now anyway.
+
+**Process notes, and this slice has the sharpest ones yet.**
+
+The fencing assertions took four review rounds because each of my fixes was
+**satisfiable without doing the thing it named**: a prefix that appeared
+anywhere, a marker that appeared anywhere, a blank line satisfied by another
+line's prefix, a duplicate hidden by `ReplaceAll`. When an assertion is about a
+structural property, ask what else could make it true.
+
+**Two corrections went in opposite directions, and both are instructive.**
+Codex reported a compile-blocking redeclaration; I showed the cited line was a
+comment and that the package compiles cleanly under a signature stub, and it
+withdrew — its own `go test` had failed at "no non-test Go files" before
+type-checking anything. Then it reversed its own agreement that per-attempt
+exemplar selection was fine, and **it was right**: ADR 0004 settles it in one
+sentence and I had argued from ADR 0007's silence. *A claim about what the
+design permits is worth exactly as much as the reading behind it, and "the ADR I
+checked does not say" is not "no ADR says".*
+
+**Three defects arrived at the consensus gate**, all real, all amended in the
+tests first rather than fixed silently: zero exemplars was an accepted
+configuration and `DefaultOptions` shipped it; exemplars were selected per
+attempt; and the request handed providers the raw exemplars alongside the
+assembled prompt, which a test of mine had blessed on a convenience argument
+against a safety property.
+
+**A standing rule earned twice now:** an assertion that can be satisfied by
+something other than the behaviour is not an assertion. And verify an edit
+landed — two of mine silently did not apply, and one left a reference to a field
+the same edit removed.
+
 ### 2026-08-29 (score)
 
 **Completed: `score`** (PR #32, all three checks green). Per paragraph: a
