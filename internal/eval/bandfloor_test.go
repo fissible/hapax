@@ -76,6 +76,7 @@ package eval_test
 // claim that the profile discriminates.
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"reflect"
@@ -1101,6 +1102,110 @@ func TestTheCalibrationRefusesAMismatchedDistance(t *testing.T) {
 				t.Errorf("err = %v, want %v", err, c.want)
 			}
 		})
+	}
+}
+
+// A calibration is an artifact, so it has to survive being one. Every other
+// artifact here — the profile, the reference, the thresholds, the intervals — is
+// self-contained and content-addressed precisely so it can be stored and reused,
+// and a calibration that classified through hidden state would not be.
+//
+// The failure this guards against is silent rather than loud: an implementation
+// holding the boundaries in an unexported field decodes them as zero, and then
+// every distance above zero satisfies d >= High and comes back `not you`, with
+// no error anywhere.
+//
+// Added by consensus after the first implementation classified through an
+// unexported copy of the thresholds.
+func TestACalibrationSurvivesBeingPersisted(t *testing.T) {
+	base := gateOf(t, clean())
+
+	encoded, err := json.Marshal(base)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	var restored eval.Calibration
+	if err := json.Unmarshal(encoded, &restored); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+
+	if restored.ID != base.ID {
+		t.Errorf("ID = %q, want %q", restored.ID, base.ID)
+	}
+	if restored.Calibrated != base.Calibrated {
+		t.Errorf("Calibrated = %v, want %v", restored.Calibrated, base.Calibrated)
+	}
+	if !reflect.DeepEqual(restored.Bands, base.Bands) {
+		t.Errorf("the band reports did not survive the round trip")
+	}
+
+	for _, value := range []float64{10, 96, 150, 205, 300} {
+		distance := held(eval.ClassAuthor, value).Distance
+
+		want, err := base.Band(distance)
+		if err != nil {
+			t.Fatalf("Band(%v) on the original: %v", value, err)
+		}
+		got, err := restored.Band(distance)
+		if err != nil {
+			t.Fatalf("Band(%v) on the restored calibration: %v", value, err)
+		}
+		if got != want {
+			t.Errorf("distance %v bands as %+v after a round trip, want %+v", value, got, want)
+		}
+	}
+
+	// And the bindings are checked from the restored artifact too, not waved
+	// through because the hidden state is gone.
+	foreign := held(eval.ClassAuthor, 10).Distance
+	foreign.ProfileID = "another-profile"
+	if _, err := restored.Band(foreign); !errors.Is(err, eval.ErrProfileMismatch) {
+		t.Errorf("err = %v, want %v", err, eval.ErrProfileMismatch)
+	}
+}
+
+// The boundaries a calibration classifies with are its own recorded fields, and
+// they agree with the thresholds it was built from. A calibration whose
+// boundaries disagreed with its ThresholdsID would be two artifacts wearing one
+// name.
+func TestACalibrationRecordsTheBoundariesItClassifiesWith(t *testing.T) {
+	th := calibrated(t)
+	got, err := th.CalibrateBands(clean(), eval.DefaultBandFloor())
+	if err != nil {
+		t.Fatalf("CalibrateBands: %v", err)
+	}
+
+	if got.Low != th.Low || got.High != th.High {
+		t.Errorf("boundaries = (%v, %v), want the thresholds' own (%v, %v)", got.Low, got.High, th.Low, th.High)
+	}
+	if got.WeightScheme != th.WeightScheme {
+		t.Errorf("WeightScheme = %q, want %q", got.WeightScheme, th.WeightScheme)
+	}
+	if got.DistanceAlgorithm != th.DistanceAlgorithm {
+		t.Errorf("DistanceAlgorithm = %q, want %q", got.DistanceAlgorithm, th.DistanceAlgorithm)
+	}
+	if !reflect.DeepEqual(got.ScoredTiers, th.ScoredTiers) {
+		t.Errorf("ScoredTiers = %v, want %v", got.ScoredTiers, th.ScoredTiers)
+	}
+}
+
+// An uncalibrated profile refuses with a declared reason, not an inline string a
+// consumer can only discover by reading the implementation.
+func TestTheUncalibratedReasonIsDeclared(t *testing.T) {
+	got := gateOf(t, bothLeak())
+	if got.Calibrated {
+		t.Fatalf("this fixture must be uncalibrated")
+	}
+
+	out, err := got.Band(held(eval.ClassAuthor, 10).Distance)
+	if err != nil {
+		t.Fatalf("Band: %v", err)
+	}
+	if out.Reason != eval.ReasonUncalibrated {
+		t.Errorf("reason = %q, want %q", out.Reason, eval.ReasonUncalibrated)
+	}
+	if eval.ReasonUncalibrated != "uncalibrated" {
+		t.Errorf("ReasonUncalibrated = %q, want %q", eval.ReasonUncalibrated, "uncalibrated")
 	}
 }
 

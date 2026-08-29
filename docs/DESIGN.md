@@ -919,6 +919,13 @@ claiming bands fail, everything would report `drifting`, which is not a band set
 absence of one, so the profile reports `uncalibrated` instead of dressing the absence as a
 result.
 
+**A calibration is self-contained, like every other artifact here.** It carries the
+boundaries it classifies with and the bindings it checks, rather than holding a reference to
+the threshold artifact it came from. The failure this avoids is silent rather than loud: a
+calibration that classified through state which did not survive storage would decode its
+boundaries as zero and then place every distance above zero in `not you`, confidently and
+with no error. An artifact that cannot be written and read back is not an artifact.
+
 **Collapse is applied by the calibration, not left to the caller.** The threshold artifact
 answers a geometric question — which side of the boundaries a distance falls on — and the
 calibration answers the one that matters: which label may actually be emitted. A consumer
