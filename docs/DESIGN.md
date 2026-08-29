@@ -1127,6 +1127,63 @@ span** and its new text, and its contract is:
   replacement — produces no output at all rather than a partially rewritten document. A file
   half in the author's voice and half in the model's is worse than an error.
 
+**A replacement span must equal an included leaf's span exactly.** Not merely fall inside one.
+Nothing in this system produces a verdict for an arbitrary byte range: `score` measures
+paragraphs, the loop decides per paragraph, and a sub-span has no measurement attached to it —
+so accepting one would mean splicing text no gate ever saw. It also disposes of grapheme
+splitting for free, since leaf spans are already boundary-aligned. An excluded leaf — a
+heading, a code block, a paragraph inside a block quote — has no included span and so cannot
+be named at all.
+
+**How restrictive the excision rule actually is, measured rather than assumed.** The rule reads
+as though it would refuse most real prose, since Markdown paragraphs are full of inline syntax.
+It does not. Against the real structure parser:
+
+| construct | excisions | rewritable |
+|---|---|---|
+| plain paragraph, one line or wrapped | 0 | yes |
+| `**bold**`, `[link](url)`, em-dashes, quotes | 0 | yes |
+| `` `code` `` inline | 1 | **no** |
+| footnote reference `[^1]` | 1 | **no** |
+| heading, code block, block-quoted paragraph | — | excluded before this point |
+
+So it bites on exactly two constructs, and in both the refusal is the point rather than a
+limitation: a leaf's run text *drops* its excisions, so the paragraph
+`A paragraph with `+"`code`"+` inline and a footnote.[^1]` reaches the loop as
+`A paragraph with  inline and a footnote.` — the code span and the reference are simply not
+there. Splicing a rewrite of that string over the leaf's raw span would delete the user's code
+and their footnote, silently, and nothing downstream would notice. Refusing is the only
+answer that does not lose content.
+
+**A stripped BOM is put back.** `Admit` removes a leading UTF-8 BOM and reports it through
+`HadBOM`, and every offset in the system is relative to the stripped bytes. Assembling from
+those bytes alone would therefore rewrite the file's encoding preamble as a side effect of
+editing its prose, on every BOM-carrying file, which is not a change the user asked for. If
+the document had a BOM, the output starts with one — and the spans are still resolved against
+the stripped bytes, because prepending first and splicing second puts every replacement three
+bytes early.
+
+**Offsets are byte offsets.** `Span` addresses raw bytes, not runes and not graphemes, and the
+distinction is invisible in ASCII. A replacement is spliced by copying the original bytes up to
+`Offset`, then the new text, then resuming at `Offset+Length` — always against the original
+bytes, never against a buffer being built, or every span after the first lands wherever the
+preceding replacement's change in length left it.
+
+**Three refusals that are about the caller rather than the document.** Each would otherwise be
+discovered by a user rather than declared:
+
+- **Empty replacement text is refused.** It deletes a paragraph and leaves its blank lines
+  behind, and the acceptance loop compares distances between real texts, so it can never
+  propose one. An empty replacement is a caller error, not a decision to honour.
+- **Invalid UTF-8 in a replacement is refused.** The output must be a document the tool can
+  read back; writing bytes that `Admit` would reject means writing a file `hapax` cannot open.
+- **The caller's slice is not modified.** Checking that spans are ordered by sorting them is
+  the obvious implementation and silently reorders the caller's own data.
+
+There is no version constant. Every other component here declares one because it binds an
+artifact's identity; `assemble` returns bytes that carry no identity of their own, and the
+document it produces is identified by hashing its content like any other input.
+
 ### `score`, and two things it found underneath it
 
 `score` measures a draft against a profile and emits, per paragraph, a calibrated band, the
