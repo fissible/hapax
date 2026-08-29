@@ -1184,6 +1184,139 @@ There is no version constant. Every other component here declares one because it
 artifact's identity; `assemble` returns bytes that carry no identity of their own, and the
 document it produces is identified by hashing its content like any other input.
 
+### `select`: representative of a pool, which is the only claim it makes
+
+ADR 0004 separates scoring from retrieval: exemplars are segments representative of the
+**author**, never nearest-neighbour to the draft, or the tool retrieves the author's most
+AI-adjacent writing and teaches itself the defect it exists to remove.
+
+**It owns its transform, and it is Train-only.** The obvious move — reuse the distance `d` —
+fails twice. `d` measures distance to the reference *centre*, but a medoid minimizes distance
+to actual segments, and in a bimodal population the centre sits in a sparse valley, so the
+smallest-`d` paragraphs are representative of neither mode. And `deviation.BuildReference`
+refuses any split but `calibrate`, so consuming a reference would give `select` an `eval`
+dependency it does not declare. Instead: standardize against the profile, which needs no
+reference, then rank-transform each feature against the Train candidates themselves, with the
+same mid-rank plotting position and probit already used by `Reference.Transform` — including
+its treatment of a feature that is constant across the pool, which yields a *defined* zero
+rather than an undefined value.
+
+**Both profile statistics are operative**, which is worth stating because ranking per feature
+looks as though it should absorb them. It would, if standardization were a map shared by every
+candidate — but the denominator is `sqrt(profileVariance + samplingVariance)` and sampling
+variance is *per candidate*, so neither subtracting the mean nor dividing by the variance is a
+common monotone transform, and both can reorder the population before the rank transform sees
+it. Measured on the test fixture, where sampling variance spans 0 to 0.95: a mean of 1.5
+changes the density record and a mean of 5 changes the selection; a variance of 1e-6 changes
+the selection while 1 does not. An earlier draft of this note claimed the mean was
+structurally inert on the strength of one fixture where it happened not to matter; it is not.
+
+Self-referential ranking is sound *because this is not a gate* — nothing is validated, only
+ordered. But it is population-relative: adding or removing a candidate can change every rank.
+So the population is closed and content-addressed, and the claim is bounded to match —
+**representative of this admitted Train pool**, not of the author in the abstract.
+
+**Density is local; the centre is not consulted.** For each candidate, density is the mean
+pairwise distance to its `k` nearest neighbours over valid pairs. Pairwise distance is the
+same Burrows'-Delta form as `d` but between two segments, over features defined in both. A
+pair is valid only above a shared-feature floor: without one, two segments that share three
+agreeing features look closer than two that share thirty, and missingness manufactures
+density.
+
+**Declared cost limit.** `select` materializes the full symmetric `N × N` pairwise-distance
+matrix, although it uses only its triangle. Its memory use is therefore `O(N²)` — roughly
+400 MB at 5,000 candidates and 1.6 GB at 10,000 candidates. This implementation is intended
+for the bounded fixture-scale pools it currently serves; a streaming k-nearest design is a
+separate future change.
+
+Every constant is fixed here, because "declared" without a number leaves two conforming
+implementations free to disagree:
+
+| | value |
+|---|---|
+| candidate unit | exactly the leaves `profile.ParagraphVectors` admits, under the same structure options and paragraph floor |
+| canonical identity | the source document's content digest, then the leaf's raw `(offset, length)` — a text digest collides on duplicate leaves. It breaks every tie here, so it must be unique: a population containing the same identity twice is **refused**, since a non-unique tie-break is no tie-break |
+| minimum population | `N ≥ max(30, 10n)`, else refuse |
+| shared-feature floor | a pair is valid iff features defined in **both** `≥ ceil(0.5 × manifest size)` |
+| `k` | `max(3, min(15, floor(sqrt(N))))` |
+| minimum valid neighbours | a candidate with fewer than `k` valid pairs is ineligible |
+| eligibility | of the candidates with at least `k` valid neighbours, sort ascending by density and keep the first `ceil(0.75 × N)`; if fewer qualify than that, keep all of them and let the `n` refusal decide. Boundary ties by canonical identity ascending |
+| rank population | the `M` values **defined** in the pool for that feature; each candidate is transformed as a query against that distribution, plotting position `(lower + (upper−lower)/2 + 0.5) / (M+1)`, exactly as `Reference.Transform` does with the pool as its reference. The candidate is a member of the distribution — that is what self-referential means |
+| medoid domain | summed valid pairwise distance to the **other** eligible candidates of its own stratum; self is excluded. A candidate needs at least one valid intra-stratum pair to be medoidable. Both this and the singleton rule are evaluated against the stratum's **remaining** candidates each round, so a stratum of two yields its second exemplar in a later round rather than being exhausted after the first: whenever exactly one eligible candidate remains, it is that round's medoid. A stratum with no medoidable candidate remaining is exhausted. Ties by canonical identity ascending |
+| stratum key | `<role>\|<container>/<container>/…`, the leaf's `text.Role` then its container path in document order, joined by `/`. Ascending means byte-wise ascending on that string |
+| allocation | strata ordered by descending eligible count then key ascending, then round-robin one slot each until `n` is filled, skipping exhausted strata. Each pick is the medoid of that stratum's *remaining* eligible candidates |
+| caps | round-robin *is* the cap; there is no second mechanism |
+| refusal | fewer than `n` eligible candidates in total refuses; it never returns fewer |
+
+**Groups are structural strata, not clusters.** Feature-space clustering would need an
+algorithm, a `k`, a linkage and a stopping rule, each requiring held-out evidence to tune that
+does not exist yet. Strata are declared: a leaf's `text.Role` and its container path, both
+already normalized vocabularies with no offsets or indexes in them. Each stratum contributes
+its own medoid before any slot is filled, so representativeness is prior to diversity rather
+than traded against it.
+
+That leaves **register bimodality inside one named profile unhandled, deliberately** — ADR 0004
+already answers it with explicit named profiles rather than inference, so a mixed-register
+profile is a prompt to split it, not a case for this component to detect.
+
+**`n` is part of the artifact, not a prefix of it.** `Exemplars(n)` cannot slice a pool and
+still honour stratum allocation for arbitrary `n`, so the selection is built for the `n` asked
+for and `n` is part of the cache key. `rewrite` requires exactly `n` back and defaults to 3.
+If allocation cannot reach `n`, `select` refuses rather than quietly returning fewer or
+substituting.
+
+**Cache identity** covers the profile ID, every Train document's content digest, the text and
+structure contract versions, the feature manifest digest, `n`, and **every constant in the
+table above** — not a hand-maintained version string, which lets a changed threshold rehydrate
+a stale selection under unchanged inputs. An upstream parser change yields different leaves
+from the same document, so the document digest alone is not enough either. Failed rehydration
+refuses rather than reseating the set. Persistence itself is the caller's: `select` computes
+the identities, and the store that keys on them lives in `cli`.
+
+**And it emits a certificate**, because "representative" is otherwise unfalsifiable: the
+admitted population, per-candidate density, the eligibility decision, strata, medoid sums and
+tie resolutions.
+
+**Determinism is claimed for repeated runs, not across independent implementations.** The
+distance `d` and the clustered bootstrap make the stronger claim because they are release
+gates: their evidence has to be checkable by someone else. Exemplar selection is not a gate —
+it fills a prompt — so pinning probit's last bit, floating-point summation order and
+distance-equality across platforms would buy nothing the cache needs and would be a promise
+this project has no way to test. What *is* claimed: the same binary on the same inputs
+produces the same selection and the same certificate ID, which is exactly what makes the cache
+sound. That is not automatic in Go: map iteration order is randomized per run, so **no map is
+ever iterated** — candidates, features, neighbour lists, strata and every floating-point
+reduction are traversed in the canonical orders declared here.
+
+Within that, the encodings are still fixed rather than left to chance. The **selection ID** is
+`identity.HashBytes` over `identity.Frame` of each chosen leaf's canonical identity in order,
+each as `<document digest>:<offset>:<length>`. The **certificate ID** is
+`identity.HashInputs` over exactly nine keys: `selection` (the selection ID), `population` (framed
+canonical identities of every candidate, in canonical order), `eligible` (likewise, of the
+eligible set), `density` (framed `<identity>=<numberID>` pairs in canonical order), `strata`
+(framed `<identity>=<stratum key>` assignments in canonical identity order, so the certificate
+binds candidates to strata rather than only counting them), `medoids` (framed
+`<round>:<stratum key>:<identity>:<numberID sum>`), `binding` (framed `profile=<profile ID>`, `text=<text.ContractVersion>`,
+`structure=<text.StructureVersion>`, `manifest=<feature manifest digest>` — without this the
+certificate is blind to the profile and the parsers that produced its candidates, and a cache
+keyed on it would serve a selection fitted to a different author), `ties`
+(framed `<site>:<round>:<winner>`, where `site` is one of `eligibility`,
+`medoid` or `stratum-order`, `round` is the allocation round or `-` where none applies, and an
+entry appears **only** where two or more items actually compared equal — no tie, no entry.
+An `eligibility` tie is recorded only where the cut itself falls inside a run of equal
+densities; equal densities wholly inside or wholly outside the kept set change nothing and
+are not ties. `stratum-order` uses round `-`), and
+`config`, framed `<name>=<value>` over exactly these names in this order:
+`n`, `k`, `min-population-absolute` (30), `min-population-multiple` (10),
+`shared-feature-fraction` (0.5), `k-min` (3), `k-max` (15) and
+`eligibility-fraction` (0.75). Naming each one is what stops a changed threshold from
+rehydrating a stale selection behind an unchanged version string. `k` also appears on the
+certificate directly, alongside a per-candidate valid-neighbour count, since both are the
+evidence that density was computed rather than asserted. Floats use
+`numberID`, which normalizes `-0`. That makes the *mechanical* claims checkable. Whether these exemplars produce
+better rewrites is a held-out experiment nobody has run, so this is a declared proxy and is
+called one.
+
 ### `score`, and two things it found underneath it
 
 `score` measures a draft against a profile and emits, per paragraph, a calibrated band, the
