@@ -737,8 +737,107 @@ The declared targets and the observed populations are in the identity too, not m
 boundaries they produced: distinct targets can select the same observed bounds, and so can
 distinct populations.
 
-Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
-A threshold whose interval is too wide to be actionable is not shipped.
+**Both thresholds carry clustered bootstrap confidence intervals**, and a threshold whose
+interval is too wide to be actionable is not shipped. The procedure is declared rather than
+left to a library default, because every part of it moves the width of the interval it
+produces.
+
+**Clusters are resampled, not segments.** Paragraphs from one document share topic, register
+and occasion, so resampling them independently manufactures precision the data does not
+have — the same error as overlapping windows, one level up. Clusters are drawn with
+replacement to the original cluster count, independently within each class, and every
+segment in a drawn cluster comes with it.
+
+**The cluster unit differs by class, and that is the point of clustering by both.** The
+author's own distances all come from one author, so clustering them by author would collapse
+the whole class into a single cluster and leave nothing to resample; they are clustered by
+**document**, which is the within-author variation this side is supposed to measure. The
+distractor distances are clustered by **author**, which is the between-author variation that
+side is supposed to measure, with documents nested inside.
+
+The resolution of issue #2 left no distractor corpus with per-author labels, so in practice
+the distractor side usually falls back to the document. That is recorded rather than
+silently skipped: an interval clustered by document alone **understates** uncertainty,
+because it counts two documents by the same unlabelled author as independent evidence. The
+artifact names its clustering unit and flags the weaker one.
+
+**Declared parameters**, all stand-ins awaiting measurement and all part of the interval's
+identity:
+
+- **Confidence level 0.95**, two-sided, by the **percentile** method — the resample
+  distribution's own 2.5th and 97.5th points. Bias-corrected variants need assumptions this
+  design has not earned.
+- **2000 resamples.** At a 0.95 level each tail endpoint is then the 50th order statistic of
+  the resample distribution, which places it without claiming more resolution than the
+  underlying data supports.
+- **A fixed declared seed**, recorded in the artifact. Section 2 forbids a score that changes
+  on re-run, and a bootstrap is the one place in this pipeline where randomness enters; an
+  unrecorded seed would put it there. The declared value is `0x68617061785F7631`.
+- **Percentile indices taken as order statistics, not interpolated.** On the *n* qualified
+  resample values sorted ascending, with α = 1 − confidence, the endpoints are the values at
+  ⌊α/2 × *n*⌋ and min(⌊(1 − α/2) × *n*⌋, *n* − 1). Every resample's threshold is a value some
+  segment produced, so an endpoint taken this way is one too — the same refusal of a boundary
+  the population never contained that governs the thresholds themselves.
+
+**A resample that yields no qualifying threshold is an outcome, not an error**, matching the
+treatment of degenerate cases above. Such resamples are counted and excluded from the
+percentiles rather than aborting the estimate. But an interval assembled from a heavily
+degenerate resample distribution is describing a different population than the one asked
+about, so **at least 90% of resamples must qualify**; below that the interval is reported as
+not usable and the threshold it belongs to is not shipped.
+
+**Too wide to be actionable is a derived test, not another declared number.** ADR 0005 says
+a threshold whose interval is too wide is not shipped, and never said how wide is too wide.
+The geometry answers it without a stand-in: the interval on `t_low` and the interval on
+`t_high` must not overlap. If they do, the data does not resolve the two boundaries from
+each other, and `in range`, `drifting` and `not you` are not distinguishable regions — which
+is exactly what "not actionable" means here, and it needs no number.
+
+Usability and actionability are separate verdicts because they fail for different reasons and
+have different remedies: a population that qualifies too few resamples needs more writing,
+while one whose intervals overlap needs better separation. Both must hold before thresholds
+ship, so the artifact also carries the conjunction, and a consumer cannot reach for one
+verdict and miss the other.
+
+**The interval is computed from the population that produced the thresholds**, verified by
+requiring that population to reproduce the threshold artifact's identity. An interval drawn
+from a different population is a statement about a boundary nobody calibrated.
+
+**The sample size that admits a threshold is not the size that admits an interval**, and the
+gap is large enough to publish rather than leave to be discovered. A threshold exists as soon
+as one observation sits in the tail — that is what the ⌈1/*p*⌉ minimum above says. But a
+resample that draws that one observation twice pushes the achieved rate over target and
+qualifies nothing, so at exactly the threshold minimum most resamples fail. Measured: at
+`p_author` = 0.05 with twenty author distances, **about 58% of resamples qualify even when
+every distance is in its own document**, because the cluster count is not what is short —
+the tail is. Sixty distances reach roughly 98%, and a hundred reach 100%.
+
+No second minimum is declared for this, because the 90% qualification floor already
+enforces it and does so against the population actually supplied rather than against a
+number chosen in advance. The consequence is simply stated: **⌈1/*p*⌉ is the minimum to
+compute a boundary, not the minimum to ship one.**
+
+**The draw is specified, not delegated.** Reproducibility cannot rest on a standard-library
+implementation detail — not on which source the runtime provides, and not on how a
+convenience method happens to consume it. The resample indices are therefore a stated pure
+function of the seed:
+
+- Each class draws from its own **SplitMix64** stream, initialised to `seed + 1` for the
+  author class and `seed + 2` for the distractor class, so one class's cluster count cannot
+  shift the other's draws.
+- Draws are consumed in order — for each resample, one draw per cluster — and the cluster
+  index is the 64-bit output modulo the class's cluster count. The modulo bias at any
+  realistic cluster count is below 2⁻⁵⁸ and is accepted rather than rejection-sampled, which
+  would make the draw sequence depend on the cluster count.
+- **Clusters are ordered lexicographically by label** before any index is taken. Without a
+  declared order the index means nothing: first-seen ordering would make the interval depend
+  on the order the caller happened to supply its segments in, which is not information about
+  the author. Sorting is what makes the whole procedure a function of the population rather
+  than of its presentation.
+
+SplitMix64 is a published algorithm, so this is a specification a second implementation can
+reproduce, which is the property that matters. It is not a claim about statistical quality
+beyond what resampling needs.
 
 ### Registers: user-named, distractor pools declared
 

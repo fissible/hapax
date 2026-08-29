@@ -119,6 +119,75 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (clustered bootstrap intervals)
+
+**Completed: confidence intervals on both band thresholds** (PR #29, all three
+checks green). First of ADR 0005's three release gates.
+
+**Settled:** confidence 0.95 percentile, 2000 resamples, a fixed recorded seed.
+**Actionability turned out not to need a declared width at all** — ADR 0005's
+"too wide to be actionable" is answered by geometry: the two intervals must not
+overlap, or the data does not resolve `t_low` from `t_high`.
+
+**A distinction the spec had been hiding.** "Clustered bootstrap by document and
+author" does not name one unit — it differs by class. The author's own distances
+all come from one author, so clustering them by author collapses the class and
+leaves nothing to resample. Author side clusters by document; distractor side by
+author. Issue #2 left no per-author distractor labels, so the fallback is
+recorded and flagged: document-only clustering *understates* uncertainty.
+
+**Round 9's minimum is not a shipping minimum.** `ceil(1/p)` is where a
+threshold exists; at that size it rests on one tail observation and any resample
+duplicating it qualifies nothing. Measured: 20 author distances qualify ~58% of
+resamples, 60 reach ~98%, 100 reach 100% — and the figure barely moves when
+every distance gets its own document. The tail is short, not the cluster count.
+No second minimum declared; the 90% qualification floor enforces it against the
+population actually supplied.
+
+**The technique worth reusing.** Codex found the seed could be recorded, hashed,
+and never used. Fixing it properly meant specifying the draw as a pure function
+— SplitMix64 per class, clusters ordered lexicographically, index modulo cluster
+count — which then let me **write an independent implementation in Python and
+derive every expected value from it** rather than reading them out of the
+package. All matched on first run. When a slice has a numeric contract, build
+the oracle outside the implementation.
+
+**Next: the remaining two release gates**, in order.
+
+1. **The band calibration floor** (ADR 0005). Per band, a minimum count of
+   held-out segments and an observed author-versus-distractor rate inside its
+   declared interval. A band failing either is not emitted and collapses to the
+   adjacent wider band; other bands stay usable. Depends on this slice.
+2. **The discrimination gate** — AUC of held-out author segments against
+   distractors against a predeclared floor. Below it the profile is
+   `uncalibrated`: raw distance and feature deltas still emitted, no band, and
+   `rewrite` refuses.
+
+Open questions to settle first, the way `z_max`, the crossing rule and the
+bootstrap parameters were: the **AUC floor** has no declared value; the
+**per-band minimum held-out count** has no value; and the **band-rate confidence
+interval** needs its own level, which may or may not be the 0.95 used here.
+
+Also worth deciding early: the AUC gate needs a *paired* treatment, since author
+and distractor segments are clustered — a naive AUC standard error would repeat
+the mistake the clustered bootstrap exists to avoid.
+
+**Process notes.** Five review rounds before the freeze, then one defect after.
+
+The post-freeze defect was mine and is the same class as last time: **the
+interval identity covered the cluster counts but not the partition.** The same
+distances grouped round-robin versus in contiguous blocks share a threshold ID
+and cluster counts, produce different intervals, and shared an interval ID —
+a shipping decision served from the wrong evidence. Amended by consensus, then
+fixed.
+
+One finding went the other way and is worth recording: codex derived that a thin
+fixture qualified 9.375% of resamples and called it flaky. Exhaustive
+enumeration of all 256 draws gives 56.25% — a resample omitting the document
+holding the largest value still qualifies on the next value down. **Check a
+reviewer's arithmetic the same way you check your own**; the fixture changed
+anyway, for a better reason.
+
 ### 2026-08-29 (thresholds and bands)
 
 **Completed: band thresholds and band assignment** (PR #28, all three checks
