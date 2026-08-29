@@ -1214,6 +1214,51 @@ func TestAuthorClustersAreOrderedLexicographically(t *testing.T) {
 	}
 }
 
+// The partition into clusters is part of what produced the interval, so it is
+// part of the interval's identity. The threshold artifact's ID covers the
+// distances but says nothing about how they are grouped, and the cluster COUNTS
+// say only how many groups there are.
+//
+// The same hundred author distances grouped round-robin over twenty documents
+// and grouped as twenty contiguous blocks of five give the same threshold ID,
+// the same cluster counts and the same clustering unit — and different resample
+// distributions, so different intervals. An identity covering only the counts
+// would serve one grouping's interval for the other's, and since the interval
+// decides Usable, Actionable and therefore Shippable, that is a shipping
+// decision taken on the wrong evidence.
+//
+// Added by consensus: the first implementation hashed the cluster counts without
+// their membership, and nothing here could see it.
+func TestIntervalIdentityCoversTheClustering(t *testing.T) {
+	blocked := func() []eval.ClassedDistance {
+		out := make([]eval.ClassedDistance, 0, 150)
+		for i, v := range span(1, 100) {
+			in := scored(eval.ClassAuthor, v)
+			in.Document = label("doc", i/5)
+			out = append(out, in)
+		}
+		return append(out, clustered(eval.ClassDistractor, span(201, 250), 10)...)
+	}
+
+	roundRobin := bootstrapOf(t, comfortable())
+	contiguous := bootstrapOf(t, blocked())
+
+	if roundRobin.ThresholdsID != contiguous.ThresholdsID {
+		t.Fatalf("the two groupings have different threshold IDs; this test needs them identical")
+	}
+	if roundRobin.AuthorClusters != contiguous.AuthorClusters || roundRobin.DistractorClusters != contiguous.DistractorClusters {
+		t.Fatalf("cluster counts differ: %d/%d and %d/%d; this test needs them identical",
+			roundRobin.AuthorClusters, roundRobin.DistractorClusters,
+			contiguous.AuthorClusters, contiguous.DistractorClusters)
+	}
+	if roundRobin.Clustering != contiguous.Clustering {
+		t.Fatalf("clustering units differ; this test needs them identical")
+	}
+	if roundRobin.ID == contiguous.ID {
+		t.Errorf("two different cluster partitions of the same distances share the interval ID %q", roundRobin.ID)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Both floors are inclusive
 // ---------------------------------------------------------------------------
