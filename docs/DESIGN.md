@@ -890,8 +890,31 @@ are excluded**, because an apostrophe and a closing single quote are the same ch
 telling them apart is not deterministic.
 
 **Negations are a closed declared list**, versioned like every other vocabulary here.
-Contractions survive tokenisation whole — `Don't` is one token — so `n't` forms are matched on
-the token rather than reconstructed from pieces.
+Contractions survive tokenisation whole — `Don't` is one token, and so is `Don’t` — so `n't`
+forms are matched on the token rather than reconstructed from pieces. The list is declared in
+full because *closed* has to mean something a test can check: an implementation free to
+recognise an undeclared word would reject valid rewrites for a reason no reader could look up.
+
+    cannot  neither  never  no  nobody  none  nor  not  nothing  nowhere  without
+    aren't  can't  couldn't  didn't  doesn't  don't  hadn't  hasn't  haven't
+    isn't  shouldn't  wasn't  weren't  won't  wouldn't
+
+plus the curly-apostrophe form of each contraction. Forty-one entries, and nothing else: the
+list bounds what an implementation may *recognise*, not merely what it may declare.
+
+Matching folds case, and the reported item is **folded to lower case with it** — the one place
+this gate normalises anything. It has to be: matching `Not` as a negation and then reporting it
+as `Not` would make a current `Not` and a candidate `not` two different items, and the multiset
+comparison would undo the case folding it just did. A capitalised negation is *also* a
+capitalised token, so `Nothing` is reported as both a negation and an entity. That is the
+entity proxy's declared over-collection doing exactly what it is documented to do, and the two
+differences are independent.
+
+The boundary is *negation*, not *diminishment*. `hardly`, `barely`, `scarcely` and `rarely`
+weaken a claim without reversing it, and admitting them would make the gate refuse ordinary
+rephrasing while adding no protection against the failure it exists to prevent — a rewrite
+that inverts what the author said. `without` is in the list because absence is negation:
+"without evidence" becoming "with evidence" is exactly the inversion this gate refuses.
 
 **What it reports is every difference, by class, item and direction**, because a gate that
 says only *no* leaves a user unable to act and a caller unable to explain. Inventions are
@@ -903,7 +926,28 @@ The item text is a rejection reason for the caller, who is about to be told why 
 was refused. The store may not have it: its privacy invariant forbids any reversible prose
 representation, and `rewrite`'s audit whitelist is where these identifiers land. An identifier
 is the gate version, the class, the direction and a **digest** of the item — enough to tell two
-failures apart and to count them over time, and not enough to reconstruct a word of the text.
+failures apart and to count them over time, and not enough to read the text back out of it.
+
+The digest has to be named, because "digest" alone is satisfied by hex or base64 of the item,
+which is prose in a costume and would put the store in breach of its own invariant while
+passing every test that only checks for the absence of literal text. It is the first **16 hex
+characters of SHA-256** over the UTF-8 bytes of
+
+    version \x00 class \x00 direction \x00 item
+
+giving identifiers like `preserve-v1:number:lost:3d4c981bf761d9b8`. NUL separators mean no two
+different tuples can share a preimage. The full identifier is what the audit stores; a caller
+being told why its rewrite was refused gets the item text, which never leaves the process.
+
+What that does and does not buy, stated rather than implied: the stored form is not decodable,
+so nothing in the database, its sidecars, an export or a log can be read back into prose. It is
+not proof against *guessing* — an item drawn from a small space, a one-digit number or a word
+from the negation list, can be confirmed by anyone who computes the digest of a candidate.
+Sixty-four bits of digest does not change that, because the entropy is in the item. A keyed
+digest would defeat guessing, but the key would have to live where the audit lives to stay
+verifiable, which returns the problem to its start. The invariant this gate is held to is that
+the store contains no reversible prose representation, and a preimage-resistant digest meets
+it; resistance to a determined guesser holding the store is not claimed.
 
 ### `score`, and two things it found underneath it
 
