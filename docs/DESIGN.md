@@ -241,6 +241,13 @@ guarantee is about *destination*, not about silence.
 
 ### `llm`, and how the guarantee is made mechanical
 
+**`llm` owns the only way out, and a test says so about the source itself.** The dial seam
+is only a guarantee if nothing in the package reaches around it, so a test parses the
+package's own non-test files and fails on `http.DefaultClient`, `http.DefaultTransport`, the
+`http` convenience functions, a direct `net.Dial`, and `os.Getenv` — the last because the mode
+is resolved at the composition root and no library package reads the environment. A runtime
+harness cannot see a path it never exercises; this one can.
+
 **`llm` owns the only way out.** It is handed a dial function and builds its own
 `http.Client` from it, with redirects refused and proxy discovery off. A caller cannot pass
 a pre-built client whose redirect or proxy policy would route elsewhere, and there is no
@@ -279,6 +286,7 @@ licence for arbitrary extra fields. Identity fields are absent by construction, 
 | method and URL | `POST {endpoint}/api/generate` | `POST https://api.anthropic.com/v1/messages` |
 | headers | `content-type: application/json` | plus `x-api-key`, `anthropic-version: 2023-06-01` |
 | body keys, exactly | `model`, `prompt`, `stream` (false) | `model`, `max_tokens`, `messages` |
+| token budget | — | `MaxTokens`, default 4096, non-positive refused |
 | where the prompt goes | `prompt` | `messages[0].content`, with `role: "user"` |
 | reply read from | `response` | `content[0].text`, requiring `type: "text"` |
 
@@ -293,13 +301,31 @@ so "no DNS" is a property of local mode and is scoped to it. Not "no goroutines"
 would be false as stated. One HTTP exchange per `Provider.Rewrite`, not per loop attempt,
 since the loop deliberately makes several.
 
+**A cloud provider carries no local endpoint.** Configuring both is a construction error,
+which makes a silent downgrade unconstructible rather than merely unused — a stronger
+statement than spying on a factory, and one a test can make without a spy at all.
+
+**The outbound header set is declared too**, not just the body: `content-type` and a fixed
+`user-agent` of `hapax` for both, plus `x-api-key` and `anthropic-version` for the cloud. The
+user agent is fixed because Go's default announces its version, and a declared set is what
+stops an identity-bearing header being added under a name no value-scanning test would think
+to look at.
+
 **No retries in v1, and made mechanical rather than promised.** `http.Transport` will
 transparently retry a request whose *reused* connection fails, so "we do not retry" is not a
 property of our code alone. Keep-alives are disabled, which removes connection reuse and with
 it that path — and gives a second useful property: one dial per request, so the exchange count
 is observable at the dial seam rather than only at the client. A cloud failure is returned as
-it is, with no downgrade to the local provider, asserted by spying on the factories so a
-selection-level fallback fails and not only a request-level one.
+it is, with no downgrade to the local provider — which needs no spy, because a cloud provider
+carrying a local endpoint is a construction error and the fallback is therefore
+unconstructible.
+
+**One more injected seam, declared rather than smuggled**: the trust roots, as an
+`*x509.CertPool` and not a whole `*tls.Config`. Production leaves it nil and gets the system
+roots; a test supplies a pool holding a certificate minted for the pinned host, so the cloud
+path is exercised end to end with real verification. A `*tls.Config` would have been too much
+authority to hand over — it can also disable verification, override the server name, or add
+client certificates — so only the roots are injectable, and the pinned name is still verified.
 
 **Construction does no I/O.** The credential factory and the provider factories are
 side-effect-free until called; anything that must read a file or a socket takes the same
