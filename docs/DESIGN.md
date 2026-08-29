@@ -871,8 +871,9 @@ failure modes, stated:
 
 - It **over-collects** — `Monday`, `January`, any capitalised ordinary noun. That makes the
   gate stricter, which is the safe direction.
-- It **under-collects** lower-case entities: `iPhone` is caught, `danah boyd` is not. This is
-  the dangerous direction and it is a limitation, not a bug to be found later.
+- It **under-collects** every entity that does not begin with an upper-case rune: `iPhone`,
+  `danah boyd`, `von Neumann`'s particle. This is the dangerous direction and it is a
+  limitation, not a bug to be found later.
 - Excluding function words is what lets a sentence-initial `Anthropic` be seen while a
   sentence-initial `The` is ignored. Without it the gate would either miss every entity that
   opens a sentence or demand that every sentence keep its first word.
@@ -892,10 +893,17 @@ telling them apart is not deterministic.
 Contractions survive tokenisation whole — `Don't` is one token — so `n't` forms are matched on
 the token rather than reconstructed from pieces.
 
-**What it reports is what is missing, by class and by item**, because a gate that says only
-*no* leaves a user unable to act and a caller unable to explain. That report contains item
-text, so it is a **rejection reason for the caller and never for the store**, whose privacy
-invariant forbids any reversible prose representation.
+**What it reports is every difference, by class, item and direction**, because a gate that
+says only *no* leaves a user unable to act and a caller unable to explain. Inventions are
+reported alongside losses, so the report is a list of *differences* rather than of things
+missing.
+
+**And it reports a separate non-prose identifier for each**, because the two audiences differ.
+The item text is a rejection reason for the caller, who is about to be told why their rewrite
+was refused. The store may not have it: its privacy invariant forbids any reversible prose
+representation, and `rewrite`'s audit whitelist is where these identifiers land. An identifier
+is the gate version, the class, the direction and a **digest** of the item — enough to tell two
+failures apart and to count them over time, and not enough to reconstruct a word of the text.
 
 ### `score`, and two things it found underneath it
 
