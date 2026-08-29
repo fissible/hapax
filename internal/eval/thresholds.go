@@ -42,6 +42,8 @@ type Source struct {
 // ClassedDistance pairs one distance with its calibration population.
 type ClassedDistance struct {
 	Class    Class
+	Document string
+	Author   string
 	Distance deviation.Distance
 }
 
