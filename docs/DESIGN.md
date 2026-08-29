@@ -890,6 +890,11 @@ bound is at least 3/*n*, a band whose target is *p* cannot clear it below *n* = 
 more writing a band needs, but it is not tested separately — the bound already enforces it,
 and one rule that implies the other is better than two that could disagree.
 
+**A class with no held-out segments at all bounds nothing**, and 3/0 is not a number. The
+bound is reported as 1 — the widest a rate can be — which fails every target below it and
+refuses the band. Reporting 0 there would be the same over-confidence the floor exists to
+stop, arrived at from the other direction.
+
 The count that matters is the size of the **class whose error is being bounded**, not the
 band's occupancy. Occupancy by the other class is not evidence about the rate the band
 claims. Occupancy is reported for both classes because it tells a reader whether a label is
