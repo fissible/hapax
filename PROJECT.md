@@ -119,6 +119,66 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (the band calibration floor)
+
+**Completed: ADR 0005's second release gate** (PR #30, all three checks green).
+
+**The rule had to be given something to do first.** "The observed rate must fall
+inside its declared confidence interval" is vacuous — a point estimate always
+lies inside an interval computed from it — and the other reading names a range
+declared nowhere. That is the *third* rule in this project that read as a control
+and controlled nothing, after the band-crossing rule and `z_max`. Replaced with a
+bound against a target, measured on Test.
+
+**The finding that cost the most.** I floored the bound at 3/n over *segments*,
+guarding against a bootstrap's upper bound on a zero-observed rate being exactly
+zero. Codex caught that this smuggles the independence assumption back in: a
+hundred error-free segments from one document are one independent observation.
+**The floor counts clusters.** The consequence is demanding and published: a band
+needs **60 held-out author documents** or **30 distractor clusters** at the v1
+targets. That is what a claim about an error rate costs.
+
+**Also settled:** only `in range` and `not you` claim anything, so only they are
+gated; `drifting` is the fallback; both failing is `uncalibrated` rather than a
+band set where everything lands in the band that means nothing. The gated rate is
+class-conditional, not band composition. The calibration classifies, rather than
+leaving a consumer to apply thresholds itself and possibly emit a refused label.
+
+**Next: the AUC discrimination gate**, the last of ADR 0005's three. Then the
+gates are done and `score` and `rewrite` become buildable.
+
+Open questions to settle first, the way every previous slice's were:
+
+- **The AUC floor has no declared value.** Unlike the band minimums it probably
+  cannot be derived — it is a statement about how good is good enough, which is a
+  judgement. Expect to declare it as a stand-in with the reasoning recorded.
+- **AUC needs a paired, clustered treatment.** A naive AUC standard error assumes
+  independent segments and would repeat exactly the mistake the clustered
+  bootstrap exists to avoid. The bootstrap machinery is already there and should
+  be reused rather than a closed-form variance introduced.
+- **Ties in `d`.** AUC is defined over pairwise comparisons and `d` can tie,
+  particularly at small reference sizes where the deviation is capped. The tie
+  convention (count as half) must be declared, not inherited from whichever
+  formula gets written.
+
+**Process notes.** Five review rounds, then one defect after the freeze.
+
+The post-freeze defect is the one to carry: **`Calibration` classified through an
+unexported field.** Unexported fields do not survive encoding, so a calibration
+read back from the artifact store would decode its boundaries as zero and place
+every distance above zero in `not you` — confidently, with no error. Silent
+wrongness on a persisted artifact. Codex then improved my proposed fix: the test
+is a real `encoding/json` round trip rather than a reconstruction from exported
+fields, because that tests the persistence mechanism instead of Go visibility.
+
+**Worth generalising:** every artifact in this design is content-addressed so it
+can be stored and reused, and that only holds if it is self-contained. When
+adding an artifact type, round-trip it through JSON in a test before believing it.
+
+And for the third slice running, codex caught **a guard written on one side of a
+symmetric pair** in my own tests. It is my most reliable defect. Check both sides
+before handing tests over.
+
 ### 2026-08-29 (clustered bootstrap intervals)
 
 **Completed: confidence intervals on both band thresholds** (PR #29, all three

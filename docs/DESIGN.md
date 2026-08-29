@@ -172,11 +172,13 @@ Calibration is a release gate, not a report. Ablation of the feature set is expl
   - *Discrimination floor:* a predeclared minimum AUC. Below it the profile is
     `uncalibrated` — `score` emits the raw distance and per-feature deltas but **no band**,
     and `rewrite` refuses to run against that profile.
-  - *Band calibration floor:* each band must be backed by a minimum count of held-out
-    segments, and its observed author-versus-distractor rate must fall inside its declared
-    confidence interval. A band failing either test is **not emitted**; segments that would
-    have landed in it report the adjacent wider band or `uncalibrated`. Individual bands can
-    fail while discrimination passes, and the profile remains usable for the bands that hold.
+  - *Band calibration floor:* a claiming band is emitted only when the **upper confidence
+    bound on its own error rate, measured on Test, is at or below its declared target**, and
+    the class whose error it bounds carries enough held-out segments for that bound to exist.
+    A band failing either test is **not emitted** and its segments report `drifting`; if
+    neither claiming band is emitted the profile is `uncalibrated`. Individual bands can fail
+    while discrimination passes, and the profile remains usable for the bands that hold. The
+    rule is set out in full in Section 2 under "The band calibration floor".
 - **Provenance.** Every eval result is stamped with corpus hash, profile version and
   feature-set version. A result that cannot name what produced it is not a result.
 
@@ -838,6 +840,99 @@ function of the seed:
 SplitMix64 is a published algorithm, so this is a specification a second implementation can
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
+
+### The band calibration floor
+
+ADR 0005 requires each band to be backed by held-out evidence, and the earlier statement of
+the test did not state one. "Its observed rate must fall inside its declared confidence
+interval" is either vacuous — a point estimate always lies inside an interval computed from
+it — or it refers to a pre-declared acceptable range that appears nowhere. Either way it
+controlled nothing, which is the failure mode this section keeps finding in its own prose.
+
+**Only two bands make a claim, and each is gated on the error of that claim.** `in range`
+says *this is the author*, so its error is a **distractor** landing there, bounded by
+`p_distractor`. `not you` says the opposite, so its error is the **author** landing there,
+bounded by `p_author`. `drifting` asserts nothing, needs no evidence, and is therefore the
+fallback rather than a gated band.
+
+**The error rate is class-conditional, not the band's composition.** The quantity gated is
+`P(distractor lands in range)`, over all held-out distractors — the same quantity the
+threshold targets bound. The band's composition (what fraction of the segments in it came
+from each class) depends on how many distractors the user happened to supply, so it is a
+property of the pool rather than of the method; it is reported and not gated on.
+
+**The gate runs on Test.** The thresholds were fitted on Calibrate to hit their targets
+there. Re-measuring on Calibrate would ask whether the fit fits. Test asks the question that
+matters: does the target hold out of sample.
+
+**A bound, not a point estimate**, for the same reason as everywhere else in this section:
+an observed zero on a handful of segments is not evidence of a small rate. The bound is a
+**one-sided upper bound from the same clustered bootstrap** used for the threshold
+intervals, at the same 0.95. A binomial interval would assume segments are independent,
+which is the assumption the clustered bootstrap exists to avoid.
+
+**But a bootstrap degenerates at zero**, and this gate lives at zero: a rate observed as
+zero resamples to zero every time, so the bootstrap reports an upper bound of exactly 0 for
+a band that has simply never been wrong yet. That is the most over-confident answer
+available, and it is worst precisely where the evidence is thinnest.
+
+The bound is therefore **the greater of the clustered bootstrap percentile and 3/*c***,
+where *c* is the number of **clusters** in the class whose error is bounded. Stated plainly,
+this is a declared conservatism rather than a theorem: **never claim a tighter bound than a
+perfect sample of this many independent units could support.** The bootstrap contributes the
+clustering; the floor contributes what the bootstrap cannot see.
+
+The denominator is the cluster count and not the segment count, and the difference is not
+cosmetic. A hundred error-free segments drawn from one document are one independent
+observation, not a hundred, and 3/100 would claim a bound of 0.03 from evidence that
+supports nothing of the sort. Applying the rule of three at the segment level would
+contradict the entire reason this section resamples clusters — it would smuggle the
+independence assumption back in through the floor after the bootstrap had been built to
+avoid it.
+
+**The minimum held-out count is then a consequence rather than a second gate, and it is a
+demanding one.** Since the bound is at least 3/*c*, a band whose target is *p* cannot clear
+it below *c* = ⌈3/*p*⌉ **clusters**: **60 held-out author documents for `not you` at
+`p_author` = 0.05, and 30 distractor clusters for `in range` at `p_distractor` = 0.10.**
+That is a real cost and it is stated rather than softened — a band is a claim about an error
+rate, and there is no sample size below this at which such a claim can be made. The figure
+is reported so a user knows what a band needs, and not tested separately, because one rule
+that implies the other is better than two that could disagree.
+
+**An unscoreable segment needs no cluster label.** It carries no distance, so it is excluded
+before anything is clustered and is evidence about nothing. Requiring a label for it would
+refuse a population over data the gate does not use.
+
+**A class with no held-out segments at all bounds nothing**, and 3/0 is not a number. The
+bound is reported as 1 — the widest a rate can be — which fails every target below it and
+refuses the band. Reporting 0 there would be the same over-confidence the floor exists to
+stop, arrived at from the other direction.
+
+The count that matters is the **class whose error is being bounded**, not the band's
+occupancy. Occupancy by the other class is not evidence about the rate the band
+claims. Occupancy is reported for both classes because it tells a reader whether a label is
+ever reached, but a band is not refused for being unvisited.
+
+**Collapse is toward the fallback.** A failed claiming band reports `drifting`, which is the
+adjacent band in the only ordering that matters here — from a claim to no claim. When both
+claiming bands fail, everything would report `drifting`, which is not a band set but an
+absence of one, so the profile reports `uncalibrated` instead of dressing the absence as a
+result.
+
+**A calibration is self-contained, like every other artifact here.** It carries the
+boundaries it classifies with and the bindings it checks, rather than holding a reference to
+the threshold artifact it came from. The failure this avoids is silent rather than loud: a
+calibration that classified through state which did not survive storage would decode its
+boundaries as zero and then place every distance above zero in `not you`, confidently and
+with no error. An artifact that cannot be written and read back is not an artifact.
+
+**Collapse is applied by the calibration, not left to the caller.** The threshold artifact
+answers a geometric question — which side of the boundaries a distance falls on — and the
+calibration answers the one that matters: which label may actually be emitted. A consumer
+that had to read the band reports and then apply the thresholds itself could emit a label
+the gate refused, which is the one outcome this whole section exists to prevent. So the
+calibration carries the classification, and it is the only one `score` and `rewrite` are
+given.
 
 ### Registers: user-named, distractor pools declared
 

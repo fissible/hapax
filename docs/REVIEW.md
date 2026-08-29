@@ -311,6 +311,84 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 11 (continued) — raised by the reviewer of the frozen-first test suite
+
+**The rule-of-three floor smuggled back the independence assumption the bootstrap exists to
+avoid.** The floor was written as 3/*n* over segments. But a hundred error-free segments
+drawn from one document are one independent observation, not a hundred, so 3/100 would claim
+a bound of 0.03 from evidence supporting nothing of the sort — and it would do so
+immediately after the bootstrap had gone to the trouble of resampling clusters precisely
+because segments are not independent. A floor is not exempt from the assumption the estimator
+rejects.
+
+→ The denominator is the **cluster** count. The consequence is much more demanding and is
+published rather than softened: a band needs ⌈3/*p*⌉ *clusters*, which is **60 held-out
+author documents** and **30 distractor clusters** at the v1 targets. That is what a claim
+about an error rate costs.
+
+**Nothing applied the collapse.** The gate decided which bands may be emitted and left a
+consumer to read the reports and apply the thresholds itself — which is exactly how a label
+the gate refused gets emitted anyway.
+
+→ The calibration carries the classification. The threshold artifact answers a geometric
+question, which side of the boundaries a distance falls on; the calibration answers the one
+that matters, which label may be emitted, collapsing refused bands to `drifting` and
+refusing entirely when uncalibrated. `score` and `rewrite` are given only the second.
+
+**ADR 0005 still carried the vacuous contract.** Section 2 superseded it, but an accepted ADR
+saying a band fails by missing "its minimum held-out count or its declared interval" would
+have let the old reading back in.
+
+→ Amended in place, with the reason recorded: neither quantity existed.
+
+## Round 11 — VERDICT: REVISE (raised while scoping the band calibration slice)
+
+**The band calibration test did not test anything.** ADR 0005 and Section 1 both required
+that a band's "observed author-versus-distractor rate must fall inside its declared
+confidence interval". A point estimate always lies inside an interval computed from it, so
+on that reading the check is vacuous; on the other reading it refers to a pre-declared
+acceptable range which appears nowhere in the design. This is the third time in this review
+that a rule has read as a control and controlled nothing — the crossing rule, `z_max`, and
+now this.
+
+→ Replaced with a bound against a target: a claiming band is emitted only when the one-sided
+upper confidence bound on its own error rate, measured on Test, is at or below the target
+that band's threshold was built to respect.
+
+**Only two of the three bands make a claim.** The rule was written as though all three
+needed calibrating. `drifting` asserts nothing about authorship, so there is no error rate to
+bound and no evidence that could back it.
+
+→ `drifting` is the fallback rather than a gated band. A failed claiming band collapses into
+it, and when both claiming bands fail the result is `uncalibrated` rather than a band set in
+which every segment lands in the one band that means nothing.
+
+**"The observed rate of author versus distractor segments landing in it" names the wrong
+quantity.** That is the band's composition, which depends on how many distractors the user
+supplied. It is a property of the pool, not of the method.
+
+→ The gated quantity is class-conditional — `P(distractor lands in range)` over all held-out
+distractors — which is the same quantity the threshold targets bound, re-measured out of
+sample. Composition is reported and not gated on.
+
+**A bootstrap upper bound degenerates exactly where this gate lives.** The gate asks whether
+an error rate is small, and the good case is a rate observed as zero — which resamples to
+zero every time, so the bootstrap reports an upper bound of 0. That is the most
+over-confident answer available and it is worst where the evidence is thinnest. Noticed while
+building the fixtures, not from the prose.
+
+→ The bound is the greater of the bootstrap percentile and 3/*n*, the rule-of-three bound on
+a zero count. A declared conservatism, stated as such: never claim a tighter bound than a
+perfect independent sample of this size could support.
+
+**The minimum held-out count then stops being a separate rule.** Since the bound is at least
+3/*n*, a target of *p* cannot be cleared below ⌈3/*p*⌉ — 60 author and 30 distractor segments
+at the v1 targets. It is reported so a user knows how much more writing a band needs, and not
+tested separately: one rule that implies the other is better than two that could disagree.
+
+**The gate has to run on Test.** The thresholds were fitted on Calibrate to hit their targets
+there, so re-measuring on Calibrate asks whether the fit fits.
+
 ## Round 10 (continued) — raised by the reviewer of the frozen-first test suite
 
 **The seed could be recorded, identifying, and entirely unused.** Naming PCG fixed the
