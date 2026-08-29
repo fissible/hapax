@@ -693,6 +693,13 @@ whenever `A < D` is safe precisely because the inequality that triggers it is th
 makes each bound slack; swapping when `A > D` would violate both. The condition is the
 proof.
 
+**Band membership is tested in order, and the tie is broken away from the costlier error.**
+`in range` first, then `not you`, then `drifting`. The order only matters when `A = D`, where
+`t_low = t_high` and a distance sitting exactly on the boundary satisfies both `d ≤ t_low`
+and `d ≥ t_high`. Testing `in range` first resolves that point to the label whose error is
+the less damaging one, which is the same asymmetry that sets the two targets. Everywhere
+else the three regions are disjoint and the order is immaterial.
+
 **Declared targets, and the sample sizes they force.** `p_author` = 0.05 and
 `p_distractor` = 0.10 for v1 — asymmetric because the errors are, `p_author` tighter because
 telling someone their own prose is not theirs is the more damaging one. Both are declared
