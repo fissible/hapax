@@ -1223,6 +1223,12 @@ pair is valid only above a shared-feature floor: without one, two segments that 
 agreeing features look closer than two that share thirty, and missingness manufactures
 density.
 
+**Declared cost limit.** `select` materializes the full symmetric `N × N` pairwise-distance
+matrix, although it uses only its triangle. Its memory use is therefore `O(N²)` — roughly
+400 MB at 5,000 candidates and 1.6 GB at 10,000 candidates. This implementation is intended
+for the bounded fixture-scale pools it currently serves; a streaming k-nearest design is a
+separate future change.
+
 Every constant is fixed here, because "declared" without a number leaves two conforming
 implementations free to disagree:
 

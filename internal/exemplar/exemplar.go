@@ -145,8 +145,10 @@ func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selectio
 		}
 	}
 
+	definitions := features.Definitions()
+
 	// Rank each manifest feature against the defined values in this closed pool.
-	for feature := range features.Definitions() {
+	for feature := range definitions {
 		refs := make([]float64, 0, len(items))
 		for i := range items {
 			if items[i].defined[feature] {
@@ -167,7 +169,7 @@ func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selectio
 	}
 
 	k := max(3, min(15, int(math.Floor(math.Sqrt(float64(len(items)))))))
-	floor := (len(features.Definitions()) + 1) / 2
+	floor := (len(definitions) + 1) / 2
 	pairs := make([][]pair, len(items))
 	for i := range pairs {
 		pairs[i] = make([]pair, len(items))
@@ -175,7 +177,7 @@ func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selectio
 	for i := 0; i < len(items); i++ {
 		for j := i + 1; j < len(items); j++ {
 			shared, sum := 0, 0.0
-			for f := range features.Definitions() {
+			for f := range definitions {
 				if items[i].defined[f] && items[j].defined[f] {
 					shared++
 					sum += math.Abs(items[i].values[f] - items[j].values[f])
@@ -377,17 +379,4 @@ func numberID(value float64) string {
 		value = 0
 	}
 	return strconv.FormatFloat(value, 'g', -1, 64)
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
 }
