@@ -341,12 +341,20 @@ supplied. It is a property of the pool, not of the method.
 distractors — which is the same quantity the threshold targets bound, re-measured out of
 sample. Composition is reported and not gated on.
 
-**The minimum held-out count was declared nowhere and turns out to be derivable.** By the
-rule of three, *n* segments with no observed errors give a one-sided 95% upper bound near
-3/*n*, so a target of *p* cannot be cleared below ⌈3/*p*⌉ — 60 author segments and 30
-distractor segments at the v1 targets. Necessary rather than sufficient, since clustering
-inflates the bound; the bound itself decides. This is the second derived minimum in the
-design, and it comes from the same style of argument as the first.
+**A bootstrap upper bound degenerates exactly where this gate lives.** The gate asks whether
+an error rate is small, and the good case is a rate observed as zero — which resamples to
+zero every time, so the bootstrap reports an upper bound of 0. That is the most
+over-confident answer available and it is worst where the evidence is thinnest. Noticed while
+building the fixtures, not from the prose.
+
+→ The bound is the greater of the bootstrap percentile and 3/*n*, the rule-of-three bound on
+a zero count. A declared conservatism, stated as such: never claim a tighter bound than a
+perfect independent sample of this size could support.
+
+**The minimum held-out count then stops being a separate rule.** Since the bound is at least
+3/*n*, a target of *p* cannot be cleared below ⌈3/*p*⌉ — 60 author and 30 distractor segments
+at the v1 targets. It is reported so a user knows how much more writing a band needs, and not
+tested separately: one rule that implies the other is better than two that could disagree.
 
 **The gate has to run on Test.** The thresholds were fitted on Calibrate to hit their targets
 there, so re-measuring on Calibrate asks whether the fit fits.

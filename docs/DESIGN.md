@@ -871,12 +871,24 @@ an observed zero on a handful of segments is not evidence of a small rate. The b
 intervals, at the same 0.95. A binomial interval would assume segments are independent,
 which is the assumption the clustered bootstrap exists to avoid.
 
-**The minimum held-out count is derived, not declared.** With *n* segments of a class and no
-errors observed, the one-sided 95% upper bound is about 3/*n* — the rule of three. A band
-whose target is *p* therefore cannot clear it below *n* = ⌈3/*p*⌉: **60 author segments for
-`not you` at `p_author` = 0.05, and 30 distractor segments for `in range` at `p_distractor`
-= 0.10.** As with the threshold minimum this is necessary rather than sufficient — clustering
-inflates the bound above the independent case — and the bound itself is what decides.
+**But a bootstrap degenerates at zero**, and this gate lives at zero: a rate observed as
+zero resamples to zero every time, so the bootstrap reports an upper bound of exactly 0 for
+a band that has simply never been wrong yet. That is the most over-confident answer
+available, and it is worst precisely where the evidence is thinnest.
+
+The bound is therefore **the greater of the clustered bootstrap percentile and 3/*n***,
+where *n* is the size of the class whose error is bounded — the rule of three, the one-sided
+95% bound on a zero count from *n* independent observations. Stated plainly, this is a
+declared conservatism rather than a theorem: **never claim a tighter bound than a perfect
+independent sample of this size could support.** The bootstrap contributes the clustering,
+the floor contributes what the bootstrap cannot see.
+
+**The minimum held-out count is then a consequence rather than a second gate.** Since the
+bound is at least 3/*n*, a band whose target is *p* cannot clear it below *n* = ⌈3/*p*⌉:
+**60 author segments for `not you` at `p_author` = 0.05, and 30 distractor segments for
+`in range` at `p_distractor` = 0.10.** That figure is reported so a user is told how much
+more writing a band needs, but it is not tested separately — the bound already enforces it,
+and one rule that implies the other is better than two that could disagree.
 
 The count that matters is the size of the **class whose error is being bounded**, not the
 band's occupancy. Occupancy by the other class is not evidence about the rate the band
