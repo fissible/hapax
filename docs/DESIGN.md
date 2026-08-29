@@ -172,11 +172,13 @@ Calibration is a release gate, not a report. Ablation of the feature set is expl
   - *Discrimination floor:* a predeclared minimum AUC. Below it the profile is
     `uncalibrated` — `score` emits the raw distance and per-feature deltas but **no band**,
     and `rewrite` refuses to run against that profile.
-  - *Band calibration floor:* each band must be backed by a minimum count of held-out
-    segments, and its observed author-versus-distractor rate must fall inside its declared
-    confidence interval. A band failing either test is **not emitted**; segments that would
-    have landed in it report the adjacent wider band or `uncalibrated`. Individual bands can
-    fail while discrimination passes, and the profile remains usable for the bands that hold.
+  - *Band calibration floor:* a claiming band is emitted only when the **upper confidence
+    bound on its own error rate, measured on Test, is at or below its declared target**, and
+    the class whose error it bounds carries enough held-out segments for that bound to exist.
+    A band failing either test is **not emitted** and its segments report `drifting`; if
+    neither claiming band is emitted the profile is `uncalibrated`. Individual bands can fail
+    while discrimination passes, and the profile remains usable for the bands that hold. The
+    rule is set out in full in Section 2 under "The band calibration floor".
 - **Provenance.** Every eval result is stamped with corpus hash, profile version and
   feature-set version. A result that cannot name what produced it is not a result.
 
@@ -838,6 +840,54 @@ function of the seed:
 SplitMix64 is a published algorithm, so this is a specification a second implementation can
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
+
+### The band calibration floor
+
+ADR 0005 requires each band to be backed by held-out evidence, and the earlier statement of
+the test did not state one. "Its observed rate must fall inside its declared confidence
+interval" is either vacuous — a point estimate always lies inside an interval computed from
+it — or it refers to a pre-declared acceptable range that appears nowhere. Either way it
+controlled nothing, which is the failure mode this section keeps finding in its own prose.
+
+**Only two bands make a claim, and each is gated on the error of that claim.** `in range`
+says *this is the author*, so its error is a **distractor** landing there, bounded by
+`p_distractor`. `not you` says the opposite, so its error is the **author** landing there,
+bounded by `p_author`. `drifting` asserts nothing, needs no evidence, and is therefore the
+fallback rather than a gated band.
+
+**The error rate is class-conditional, not the band's composition.** The quantity gated is
+`P(distractor lands in range)`, over all held-out distractors — the same quantity the
+threshold targets bound. The band's composition (what fraction of the segments in it came
+from each class) depends on how many distractors the user happened to supply, so it is a
+property of the pool rather than of the method; it is reported and not gated on.
+
+**The gate runs on Test.** The thresholds were fitted on Calibrate to hit their targets
+there. Re-measuring on Calibrate would ask whether the fit fits. Test asks the question that
+matters: does the target hold out of sample.
+
+**A bound, not a point estimate**, for the same reason as everywhere else in this section:
+an observed zero on a handful of segments is not evidence of a small rate. The bound is a
+**one-sided upper bound from the same clustered bootstrap** used for the threshold
+intervals, at the same 0.95. A binomial interval would assume segments are independent,
+which is the assumption the clustered bootstrap exists to avoid.
+
+**The minimum held-out count is derived, not declared.** With *n* segments of a class and no
+errors observed, the one-sided 95% upper bound is about 3/*n* — the rule of three. A band
+whose target is *p* therefore cannot clear it below *n* = ⌈3/*p*⌉: **60 author segments for
+`not you` at `p_author` = 0.05, and 30 distractor segments for `in range` at `p_distractor`
+= 0.10.** As with the threshold minimum this is necessary rather than sufficient — clustering
+inflates the bound above the independent case — and the bound itself is what decides.
+
+The count that matters is the size of the **class whose error is being bounded**, not the
+band's occupancy. Occupancy by the other class is not evidence about the rate the band
+claims. Occupancy is reported for both classes because it tells a reader whether a label is
+ever reached, but a band is not refused for being unvisited.
+
+**Collapse is toward the fallback.** A failed claiming band reports `drifting`, which is the
+adjacent band in the only ordering that matters here — from a claim to no claim. When both
+claiming bands fail, everything would report `drifting`, which is not a band set but an
+absence of one, so the profile reports `uncalibrated` instead of dressing the absence as a
+result.
 
 ### Registers: user-named, distractor pools declared
 

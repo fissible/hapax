@@ -311,6 +311,46 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 11 — VERDICT: REVISE (raised while scoping the band calibration slice)
+
+**The band calibration test did not test anything.** ADR 0005 and Section 1 both required
+that a band's "observed author-versus-distractor rate must fall inside its declared
+confidence interval". A point estimate always lies inside an interval computed from it, so
+on that reading the check is vacuous; on the other reading it refers to a pre-declared
+acceptable range which appears nowhere in the design. This is the third time in this review
+that a rule has read as a control and controlled nothing — the crossing rule, `z_max`, and
+now this.
+
+→ Replaced with a bound against a target: a claiming band is emitted only when the one-sided
+upper confidence bound on its own error rate, measured on Test, is at or below the target
+that band's threshold was built to respect.
+
+**Only two of the three bands make a claim.** The rule was written as though all three
+needed calibrating. `drifting` asserts nothing about authorship, so there is no error rate to
+bound and no evidence that could back it.
+
+→ `drifting` is the fallback rather than a gated band. A failed claiming band collapses into
+it, and when both claiming bands fail the result is `uncalibrated` rather than a band set in
+which every segment lands in the one band that means nothing.
+
+**"The observed rate of author versus distractor segments landing in it" names the wrong
+quantity.** That is the band's composition, which depends on how many distractors the user
+supplied. It is a property of the pool, not of the method.
+
+→ The gated quantity is class-conditional — `P(distractor lands in range)` over all held-out
+distractors — which is the same quantity the threshold targets bound, re-measured out of
+sample. Composition is reported and not gated on.
+
+**The minimum held-out count was declared nowhere and turns out to be derivable.** By the
+rule of three, *n* segments with no observed errors give a one-sided 95% upper bound near
+3/*n*, so a target of *p* cannot be cleared below ⌈3/*p*⌉ — 60 author segments and 30
+distractor segments at the v1 targets. Necessary rather than sufficient, since clustering
+inflates the bound; the bound itself decides. This is the second derived minimum in the
+design, and it comes from the same style of argument as the first.
+
+**The gate has to run on Test.** The thresholds were fitted on Calibrate to hit their targets
+there, so re-measuring on Calibrate asks whether the fit fits.
+
 ## Round 10 (continued) — raised by the reviewer of the frozen-first test suite
 
 **The seed could be recorded, identifying, and entirely unused.** Naming PCG fixed the
