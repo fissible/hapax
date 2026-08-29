@@ -864,6 +864,11 @@ ranges, percentages, ordinals — which is the semantic work this gate exists to
 rewrite that reformats a number is therefore rejected, and that is stated rather than
 discovered later.
 
+The same rule reaches further than it first appears. The tokenizer keeps `Anthropic's` whole,
+so a rewrite that makes a name possessive loses one entity and invents another, and is
+refused. This was found by auditing a fixture that assumed the opposite, not by reasoning
+about it in advance, which is the argument for writing each proxy's cost down as a test.
+
 **A named entity is a capitalised token that is not a function word.** There is no
 deterministic way to find named entities, so this is the proxy: a token whose first rune is
 upper case and whose lower-cased form is not in the declared function-word vocabulary. Its

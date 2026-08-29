@@ -60,6 +60,18 @@ func check(t *testing.T, current, candidate string) preserve.Result {
 	return got
 }
 
+func hexDigest(s string) bool {
+	if len(s) != 16 {
+		return false
+	}
+	for _, r := range s {
+		if (r < '0' || r > '9') && (r < 'a' || r > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
 func mustPass(t *testing.T, current, candidate string) {
 	t.Helper()
 	if got := check(t, current, candidate); !got.Preserved {
@@ -90,7 +102,7 @@ func mustFail(t *testing.T, current, candidate string, class preserve.Class, ite
 func TestAPureStyleRewritePasses(t *testing.T) {
 	mustPass(t,
 		"The argument put forward by Anthropic in 2024 was not, in the end, persuasive.",
-		"Anthropic's 2024 argument was not persuasive in the end.")
+		"The 2024 argument from Anthropic was not persuasive, in the end.")
 }
 
 // Identical text passes trivially, which is the floor.
@@ -326,7 +338,7 @@ func TestTheURLFormsRecognised(t *testing.T) {
 func TestAURLDoesNotSwallowTrailingPunctuation(t *testing.T) {
 	mustPass(t,
 		"The details are at https://example.com/paper, which is short.",
-		"See https://example.com/paper. It is short.")
+		"This is short: https://example.com/paper.")
 }
 
 // ---------------------------------------------------------------------------
@@ -454,7 +466,7 @@ func TestEveryMissingItemIsReported(t *testing.T) {
 }
 
 func TestAPassingCheckReportsNothing(t *testing.T) {
-	got := check(t, "A plain sentence with no protected content.", "Another plain sentence, reworded.")
+	got := check(t, "The sentence was plain and unremarkable.", "The sentence, plainly put, was unremarkable.")
 	if !got.Preserved {
 		t.Fatalf("rejected: %v", got.Differences)
 	}
@@ -628,7 +640,7 @@ func TestEntityMembershipFollowsTheFunctionWordVocabulary(t *testing.T) {
 		t.Run(capitalised, func(t *testing.T) {
 			mustPass(t,
 				capitalised+" settled the question entirely.",
-				"Something settled the question entirely.")
+				"The question was settled entirely.")
 		})
 	}
 }
@@ -791,9 +803,23 @@ func TestTheAuditIdentifiersCarryNoProse(t *testing.T) {
 		t.Fatalf("got %d identifiers for %d differences", len(identifiers), len(got.Differences))
 	}
 
+	// The digest is sixteen lower-case hex characters, which is what rules out an
+	// encoding of the item for every item that is not itself sixteen hex
+	// characters. A containment check cannot do that job alone: a hex digest
+	// contains hex characters, so "does it contain 5" is a coincidence rather
+	// than a finding.
+	for _, identifier := range identifiers {
+		parts := strings.Split(identifier, ":")
+		if len(parts) != 4 {
+			t.Fatalf("identifier %q has %d parts, want four", identifier, len(parts))
+		}
+		if !hexDigest(parts[3]) {
+			t.Errorf("identifier %q does not end in sixteen lower-case hex characters", identifier)
+		}
+	}
 	joined := strings.Join(identifiers, "\n")
 	for _, difference := range got.Differences {
-		if strings.Contains(joined, difference.Item) {
+		if len(difference.Item) > 4 && strings.Contains(joined, difference.Item) {
 			t.Errorf("an identifier contains the item text %q", difference.Item)
 		}
 	}
@@ -906,10 +932,10 @@ func TestEveryIdentifierIsBoundToItsDifference(t *testing.T) {
 		if parts[2] != string(difference.Direction) {
 			t.Errorf("%v: identifier direction = %q, want %q", difference, parts[2], difference.Direction)
 		}
-		if len(parts[3]) < 8 {
-			t.Errorf("%v: digest %q is too short to tell items apart", difference, parts[3])
+		if !hexDigest(parts[3]) {
+			t.Errorf("%v: digest %q is not sixteen lower-case hex characters", difference, parts[3])
 		}
-		if strings.Contains(identifiers[i], difference.Item) {
+		if len(difference.Item) > 4 && strings.Contains(identifiers[i], difference.Item) {
 			t.Errorf("identifier %q contains the item text %q", identifiers[i], difference.Item)
 		}
 		if first, ok := seen[identifiers[i]]; ok {
@@ -1199,5 +1225,33 @@ func TestTheIdentifierDigestIsPinned(t *testing.T) {
 				t.Errorf("identifiers %v do not contain %q\n  differences: %v", got.Identifiers(), c.want, got.Differences)
 			}
 		})
+	}
+}
+
+// Making a name possessive changes its surface form, so it is a preservation
+// failure — the tokenizer keeps `Anthropic's` whole, and the no-normalisation
+// rule that makes 1,000 differ from 1000 makes `Anthropic's` differ from
+// `Anthropic`. Found while auditing a fixture that assumed otherwise. It is the
+// same accepted cost, written down rather than discovered by a user.
+func TestAPossessiveIsADifferentEntity(t *testing.T) {
+	got := check(t, "The argument from Anthropic was brief.", "Anthropic's argument was brief.")
+
+	if got.Preserved {
+		t.Fatalf("accepted; a possessive is a different surface form")
+	}
+	var lost, invented bool
+	for _, difference := range got.Differences {
+		if difference.Class != preserve.ClassEntity {
+			continue
+		}
+		if difference.Item == "Anthropic" && difference.Direction == preserve.DirectionLost {
+			lost = true
+		}
+		if difference.Item == "Anthropic's" && difference.Direction == preserve.DirectionInvented {
+			invented = true
+		}
+	}
+	if !lost || !invented {
+		t.Errorf("want Anthropic lost and Anthropic's invented, got %v", got.Differences)
 	}
 }
