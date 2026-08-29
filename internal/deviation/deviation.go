@@ -55,6 +55,8 @@ const (
 	ReasonZeroVariance Reason = "zero-variance"
 	// ReasonReferenceTooSmall means the feature has too few Calibrate values.
 	ReasonReferenceTooSmall Reason = "reference-too-small"
+	// ReasonInsufficientEvidence means no manifest tier met its availability minimum.
+	ReasonInsufficientEvidence Reason = "insufficient-evidence"
 )
 
 // Standardized is one length-aware standardized feature value.
@@ -110,11 +112,11 @@ func Standardize(v features.Vector, p *profile.Profile, split corpus.Split) (Sta
 	if v.SetVersion != features.SetVersion || p.FeatureSetVersion != features.SetVersion || p.FeatureManifestDigest != features.ManifestDigest() {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
-	vector, ok := vectorMap(v.Values)
+	vector, ok := manifestMap(v.Values, func(value features.FeatureValue) features.ID { return value.ID }, features.Definitions())
 	if !ok {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
-	stats, ok := statsMap(p.Stats)
+	stats, ok := manifestMap(p.Stats, func(stat profile.Stats) features.ID { return stat.Feature }, features.Definitions())
 	if !ok {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
@@ -181,7 +183,7 @@ func BuildReference(p *profile.Profile, split corpus.Split, segments []Standardi
 		if segment.FeatureManifestDigest != p.FeatureManifestDigest {
 			return nil, fmt.Errorf("build reference: %w", ErrManifestMismatch)
 		}
-		entries, ok := standardizedMap(segment.Values)
+		entries, ok := manifestMap(segment.Values, func(value Standardized) features.ID { return value.Feature }, features.Definitions())
 		if !ok {
 			return nil, fmt.Errorf("build reference: %w", ErrManifestMismatch)
 		}
@@ -236,7 +238,7 @@ func (r *Reference) Transform(query Standardization) (Deviations, error) {
 	if query.FeatureManifestDigest != r.FeatureManifestDigest {
 		return Deviations{}, fmt.Errorf("transform: %w", ErrManifestMismatch)
 	}
-	entries, ok := standardizedMap(query.Values)
+	entries, ok := manifestMap(query.Values, func(value Standardized) features.ID { return value.Feature }, features.Definitions())
 	if !ok {
 		return Deviations{}, fmt.Errorf("transform: %w", ErrManifestMismatch)
 	}
@@ -274,62 +276,33 @@ func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
 
 func quantile(u float64) float64 { return math.Sqrt2 * math.Erfinv(2*u-1) }
 
-func vectorMap(values []features.FeatureValue) (map[features.ID]features.FeatureValue, bool) {
-	out := make(map[features.ID]features.FeatureValue, len(values))
-	for _, v := range values {
-		if _, ok := out[v.ID]; ok {
+// manifestMap validates that values contain every definition exactly once.
+// It rejects duplicate or unknown value IDs and duplicate or empty manifest IDs.
+func manifestMap[T any](values []T, id func(T) features.ID, definitions []features.Definition) (map[features.ID]T, bool) {
+	manifest := make(map[features.ID]struct{}, len(definitions))
+	for _, definition := range definitions {
+		if definition.ID == "" {
 			return nil, false
 		}
-		out[v.ID] = v
-	}
-	for _, d := range features.Definitions() {
-		if _, ok := out[d.ID]; !ok {
+		if _, exists := manifest[definition.ID]; exists {
 			return nil, false
 		}
+		manifest[definition.ID] = struct{}{}
 	}
-	// This also rejects feature IDs present in the input but absent from the manifest.
-	if len(out) != len(features.Definitions()) {
+	if len(values) != len(manifest) {
 		return nil, false
 	}
-	return out, true
-}
 
-func statsMap(values []profile.Stats) (map[features.ID]profile.Stats, bool) {
-	out := make(map[features.ID]profile.Stats, len(values))
-	for _, v := range values {
-		if _, ok := out[v.Feature]; ok {
+	out := make(map[features.ID]T, len(values))
+	for _, value := range values {
+		feature := id(value)
+		if _, inManifest := manifest[feature]; !inManifest {
 			return nil, false
 		}
-		out[v.Feature] = v
-	}
-	for _, d := range features.Definitions() {
-		if _, ok := out[d.ID]; !ok {
+		if _, duplicate := out[feature]; duplicate {
 			return nil, false
 		}
-	}
-	// This also rejects feature IDs present in the input but absent from the manifest.
-	if len(out) != len(features.Definitions()) {
-		return nil, false
-	}
-	return out, true
-}
-
-func standardizedMap(values []Standardized) (map[features.ID]Standardized, bool) {
-	out := make(map[features.ID]Standardized, len(values))
-	for _, v := range values {
-		if _, ok := out[v.Feature]; ok {
-			return nil, false
-		}
-		out[v.Feature] = v
-	}
-	for _, d := range features.Definitions() {
-		if _, ok := out[d.ID]; !ok {
-			return nil, false
-		}
-	}
-	// This also rejects feature IDs present in the input but absent from the manifest.
-	if len(out) != len(features.Definitions()) {
-		return nil, false
+		out[feature] = value
 	}
 	return out, true
 }

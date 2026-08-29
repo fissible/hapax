@@ -119,6 +119,66 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (later)
+
+**Completed: the distance `d`** (PR #27, all three checks green). A uniformly
+weighted mean of absolute transformed deviations over the features a segment
+makes available in the tiers that met their minimum.
+
+**`z_max` is struck**, which was the open question. Winsorization was specified
+when deviations were unbounded; the rank transform bounds them per feature. A
+conventional `z_max` = 3 does not bind until a feature carries 370 reference
+values against an illustrative size of thirty, and one low enough to bind
+discards evidence the reference supports — with a flat constant, where the
+existing bound already scales with per-feature evidence. Recorded in REVIEW
+Round 8 with the same reasoning that struck `λ`.
+
+**Two further gaps closed in the same round.** "Neither tier meets its minimum"
+named a quantity that had never been stated — it is now a majority of the tier's
+manifest features, expressed as a proportion so it does not weaken as the
+manifest grows. And `d` now carries its contributing feature set, because ADR
+0006's acceptance loop compares two distances and a mean over one feature set is
+not comparable to a mean over another.
+
+**A correction worth remembering.** The first pass proposed declaring an empty
+`TierB` and building the tier machinery against it. Wrong, and caught before any
+test existed: an empty tier can never meet its minimum, so every v1 score would
+be flagged partial against something that does not exist. The tier set is read
+off the manifest instead — one tier today, two the day a Tier B feature lands,
+no code change, and the manifest digest moves at the same moment so no threshold
+artifact crosses.
+
+**Next: thresholds and bands**, per DESIGN Section 2. `d` exists and is
+calibratable now. The band logic is where REVIEW's Section 2 summary says the
+most instructive defects were found — "three times running, arithmetic that was
+internally consistent and controlled nothing" — so the frozen tests should be
+written against the error rates themselves, not against the arithmetic.
+
+The open questions to settle before those tests, the way `z_max` and the weights
+were settled first:
+
+- `p_author` and `p_distractor` are declared quantile targets with no values.
+  DESIGN says they are declared before measurement and published with their
+  measured outcomes, so they need stand-in values and a stated derivation path.
+- The minimum Calibrate reference size is named a published figure throughout
+  and has no number. Note the interaction found this session: the reference size
+  caps `|deviation|` at 1.69 for ten values and 2.14 for thirty, so this minimum
+  sets the ceiling on `d` itself.
+- Bands need their own thresholds per scored tier subset. In v1 there is one
+  subset, but the artifact has to be keyed for more.
+
+**Process notes.** Six review rounds on the distance tests before APPROVE. The
+recurring value is that codex attacks the fixtures rather than the prose: every
+numeric fixture was at most 1.5, so a still-winsorizing implementation would
+have passed the entire suite, and the tier derivation was only ever tested
+against a manifest that made hardcoding indistinguishable from deriving. Both
+needed a seam, not an argument.
+
+Also: this slice added a fourth near-identical manifest-shape validator, which
+is the same defect codex caught on the previous slice about three of them. Four
+copies of one rule is where the fifth diverges. They are now one generic
+`manifestMap` with five callers.
+
 ### 2026-08-29
 
 **Merged first.** PRs #24 (recovery) then #25 (sampling variance), in that
