@@ -119,6 +119,79 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (the discrimination gate)
+
+**Completed: ADR 0005's third and last release gate** (PR #31, all three checks
+green). **All three gates are now done**, which was the standing condition on
+emitting a score at all. `score` and `rewrite` are buildable.
+
+**Three omissions filled, one of them a trap.** "A predeclared minimum AUC"
+declared no minimum, no orientation and no tie rule. Orientation is the
+dangerous one: `d` is a *distance*, so discrimination is
+`P(d_author < d_distractor)`, and an implementation reaching for the
+conventional "probability the positive scores higher" reports `1 - AUC` — 0.15
+for a profile that separates perfectly. Low enough to read as failure, high
+enough not to read as a bug, and no arithmetic objects. Ties count as a half.
+
+**The floor is 0.80 and is labelled a judgement**, not a derivation — the first
+declared value in this design that nothing implies. What informs it: the output
+drives edits to the user's own writing, and ADR 0006's loop accepts a rewrite
+whenever `d` improves, so a barely-discriminating `d` turns that loop into
+noise-driven vandalism. **v1's six Tier A features may well not clear it**, and
+that is the designed behaviour rather than a number to relax later.
+
+**The band floor's degeneracy, mirrored.** Perfect separation resamples to 1.0
+every time, so the bound is capped at `1 - 3/c` over the smaller class. That
+implies fifteen clusters per class, less demanding than the band gate's thirty
+and sixty, so the band gate binds first.
+
+**Next: `score`**, then `rewrite`. Both were blocked on the gates and are not any
+more.
+
+`score` per DESIGN's component table: Tier A at paragraph scale, Tier B over
+rolling windows, emitting a calibrated band plus per-feature deltas plus
+direction, or insufficient evidence — and requiring an explicit `--profile`.
+Most of that now exists; what does not:
+
+- **Tier B has no features and no rolling-window mechanism.** ADR 0003 puts the
+  function-word distribution, hapax ratio and sentence-opener distribution
+  there, all needing several hundred tokens. The tier machinery is built and
+  derives its tier set from the manifest, so adding them is additive — but the
+  windowing is not built at all.
+- **Per-feature deltas and direction** are the reporting half of `score` and
+  have no artifact yet. The signed deviation exists and was deliberately kept
+  signed for exactly this.
+- **`score` consumes a `Release`**, which is the type that composes both gates.
+  Do not let it reach for `Calibration.Band` or `Thresholds.Band` instead.
+
+Open question worth settling before `score`: **what a report looks like when the
+profile is uncalibrated.** DESIGN says raw distance and per-feature deltas are
+still emitted with no band, which means the report has two shapes and the
+difference must be legible rather than an absent field.
+
+**Deferred with a reason, not a TODO:** `auc()` is O(n_a x n_d) inside the
+resample loop — nothing on the fixtures, four billion comparisons on a corpus of
+2000 author and 1000 distractor segments. The rank-based Mann-Whitney form is
+O(n log n) and the frozen exact values would catch any tie-handling mistake in
+the substitution. Codex and I agreed to defer until a real corpus establishes
+the cost. Do it when someone measures, not before.
+
+**Process notes.** Six review rounds. Two worth carrying:
+
+I **pushed back on a finding and was accepted** — codex wanted
+`Calibration.Band` unexported to close a bypass; I argued that `Thresholds.Band`
+already sets the precedent for public lower-level classification and that the
+real protection is type-level, since `score` and `rewrite` are handed a
+`Release`. Worth remembering that the reviewer is not automatically right.
+
+And **one of my own assertions was simply false**: I claimed a fixture held
+cluster membership identical while changing only the clustering mode. It does
+not — the membership record includes each member's author. Following the
+correction through inverted the conclusion: the mode is a *function* of the
+distractor membership, so no test can isolate it and hashing it separately is
+redundant rather than load-bearing. Checking a reviewer's correction can change
+the design, not just the test.
+
 ### 2026-08-29 (the band calibration floor)
 
 **Completed: ADR 0005's second release gate** (PR #30, all three checks green).
