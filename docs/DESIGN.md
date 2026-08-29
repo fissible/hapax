@@ -717,11 +717,18 @@ outcome is no bands rather than a boundary extrapolated past the data.
 Thresholds are chosen from observed distances rather than by interpolation, which makes them
 reproducible: **no boundary randomization, and no value the population never contained.**
 
-**A threshold artifact is bound to the tier subset it was calibrated on**, alongside the
-profile, the feature manifest digest and the weighting scheme. A distance scored over a
-different tier subset is not drawn from the distribution these thresholds describe, and
-banding it against them would be the same error as comparing two distances over different
-feature sets.
+**A threshold artifact is bound to everything it was calibrated against**: the profile, the
+deviation reference, the feature manifest digest, the weighting scheme, the distance
+algorithm, the tier subset, and the **declared distractor pool**. A distance scored over a
+different tier subset, or ranked against a different reference, is not drawn from the
+distribution these thresholds describe, and banding it against them would be the same error
+as comparing two distances over different feature sets.
+
+The distractor pool is named at calibration rather than inferred, because this section
+already requires figures reported per `(profile, distractor pool)` pair — a figure computed
+against a mismatched pool measures genre. Two calibrations that produce identical numbers
+against different pools are different artifacts, and the identity has to say so or a cache
+will serve one for the other.
 
 Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
 A threshold whose interval is too wide to be actionable is not shipped.

@@ -358,9 +358,19 @@ boundary extrapolated past the data.
 that any proper subset of the manifest's tiers carries its own thresholds, and left the
 binding implicit.
 
-→ The artifact records the tier subset, the profile, the feature manifest digest and the
-weighting scheme, and banding refuses a distance whose scored tier set differs. The same
-rule as the contributing-feature set on `d`, one level up.
+→ The artifact records the tier subset, the profile, the deviation reference, the feature
+manifest digest, the weighting scheme and the distance algorithm, and banding refuses a
+distance that differs on any of them. The same rule as the contributing-feature set on `d`,
+one level up.
+
+**The distractor pool was not part of the artifact at all.** Raised by the reviewer of the
+frozen-first test suite. Section 2 has required calibration figures reported per
+`(profile, distractor pool)` pair throughout, and nothing carried the pool: two calibrations
+against different pools producing the same numbers were indistinguishable.
+
+→ The pool is named at calibration, recorded, and in the identity. It is deliberately not
+checked at banding — the pool is a property of how the boundaries were drawn, not of the
+segment being scored.
 
 ## Round 8 — VERDICT: REVISE (raised while scoping the distance `d`)
 
