@@ -241,14 +241,20 @@ guarantee is about *destination*, not about silence.
 
 ### `llm`, and how the guarantee is made mechanical
 
-**`llm` owns the only way out, and a test says so about the source itself.** The dial seam
-is only a guarantee if nothing in the package reaches around it, so a test parses the
-package's own non-test files and fails on `http.DefaultClient`, `http.DefaultTransport`, the
-`http` convenience functions, a direct `net.Dial`, and `os.Getenv` — the last because the mode
-is resolved at the composition root and no library package reads the environment. A runtime
-harness cannot see a path it never exercises; this one can.
+**`llm` owns the only way out, and a test says so about the source itself.** A runtime
+harness cannot see a path it never exercises, so a test parses the package's own non-test
+files and enforces the shape structurally: an import allowlist, so nothing can dial on the
+package's behalf; a selector allowlist admitting only the non-dialling names from `net` and
+`crypto/tls`, which is why `tls.Dial` needs no enumerating; exactly one `http.Client` and one
+`http.Transport` literal, each with its policy fields checked by *value* rather than presence;
+no assignment to a policy field after construction; no type derived from either; and no
+`os.Getenv`, since the mode is resolved at the composition root and no library package reads
+the environment.
 
-**`llm` owns the only way out.** It is handed a dial function and builds its own
+It is a structural backstop and not a proof — it cannot see through arbitrary indirection,
+and the enforcing dialer remains the primary assertion.
+
+It is handed a dial function and builds its own
 `http.Client` from it, with redirects refused and proxy discovery off. A caller cannot pass
 a pre-built client whose redirect or proxy policy would route elsewhere, and there is no
 path to a socket the test did not supply. `New` refuses a nil dialer rather than falling

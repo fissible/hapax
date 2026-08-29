@@ -59,14 +59,15 @@ func DefaultConfig() Config {
 }
 
 var (
-	ErrMissingInput     = errors.New("llm missing input")
-	ErrInvalidConfig    = errors.New("llm invalid config")
-	ErrLocalOnly        = errors.New("llm local-only")
-	ErrEndpoint         = errors.New("llm endpoint")
-	ErrModeMismatch     = errors.New("llm mode mismatch")
-	ErrRequestTooLarge  = errors.New("llm request too large")
-	ErrResponseTooLarge = errors.New("llm response too large")
-	ErrProvider         = errors.New("llm provider")
+	ErrMissingInput     = errors.New("llm is missing required input")
+	ErrInvalidConfig    = errors.New("llm configuration is invalid")
+	ErrLocalOnly        = errors.New("llm is configured for local-only operation")
+	ErrEndpoint         = errors.New("llm endpoint is invalid")
+	ErrModeMismatch     = errors.New("llm request mode does not match the provider")
+	ErrRequestTooLarge  = errors.New("llm request exceeds the configured size limit")
+	ErrResponseTooLarge = errors.New("llm response exceeds the configured size limit")
+	ErrRedirect         = errors.New("llm redirects are refused")
+	ErrProvider         = errors.New("llm provider failed")
 )
 
 type provider struct {
@@ -117,7 +118,7 @@ func New(cfg Config, deps Deps) (rewrite.Provider, error) {
 	client := &http.Client{
 		Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return errors.New("redirect refused")
+			return ErrRedirect
 		},
 	}
 	return &provider{client: client, cfg: cfg, url: endpoint, credentials: deps.Credentials}, nil
@@ -129,7 +130,7 @@ func validateEndpoint(endpoint string) error {
 		return ErrEndpoint
 	}
 	host, port, err := net.SplitHostPort(u.Host)
-	if err != nil || port == "" || u.Path != "" {
+	if err != nil || port == "" {
 		return ErrEndpoint
 	}
 	if _, err := strconv.Atoi(port); err != nil {
