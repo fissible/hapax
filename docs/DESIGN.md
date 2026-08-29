@@ -829,6 +829,11 @@ function of the seed:
   index is the 64-bit output modulo the class's cluster count. The modulo bias at any
   realistic cluster count is below 2⁻⁵⁸ and is accepted rather than rejection-sampled, which
   would make the draw sequence depend on the cluster count.
+- **Clusters are ordered lexicographically by label** before any index is taken. Without a
+  declared order the index means nothing: first-seen ordering would make the interval depend
+  on the order the caller happened to supply its segments in, which is not information about
+  the author. Sorting is what makes the whole procedure a function of the population rather
+  than of its presentation.
 
 SplitMix64 is a published algorithm, so this is a specification a second implementation can
 reproduce, which is the property that matters. It is not a claim about statistical quality

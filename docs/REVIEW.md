@@ -325,6 +325,14 @@ what makes exact endpoint assertions possible — and an exact endpoint is the o
 proves the seed was used at all. Naming PCG also left its two seed words undeclared, which
 this removes.
 
+**The draw specified an index and never said what it indexed.** A cluster index is
+meaningless without a declared cluster order, and first-seen ordering would make the interval
+depend on the sequence the caller supplied its segments in.
+
+→ Clusters are ordered lexicographically by label. That makes the procedure a function of the
+population rather than of its presentation, which is the property the identity already
+assumes elsewhere in this section.
+
 **"Too wide to be actionable" had no test.** ADR 0005 has required it throughout; the
 interval slice computed widths and never judged them.
 
