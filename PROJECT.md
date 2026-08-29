@@ -119,6 +119,78 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (score)
+
+**Completed: `score`** (PR #32, all three checks green). Per paragraph: a
+calibrated band, the distance behind it, per-feature deltas with direction, or
+insufficient evidence.
+
+**Building it found two defects underneath, and both are the interesting part.**
+
+*A draft belongs to no split.* Only train, calibrate and test were nameable, so
+a draft had to claim one — and the only survivable lie is `test`, the split both
+release gates draw their evidence from. `corpus.Draft` means scored, never
+fitted, never evidence. The vocabulary got **stricter**, not looser.
+
+*A reference could not be stored.* Its distributions were unexported, so a
+restored reference held nothing and `Transform` reported `reference-too-small`
+for every feature. `score` is the first consumer that loads a reference rather
+than building one. The failure shape is the lesson: not a crash, not a corrupt
+artifact, but **every paragraph reporting insufficient evidence** — a legitimate
+verdict, indistinguishable from a real one. Second artifact in this design found
+unable to survive storage, both in already-merged packages.
+
+**Standing rule from that:** when adding an artifact type, round-trip it through
+JSON in a test and compare behaviour before and after. Do not assume.
+
+**Next: `rewrite`** — the last component, and the one every gate exists to
+protect. ADR 0006 is unusually complete for it, so read that first: `current`
+begins as the input; a candidate is accepted iff `d(candidate) <= d(current) - e`
+AND `preserve` passes AND `tells(candidate)` is no worse as a
+severity-lexicographic vector; ties inside epsilon are rejections; passes are
+capped; and if `d` is unavailable on either side the segment is passed through
+untouched.
+
+What does not exist yet:
+
+- **`preserve`** — deterministic: numbers, named entities, negations, URLs and
+  quoted strings must survive an edit. Nothing implements it.
+- **The `tells` vector comparison.** `tells` exists but ADR 0006's gate compares
+  a severity-lexicographic vector of DERIVED findings only, from the same
+  rule-set digest with suppression disabled on both sides. Note ADR 0006 already
+  admits this gate is **inert** while every shipped rule is unvalidated — state
+  that plainly rather than implying it works.
+- **`epsilon` and the pass cap have no declared values.** Both are judgements
+  like the AUC floor, not derivations. Settle them before writing tests.
+- **The LLM boundary.** `rewrite` is the only component that touches one. The
+  candidate generator should be an interface with a deterministic fake in tests,
+  or the suite cannot be frozen at all.
+
+Comparability is already handled: a segment carries its `deviation.Distance`,
+which carries the contributing feature set, so `rewrite` can refuse to compare
+two distances built on different features rather than accepting a rewrite that
+only moved the denominator.
+
+**Carried forward, agreed with codex rather than fixed:** nothing exercises a
+draft that `text.Admit` refuses. The behaviour propagates correctly; the
+assertion is missing. Worth adding when `score` is next touched, not worth
+reopening a freeze for.
+
+**Process notes.** Codex stopped rather than editing frozen tests for the sixth
+time and was right again — both were my fixture bugs, one of them a literal ID
+where the real artifact is content-addressed.
+
+Two failures of my own worth naming, both caught from outside: an edit that
+**silently did not apply** because an earlier regex had already changed the text
+it matched on, leaving a test whose name no longer described it; and duplicated
+comment sentences left by another. Verify replacements landed rather than
+trusting the tool reported success.
+
+And codex caught that my first `score` API took its own paragraph floor — with a
+test of mine explicitly scoring at 500 against a profile fitted at 5. That is
+precisely the error the shared admission path exists to prevent, blessed by the
+suite meant to protect it. The parameter is gone.
+
 ### 2026-08-29 (the discrimination gate)
 
 **Completed: ADR 0005's third and last release gate** (PR #31, all three checks
