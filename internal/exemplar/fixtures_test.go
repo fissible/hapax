@@ -284,3 +284,12 @@ func meanProfile(mean float64) *profile.Profile {
 	}
 	return p
 }
+
+// densityID formats a density value for the record digest at nine fixed
+// decimals rather than full precision. The oracle's probit is Python's
+// NormalDist.inv_cdf and the implementation's is math.Sqrt2*math.Erfinv; they
+// are the same function computed by different algorithms and agree to about one
+// unit in the last place. Hashing full-precision strings across the two pins
+// that last bit, which is not a property this component claims — nine decimals
+// still catches fabricated evidence by a wide margin.
+func densityID(value float64) string { return strconv.FormatFloat(value, 'f', 9, 64) }

@@ -472,13 +472,13 @@ func TestTheWholeEvidenceRecordMatchesTheOracle(t *testing.T) {
 		ties          []string
 	}{
 		{"plain40", population(t, 40), 4,
-			"92d3fff9b50b8899200170f52861dc1f86c49584d0baa17f9481d4c74500a53d",
+			"8d93a328b2c3486dc1de0e055033e81141f348410b146488049e77222bd190c3",
 			"4b3367aa69e1273f9d4677ebc7a977282f22e9b0f0f78942b6dcb5ddd1158113", nil},
 		{"mixed", mixed(t), 3,
-			"075be94cc6ef044f1214f5b31efef477d974b9a93243fb4a475718dcda8fc6df",
+			"da77f183f2f98d2a685e1125da788150cd0f305b4afd8a9dce7bff819e71b3da",
 			"5d704151ce74134753e4d8ec519b77c2a3bb6758869ceb431a6641e4244ec537", nil},
 		{"twinStrata", twinStrata(t), 2,
-			"b122e8844bbf3b03ef2e748510e260a5e7072a209016bd11f2d62e83ba3cba88",
+			"3dc30703cd5123c1658e27fa1932b6854ffd7e5c715b188daddea9fa7d9207c8",
 			"f8d308e79a496df9c59d32e2a764bdfb7b5687661df0d3048c5f1e6ded618b81",
 			[]string{"stratum-order:-:paragraph|document"}},
 	} {
@@ -489,7 +489,7 @@ func TestTheWholeEvidenceRecordMatchesTheOracle(t *testing.T) {
 			for _, d := range got.Certificate.Density {
 				value := "-"
 				if d.Neighbours >= got.Certificate.K {
-					value = numberID(d.Value)
+					value = densityID(d.Value)
 				}
 				eligible := "0"
 				if d.Eligible {
@@ -634,7 +634,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 				"b875ec308c98dea01481c05bf52c6f5989fde533d2a57d14772fd298f78b1f7e:0:83",
 			},
 			sums:   []float64{13.641518791849, 13.381160558697, 13.318353094047},
-			digest: "e2d2b6c41b7cf69028c798d8259644ebd4d5f69653ab3e785372a5136c4f1ad1"},
+			digest: "8e393241a0cf5bc8eff6e23c8b75aa2371d8c48d5e6aa473281db360471e8690"},
 		{name: "mean 5", profile: meanProfile(5),
 			want: []string{
 				"b17b148020b79942b7aa541e4ad8b59bf1aa4142217693bec24d6fb333d5f4b5:0:88",
@@ -642,7 +642,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 				"1692a13e1c83a33a82bc71ac4b456cc47fc0b466abc13432f1caf7a199e15724:0:38",
 			},
 			sums:   []float64{13.456315302098, 13.466382064510, 13.178389797754},
-			digest: "cc6911f75610e3578cbd89952ed423df1342829be3fafc2ed57d311920488e80"},
+			digest: "121a5ddcf714651ffce75c0a4f12bf6430c7b23bbb1265562fca4b2c95b777e3"},
 		{name: "mean 50", profile: meanProfile(50),
 			want: []string{
 				"b17b148020b79942b7aa541e4ad8b59bf1aa4142217693bec24d6fb333d5f4b5:0:88",
@@ -650,7 +650,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 				"29fc5c91ae2f3838fa61012ca1b9134e92df095fbc5e9c5045fa96b80224fb24:0:87",
 			},
 			sums:   []float64{13.330644445456, 13.587651227760, 13.583856959508},
-			digest: "cf917d4697f5b936cce29902201f2a2dd6c95dee7bfe7d16fdce4cfa88540841"},
+			digest: "111a2f5a1e20869f8c88ae88fb58d6fcd9564e1bdc45e7302f7c1287ce66ec95"},
 		{name: "per-feature stats", profile: heterogeneousProfile(),
 			want: []string{
 				"bc69218fa265b4dde77db8142fd0aa9a298ba0fb82b6a4acf9fd17ad489d2d18:0:82",
@@ -658,7 +658,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 				"9bd62527991ab14f7137a4f416a77872a06b13fd17272041f1154089569a0c3a:0:82",
 			},
 			sums:   []float64{12.620224447318, 13.591882816135, 13.339269627243},
-			digest: "8d5091d84013e3826cf9f7b628c28e44036bd386a29c141656c58437f5f9df43"},
+			digest: "fd70389ad4265928714612a4652fa7f76d8d3ea4bea12576b1aec277396df2b4"},
 		{name: "variance", profile: narrowProfile(),
 			want: []string{
 				"1780a20bb836810aa7df7bcf2d526a6881d37cf90a07e8cb8a3d02c865f25ba1:0:77",
@@ -666,7 +666,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 				"b17b148020b79942b7aa541e4ad8b59bf1aa4142217693bec24d6fb333d5f4b5:0:88",
 			},
 			sums:   []float64{12.994313067811, 13.843081047796, 13.990644574672},
-			digest: "e2c09de2a3b8690377a6182ae03d9038461b8ea1523860544c08de0479f86f72"},
+			digest: "75bb8dcbdfca024e97139e9dbe6f5c724476dd7e2a398d910e655c5f6cfa4f39"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got, err := selectWith(t, c.profile, candidates, exemplar.Config{N: 3})
@@ -687,7 +687,7 @@ func TestTheProfileStatisticsChangeTheSelection(t *testing.T) {
 			for _, d := range got.Certificate.Density {
 				value := "-"
 				if d.Neighbours >= got.Certificate.K {
-					value = numberID(d.Value)
+					value = densityID(d.Value)
 				}
 				eligible := "0"
 				if d.Eligible {
