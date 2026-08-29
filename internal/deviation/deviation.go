@@ -95,7 +95,7 @@ type Reference struct {
 	ID, ProfileID, FeatureManifestDigest, Algorithm string
 	Split                                           corpus.Split
 	MinSegments, Segments                           int
-	values                                          map[features.ID][]float64
+	Values                                          map[features.ID][]float64
 }
 
 // Standardize applies the length-aware standardization to every manifest feature.
@@ -199,7 +199,7 @@ func BuildReference(p *profile.Profile, split corpus.Split, segments []Standardi
 	for id := range values {
 		sort.Float64s(values[id])
 	}
-	r := &Reference{ProfileID: p.ID, FeatureManifestDigest: p.FeatureManifestDigest, Algorithm: Algorithm, Split: split, MinSegments: minSegments, Segments: len(segments), values: values}
+	r := &Reference{ProfileID: p.ID, FeatureManifestDigest: p.FeatureManifestDigest, Algorithm: Algorithm, Split: split, MinSegments: minSegments, Segments: len(segments), Values: values}
 	r.ID = r.identity()
 	return r, nil
 }
@@ -209,7 +209,7 @@ func (r *Reference) Size(id features.ID) int {
 	if r == nil {
 		return 0
 	}
-	return len(r.values[id])
+	return len(r.Values[id])
 }
 
 // Available reports whether a feature meets the reference minimum.
@@ -256,7 +256,7 @@ func (r *Reference) Transform(query Standardization) (Deviations, error) {
 		} else if !r.Available(definition.ID) {
 			d.Reason = ReasonReferenceTooSmall
 		} else {
-			refs := r.values[definition.ID]
+			refs := r.Values[definition.ID]
 			lower := sort.SearchFloat64s(refs, s.Value)
 			upper := sort.Search(len(refs), func(i int) bool { return refs[i] > s.Value })
 			u := (float64(lower) + float64(upper-lower)/2 + .5) / float64(len(refs)+1)
@@ -269,7 +269,7 @@ func (r *Reference) Transform(query Standardization) (Deviations, error) {
 }
 
 func knownSplit(s corpus.Split) bool {
-	return s == corpus.Train || s == corpus.Calibrate || s == corpus.Test
+	return s == corpus.Train || s == corpus.Calibrate || s == corpus.Test || s == corpus.Draft
 }
 
 func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
@@ -310,7 +310,7 @@ func manifestMap[T any](values []T, id func(T) features.ID, definitions []featur
 func (r *Reference) identity() string {
 	parts := []string{"algorithm", r.Algorithm, "profile-id", r.ProfileID, "manifest-digest", r.FeatureManifestDigest, "split", string(r.Split), "min-segments", strconv.Itoa(r.MinSegments), "segments", strconv.Itoa(r.Segments)}
 	for _, d := range features.Definitions() {
-		values := r.values[d.ID]
+		values := r.Values[d.ID]
 		parts = append(parts, "feature", string(d.ID), "count", strconv.Itoa(len(values)))
 		for _, v := range values {
 			// -0 and +0 rank identically but would otherwise hash differently.
