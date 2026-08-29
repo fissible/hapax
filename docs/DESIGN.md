@@ -1201,6 +1201,16 @@ same mid-rank plotting position and probit already used by `Reference.Transform`
 its treatment of a feature that is constant across the pool, which yields a *defined* zero
 rather than an undefined value.
 
+**Both profile statistics are operative**, which is worth stating because ranking per feature
+looks as though it should absorb them. It would, if standardization were a map shared by every
+candidate — but the denominator is `sqrt(profileVariance + samplingVariance)` and sampling
+variance is *per candidate*, so neither subtracting the mean nor dividing by the variance is a
+common monotone transform, and both can reorder the population before the rank transform sees
+it. Measured on the test fixture, where sampling variance spans 0 to 0.95: a mean of 1.5
+changes the density record and a mean of 5 changes the selection; a variance of 1e-6 changes
+the selection while 1 does not. An earlier draft of this note claimed the mean was
+structurally inert on the strength of one fixture where it happened not to matter; it is not.
+
 Self-referential ranking is sound *because this is not a gate* — nothing is validated, only
 ordered. But it is population-relative: adding or removing a candidate can change every rank.
 So the population is closed and content-addressed, and the claim is bounded to match —
@@ -1219,7 +1229,7 @@ implementations free to disagree:
 | | value |
 |---|---|
 | candidate unit | exactly the leaves `profile.ParagraphVectors` admits, under the same structure options and paragraph floor |
-| canonical identity | the source document's content digest, then the leaf's raw `(offset, length)` — a text digest collides on duplicate leaves |
+| canonical identity | the source document's content digest, then the leaf's raw `(offset, length)` — a text digest collides on duplicate leaves. It breaks every tie here, so it must be unique: a population containing the same identity twice is **refused**, since a non-unique tie-break is no tie-break |
 | minimum population | `N ≥ max(30, 10n)`, else refuse |
 | shared-feature floor | a pair is valid iff features defined in **both** `≥ ceil(0.5 × manifest size)` |
 | `k` | `max(3, min(15, floor(sqrt(N))))` |
@@ -1254,7 +1264,8 @@ structure contract versions, the feature manifest digest, `n`, and **every const
 table above** — not a hand-maintained version string, which lets a changed threshold rehydrate
 a stale selection under unchanged inputs. An upstream parser change yields different leaves
 from the same document, so the document digest alone is not enough either. Failed rehydration
-refuses rather than reseating the set.
+refuses rather than reseating the set. Persistence itself is the caller's: `select` computes
+the identities, and the store that keys on them lives in `cli`.
 
 **And it emits a certificate**, because "representative" is otherwise unfalsifiable: the
 admitted population, per-candidate density, the eligibility decision, strata, medoid sums and
@@ -1274,15 +1285,28 @@ reduction are traversed in the canonical orders declared here.
 Within that, the encodings are still fixed rather than left to chance. The **selection ID** is
 `identity.HashBytes` over `identity.Frame` of each chosen leaf's canonical identity in order,
 each as `<document digest>:<offset>:<length>`. The **certificate ID** is
-`identity.HashInputs` over exactly: `selection` (the selection ID), `population` (framed
+`identity.HashInputs` over exactly nine keys: `selection` (the selection ID), `population` (framed
 canonical identities of every candidate, in canonical order), `eligible` (likewise, of the
 eligible set), `density` (framed `<identity>=<numberID>` pairs in canonical order), `strata`
 (framed `<identity>=<stratum key>` assignments in canonical identity order, so the certificate
 binds candidates to strata rather than only counting them), `medoids` (framed
-`<round>:<stratum key>:<identity>:<numberID sum>`), `ties` (framed `<site>:<round>:<winner>`, where `site` is one of `eligibility`,
+`<round>:<stratum key>:<identity>:<numberID sum>`), `binding` (framed `profile=<profile ID>`, `text=<text.ContractVersion>`,
+`structure=<text.StructureVersion>`, `manifest=<feature manifest digest>` — without this the
+certificate is blind to the profile and the parsers that produced its candidates, and a cache
+keyed on it would serve a selection fitted to a different author), `ties`
+(framed `<site>:<round>:<winner>`, where `site` is one of `eligibility`,
 `medoid` or `stratum-order`, `round` is the allocation round or `-` where none applies, and an
-entry appears **only** where two or more items actually compared equal — no tie, no entry), and
-`config` (framed `<name>=<value>` for every constant in the table above). Floats use
+entry appears **only** where two or more items actually compared equal — no tie, no entry.
+An `eligibility` tie is recorded only where the cut itself falls inside a run of equal
+densities; equal densities wholly inside or wholly outside the kept set change nothing and
+are not ties. `stratum-order` uses round `-`), and
+`config`, framed `<name>=<value>` over exactly these names in this order:
+`n`, `k`, `min-population-absolute` (30), `min-population-multiple` (10),
+`shared-feature-fraction` (0.5), `k-min` (3), `k-max` (15) and
+`eligibility-fraction` (0.75). Naming each one is what stops a changed threshold from
+rehydrating a stale selection behind an unchanged version string. `k` also appears on the
+certificate directly, alongside a per-candidate valid-neighbour count, since both are the
+evidence that density was computed rather than asserted. Floats use
 `numberID`, which normalizes `-0`. That makes the *mechanical* claims checkable. Whether these exemplars produce
 better rewrites is a held-out experiment nobody has run, so this is a declared proxy and is
 called one.
