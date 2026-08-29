@@ -737,8 +737,49 @@ The declared targets and the observed populations are in the identity too, not m
 boundaries they produced: distinct targets can select the same observed bounds, and so can
 distinct populations.
 
-Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
-A threshold whose interval is too wide to be actionable is not shipped.
+**Both thresholds carry clustered bootstrap confidence intervals**, and a threshold whose
+interval is too wide to be actionable is not shipped. The procedure is declared rather than
+left to a library default, because every part of it moves the width of the interval it
+produces.
+
+**Clusters are resampled, not segments.** Paragraphs from one document share topic, register
+and occasion, so resampling them independently manufactures precision the data does not
+have — the same error as overlapping windows, one level up. Clusters are drawn with
+replacement to the original cluster count, independently within each class, and every
+segment in a drawn cluster comes with it.
+
+**The cluster unit is the document, and the author where an author is known.** For the
+author's own distances there is one author, so the document is the whole of it. For
+distractors the design has always said *by document and author* — but the resolution of
+issue #2 left no distractor corpus with per-author labels, so on the distractor side author
+clustering is usually unavailable. That is recorded rather than silently skipped: an
+interval clustered by document alone **understates** uncertainty, because it treats two
+documents by the same unlabelled author as independent evidence. The artifact names its
+clustering unit and flags the weaker one.
+
+**Declared parameters**, all stand-ins awaiting measurement and all part of the interval's
+identity:
+
+- **Confidence level 0.95**, two-sided, by the **percentile** method — the resample
+  distribution's own 2.5th and 97.5th points. Bias-corrected variants need assumptions this
+  design has not earned.
+- **2000 resamples.** At a 0.95 level each tail endpoint is then the 50th order statistic of
+  the resample distribution, which places it without claiming more resolution than the
+  underlying data supports.
+- **A fixed declared seed**, recorded in the artifact. Section 2 forbids a score that changes
+  on re-run, and a bootstrap is the one place in this pipeline where randomness enters; an
+  unrecorded seed would put it there.
+
+**A resample that yields no qualifying threshold is an outcome, not an error**, matching the
+treatment of degenerate cases above. Such resamples are counted and excluded from the
+percentiles rather than aborting the estimate. But an interval assembled from a heavily
+degenerate resample distribution is describing a different population than the one asked
+about, so **at least 90% of resamples must qualify**; below that the interval is reported as
+not usable and the threshold it belongs to is not shipped.
+
+**The interval is computed from the population that produced the thresholds**, verified by
+requiring that population to reproduce the threshold artifact's identity. An interval drawn
+from a different population is a statement about a boundary nobody calibrated.
 
 ### Registers: user-named, distractor pools declared
 

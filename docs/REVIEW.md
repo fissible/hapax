@@ -311,6 +311,52 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 10 — VERDICT: REVISE (raised while scoping the interval slice)
+
+**The clustering unit was specified as "by document and author" and one half of it no longer
+exists.** Section 2 has said clustered bootstrap by document and author throughout. The
+resolution of issue #2 closed without a distractor corpus carrying per-author labels, so on
+the distractor side the author cluster is usually unavailable — and nothing said what
+happens then. Silently falling back to document clustering would be the worst outcome
+available, because it does not fail: it produces a narrower interval than the truth, since
+two documents by the same unlabelled author are counted as independent evidence.
+
+→ The artifact names its clustering unit and flags document-only clustering as understating
+uncertainty. Author clustering is used wherever labels exist. This is the same treatment ADR
+0006 gives its inert tells gate: state the weakened guarantee rather than let the number
+imply the strong one.
+
+**Every parameter of the bootstrap was unstated**, which for an interval means the reported
+width was whatever a default produced.
+
+→ Confidence level 0.95, two-sided, percentile method; 2000 resamples, so each endpoint is
+the 50th order statistic; a fixed declared seed. All stand-ins, all in the interval's
+identity. The seed matters beyond reproducibility: a bootstrap is the only randomness in
+this pipeline, and Section 2 forbids a score that changes on re-run.
+
+**A resample can fail to yield a threshold, and nothing said what that meant.** A resample
+drawing few distinct clusters can leave no value meeting its target.
+
+→ Counted and excluded from the percentiles rather than aborting, matching this section's
+existing treatment of degenerate cases — but with a floor, because an interval assembled
+from a heavily degenerate resample distribution describes a different population than the
+one asked about. At least 90% of resamples must qualify.
+
+**Nothing tied an interval to the boundaries it describes.** An interval computed from one
+population and attached to thresholds calibrated on another is a statement about a boundary
+nobody drew.
+
+→ The population must reproduce the threshold artifact's identity. Cheap, because that
+identity already covers the populations, the targets and every binding.
+
+**Cluster labels do not belong on the distance.** A `deviation.Distance` knows nothing about
+which document produced it, and adding it there would push corpus structure into the scoring
+arithmetic.
+
+→ They go on `ClassedDistance`, which is `eval`'s own pairing type, and they are optional:
+`Calibrate` needs no clusters and is unchanged, `Interval` requires them. That keeps the
+frozen calibration tests valid and puts the requirement where it is actually used.
+
 ## Round 9 — VERDICT: REVISE (raised while scoping the threshold and band slice)
 
 **The crossing rule fired on good separation and stayed silent on bad.** Section 2 assigned
