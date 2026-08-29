@@ -841,6 +841,58 @@ SplitMix64 is a published algorithm, so this is a specification a second impleme
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
 
+### `preserve`: a deterministic gate that names what it cannot see
+
+ADR 0006 requires that numbers, named entities, negations, URLs and quoted strings survive an
+edit. Deterministic, with no model — which means every one of those five is a **surface
+proxy** for the thing it stands for, and the useful part of this section is saying where each
+proxy fails rather than implying it does not.
+
+**Equality, not survival.** The rule is stated as "must survive", which is about loss. But a
+rewrite that *invents* a number, a URL or a quotation fabricates a fact, and one that invents
+a negation inverts a claim — failures at least as bad as losing one. So each class is compared
+as a **multiset equality** between the current and candidate text, in both directions.
+
+The cost is real and accepted rather than hidden: a meaning-preserving rephrasing that removes
+a negation — "not unusual" becoming "common" — is rejected. That is the conservative
+direction. A gate that permitted negation changes would permit a rewrite to invert what the
+author said, and this tool edits people's own writing.
+
+**Surface forms are compared, with no normalisation.** `5` and `five` are different, and so
+are `1,000` and `1000`. Normalising would mean deciding what a numeral means — currencies,
+ranges, percentages, ordinals — which is the semantic work this gate exists to avoid. A
+rewrite that reformats a number is therefore rejected, and that is stated rather than
+discovered later.
+
+**A named entity is a capitalised token that is not a function word.** There is no
+deterministic way to find named entities, so this is the proxy: a token whose first rune is
+upper case and whose lower-cased form is not in the declared function-word vocabulary. Its
+failure modes, stated:
+
+- It **over-collects** — `Monday`, `January`, any capitalised ordinary noun. That makes the
+  gate stricter, which is the safe direction.
+- It **under-collects** lower-case entities: `iPhone` is caught, `danah boyd` is not. This is
+  the dangerous direction and it is a limitation, not a bug to be found later.
+- Excluding function words is what lets a sentence-initial `Anthropic` be seen while a
+  sentence-initial `The` is ignored. Without it the gate would either miss every entity that
+  opens a sentence or demand that every sentence keep its first word.
+
+**URLs and quoted strings are matched over the text, not the token stream.** The tokenizer
+splits `https://example.com/x` into eleven tokens, so a URL does not exist as a token at all;
+it is found by scanning for `http://`, `https://` and `www.` and taking the run up to
+whitespace. Quoted strings are double-quoted spans only, straight or curly. **Single quotes
+are excluded**, because an apostrophe and a closing single quote are the same character and
+telling them apart is not deterministic.
+
+**Negations are a closed declared list**, versioned like every other vocabulary here.
+Contractions survive tokenisation whole — `Don't` is one token — so `n't` forms are matched on
+the token rather than reconstructed from pieces.
+
+**What it reports is what is missing, by class and by item**, because a gate that says only
+*no* leaves a user unable to act and a caller unable to explain. That report contains item
+text, so it is a **rejection reason for the caller and never for the store**, whose privacy
+invariant forbids any reversible prose representation.
+
 ### `score`, and two things it found underneath it
 
 `score` measures a draft against a profile and emits, per paragraph, a calibrated band, the
