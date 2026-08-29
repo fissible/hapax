@@ -724,11 +724,18 @@ different tier subset, or ranked against a different reference, is not drawn fro
 distribution these thresholds describe, and banding it against them would be the same error
 as comparing two distances over different feature sets.
 
-The distractor pool is named at calibration rather than inferred, because this section
-already requires figures reported per `(profile, distractor pool)` pair — a figure computed
-against a mismatched pool measures genre. Two calibrations that produce identical numbers
-against different pools are different artifacts, and the identity has to say so or a cache
-will serve one for the other.
+Two of those cannot be read off the distances and are therefore named at calibration: the
+**distractor pool**, because this section already requires figures reported per
+`(profile, distractor pool)` pair and a figure computed against a mismatched pool measures
+genre; and the **calibration cohort**, because the Calibrate *split* is a role, not the
+identity of the held-out documents filling it. Two cohorts can produce the same boundaries,
+and an artifact that cannot tell them apart lets stale calibration evidence be reused under
+a new corpus. Both are in the identity and neither is checked at banding, since both
+describe how the boundaries were drawn rather than the segment being scored.
+
+The declared targets and the observed populations are in the identity too, not merely the
+boundaries they produced: distinct targets can select the same observed bounds, and so can
+distinct populations.
 
 Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
 A threshold whose interval is too wide to be actionable is not shipped.

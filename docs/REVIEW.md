@@ -363,14 +363,23 @@ manifest digest, the weighting scheme and the distance algorithm, and banding re
 distance that differs on any of them. The same rule as the contributing-feature set on `d`,
 one level up.
 
-**The distractor pool was not part of the artifact at all.** Raised by the reviewer of the
-frozen-first test suite. Section 2 has required calibration figures reported per
-`(profile, distractor pool)` pair throughout, and nothing carried the pool: two calibrations
-against different pools producing the same numbers were indistinguishable.
+**Two things the artifact was calibrated against could not be read off the distances.**
+Both raised by the reviewer of the frozen-first test suite. The **distractor pool**: Section
+2 has required figures reported per `(profile, distractor pool)` pair throughout, and
+nothing carried the pool. The **calibration cohort**: admitting only the Calibrate split
+checks a role, not the identity of the documents filling it, so two cohorts producing the
+same boundaries were indistinguishable and stale calibration evidence could be reused under
+a new corpus.
 
-→ The pool is named at calibration, recorded, and in the identity. It is deliberately not
-checked at banding — the pool is a property of how the boundaries were drawn, not of the
-segment being scored.
+→ Both are named at calibration, recorded, and in the identity. Neither is checked at
+banding: both describe how the boundaries were drawn, not the segment being scored.
+
+**The identity could have omitted the declared targets and the populations** and still
+matched every test, because the cases that varied them also moved the boundaries.
+
+→ Distinct target pairs can select the same observed bounds, and so can distinct
+populations; both are in the identity, and both are now tested by cases that hold the
+reported numbers fixed.
 
 ## Round 8 — VERDICT: REVISE (raised while scoping the distance `d`)
 
