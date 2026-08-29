@@ -657,17 +657,64 @@ incompatible pair.
 Achieved rates are reported next to their targets rather than assumed equal to them. No
 boundary randomization — a score that changes on re-run is not acceptable here.
 
-**When `t_low ≥ t_high` the two targets are jointly unsatisfiable with a non-empty middle
-band.** Note precisely what this does and does not mean. Each threshold may still meet its
-own declared rate — the pair simply cannot also leave a `drifting` region between them. It
-is **pair incompatibility, not a failed target**, and it is *not* proof of
-non-discrimination: distributions can cross under stringent tail targets while retaining
-good AUC. Discrimination is judged by the AUC gate in ADR 0005 and nowhere else.
+**The two quantiles are ordered before use; there is no unsatisfiable case.** Write
 
-The crossed case has a deterministic outcome rather than a contradictory one: **no bands are
-emitted, `d` and feature deltas still are, and the report states that the two targets are
-jointly unsatisfiable at the current separation, giving both achieved rates.** Overlapping
-classification is thereby impossible.
+```
+A = Q_author(1 − p_author)          above this, author segments are rare
+D = Q_distractor(p_distractor)      below this, distractor segments are rare
+
+t_low = min(A, D)                   t_high = max(A, D)
+```
+
+An earlier draft assigned `t_low = D` and `t_high = A` unconditionally and declared the
+pair jointly unsatisfiable when `t_low ≥ t_high`. That rule is wrong, and wrong in the
+direction that matters: `D > A` is the **well-separated** case. When the author's distances
+are small and the distractors' are large, the author's upper quantile sits *below* the
+distractors' lower quantile, and the unconditional assignment produces regions that
+overlap. Measured on synthetic populations at `p_author` = 0.05 and `p_distractor` = 0.10,
+the refusal fired on clean separation and did not fire on heavy overlap — the profile that
+discriminates best emitted no bands, and the one that barely discriminates emitted them.
+
+Ordering the pair removes the case entirely, and **both declared targets still hold**, by
+monotonicity of the CDF alone:
+
+- distractor false-`in range` = `P(d_distractor ≤ min(A, D)) ≤ P(d_distractor ≤ D) = p_distractor`
+- author false-`not you` = `P(d_author ≥ max(A, D)) ≤ P(d_author ≥ A) = p_author`
+
+Where the distributions overlap, `A > D`, `min`/`max` reproduces the earlier assignment
+exactly, and the achieved rates sit on their targets. Where they separate, `A < D`, the
+thresholds take their values from the opposite distributions and both achieved rates fall
+*below* target, with `drifting` spanning the gap in which neither population has mass. That
+gap is the honest label for a segment unlike both: not a contradiction, an absence of
+evidence.
+
+This is not the unconditional swap Section 2 warns against two paragraphs above. Swapping
+whenever `A < D` is safe precisely because the inequality that triggers it is the one that
+makes each bound slack; swapping when `A > D` would violate both. The condition is the
+proof.
+
+**Declared targets, and the sample sizes they force.** `p_author` = 0.05 and
+`p_distractor` = 0.10 for v1 — asymmetric because the errors are, `p_author` tighter because
+telling someone their own prose is not theirs is the more damaging one. Both are declared
+stand-ins awaiting measurement, like every other target here, and both are part of the
+threshold artifact's identity.
+
+The minimum sample sizes are **derived rather than declared**, which makes them the
+exception in this section. Thresholds are chosen from the observed distances, so the
+smallest achievable non-zero error rate on *n* observations is 1/*n*. A threshold meeting a
+target of *p* therefore exists only when 1/*n* ≤ *p*: at least ⌈1/`p_author`⌉ author
+distances and ⌈1/`p_distractor`⌉ distractor distances, which is 20 and 10 at the v1 targets.
+Below either count no threshold respecting that target exists at all, and the honest
+outcome is no bands rather than a boundary extrapolated past the data.
+
+Thresholds are chosen from observed distances rather than by interpolation, which makes them
+reproducible: **no boundary randomization, and no value the population never contained.**
+
+**A threshold artifact is bound to the tier subset it was calibrated on**, alongside the
+profile, the feature manifest digest and the weighting scheme. A distance scored over a
+different tier subset is not drawn from the distribution these thresholds describe, and
+banding it against them would be the same error as comparing two distances over different
+feature sets.
 
 Both thresholds carry **clustered bootstrap confidence intervals** by document and author.
 A threshold whose interval is too wide to be actionable is not shipped.

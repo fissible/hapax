@@ -311,6 +311,57 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 9 — VERDICT: REVISE (raised while scoping the threshold and band slice)
+
+**The crossing rule fired on good separation and stayed silent on bad.** Section 2 assigned
+`t_low = Q_distractor(p_distractor)` and `t_high = Q_author(1 − p_author)` unconditionally,
+and declared the two targets jointly unsatisfiable whenever `t_low ≥ t_high`. Reading that
+condition rather than trusting the words: `t_low ≥ t_high` means the distractors' lower
+quantile sits above the author's upper quantile, which is what **well-separated**
+distributions look like. Measured on synthetic populations at the v1 targets, the refusal
+fired on clean separation and did not fire on heavy overlap. As specified, the profile that
+discriminates best emits no bands and the one that barely discriminates emits them.
+
+This is the failure mode this section's own summary names — arithmetic that is internally
+consistent and controls nothing — surviving three review rounds because the rule was checked
+for internal consistency and never against a population.
+
+→ The two quantiles are ordered before use: `t_low = min(A, D)`, `t_high = max(A, D)`. Both
+declared targets still hold by monotonicity, since `min(A, D) ≤ D` and `max(A, D) ≥ A`. In
+the overlap case this reproduces the old assignment exactly; in the separated case the
+thresholds take their values from the opposite distributions, both achieved rates fall below
+target, and `drifting` spans the gap where neither population has mass — the honest label
+for a segment unlike both. The unsatisfiable case does not exist and its refusal path is
+removed.
+
+Section 2's warning against taking each threshold from the other distribution still stands
+for the *unconditional* swap. Swapping only when `A < D` is safe because that inequality is
+exactly what makes both bounds slack; the condition is the proof.
+
+**`p_author` and `p_distractor` had no values.** Declared quantities named throughout, never
+given numbers.
+
+→ 0.05 and 0.10 for v1, asymmetric because the errors are, `p_author` tighter because
+telling someone their own prose is not theirs is the more damaging error. Declared
+stand-ins, in the threshold artifact's identity.
+
+**The minimum sample sizes were declared nowhere and turn out not to need declaring.**
+
+→ They are derived, which makes them the exception here. Thresholds are chosen from observed
+distances, so the smallest achievable non-zero error on *n* observations is 1/*n*, and a
+threshold meeting target *p* exists only when 1/*n* ≤ *p*. That forces ⌈1/`p_author`⌉ author
+and ⌈1/`p_distractor`⌉ distractor distances — 20 and 10 at the v1 targets. Below either, no
+threshold respecting that target exists at all, so the outcome is no bands rather than a
+boundary extrapolated past the data.
+
+**A threshold artifact was not bound to what it was calibrated on.** Round 8 established
+that any proper subset of the manifest's tiers carries its own thresholds, and left the
+binding implicit.
+
+→ The artifact records the tier subset, the profile, the feature manifest digest and the
+weighting scheme, and banding refuses a distance whose scored tier set differs. The same
+rule as the contributing-feature set on `d`, one level up.
+
 ## Round 8 — VERDICT: REVISE (raised while scoping the distance `d`)
 
 **`z_max` survived a change that removed its job.** Winsorization was specified when
