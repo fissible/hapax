@@ -119,6 +119,78 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-29 (thresholds and bands)
+
+**Completed: band thresholds and band assignment** (PR #28, all three checks
+green, branched from main after #27 landed). `Calibrate` produces `t_low` and
+`t_high` from the two declared error targets; `Band` assigns one of three labels
+or refuses.
+
+**The crossing rule was backwards, and this is the one to remember.** Section 2
+assigned the two quantiles unconditionally and declared the targets jointly
+unsatisfiable when `t_low >= t_high`. But that inequality is what
+*well-separated* distributions produce. Measured on synthetic populations at the
+v1 targets, the refusal fired on clean separation and stayed silent on heavy
+overlap: as specified, the profile that discriminates best emitted no bands.
+
+The fix is to order the pair — `t_low = min(A, D)`, `t_high = max(A, D)`. Both
+targets still hold by monotonicity, the overlap case is unchanged, and in the
+separated case `drifting` spans the gap where neither population has mass. The
+unsatisfiable case does not exist. REVIEW Round 9.
+
+This rule survived three earlier review rounds because it was checked for
+internal consistency and never against a population. It is exactly what Section
+2's own summary warns about. **When a rule is about error rates, test it against
+error rates.**
+
+**Also settled:** `p_author` = 0.05 and `p_distractor` = 0.10, declared
+stand-ins, asymmetric. The minimum sample sizes are *derived* rather than
+declared — the only derived minimum in the design — because a threshold meeting
+target *p* exists only where 1/*n* <= *p*, forcing 20 author and 10 distractor
+distances at the v1 targets.
+
+**Two bindings that cannot be read off the distances** are now named at
+calibration: the declared distractor pool (Section 2 has always required figures
+per `(profile, distractor pool)` pair) and the calibration cohort (the Calibrate
+split is a role, not the identity of the documents in it).
+
+**Next: ADR 0005's release gates**, which is what stands between here and a
+score anyone should trust. Three pieces, in dependency order:
+
+1. **Clustered bootstrap confidence intervals** by document and author, on both
+   thresholds. Section 2 says a threshold whose interval is too wide is not
+   shipped, and nothing computes an interval yet. This is the prerequisite for
+   the band calibration floor.
+2. **The band calibration floor** — per band, a minimum count of held-out
+   segments and an observed author-versus-distractor rate inside its declared
+   interval. A band failing either is not emitted and collapses to the adjacent
+   wider band.
+3. **The discrimination gate** — AUC of held-out author segments against
+   distractors, against a predeclared floor. Below it the profile is
+   `uncalibrated`: raw distance and feature deltas still emitted, no band, and
+   `rewrite` refuses.
+
+The open questions to settle before those tests, the way `z_max` and the
+crossing rule were settled first: the AUC floor has no declared value; the
+per-band minimum held-out count has no value; and the confidence level and
+bootstrap resample count are both unstated. All three are declared-not-derived
+quantities and need stand-ins with a stated derivation path.
+
+**Process notes.** Five review rounds before the freeze, then two defects caught
+after it.
+
+The first was mine and is worth carrying: `Band` refused any distance not from
+the Calibrate split, which makes the scoring path unusable, and no test caught
+it because the `scored()` helper always set Calibrate. A fixture that
+under-supplies is the defect class that keeps recurring in my own tests. It was
+fixed by the documented route — consensus, a separate test commit, re-freeze,
+then the implementation.
+
+The second was the **same negative-zero blind spot as the previous slice**. I
+argued the negative-value guard made `-0` unreachable; `math.Copysign(0,-1) < 0`
+is false in Go. Twice now a reachability argument of mine has been wrong at a
+boundary. Check boundaries by running them, not by reasoning about them.
+
 ### 2026-08-29 (later)
 
 **Completed: the distance `d`** (PR #27, all three checks green). A uniformly
