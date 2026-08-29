@@ -841,6 +841,70 @@ SplitMix64 is a published algorithm, so this is a specification a second impleme
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
 
+### The discrimination gate
+
+ADR 0005 names "a predeclared minimum AUC" and never declares one, nor says which direction
+AUC runs, nor what happens to ties. Each of those omissions is a way to ship a number that
+looks like a measurement.
+
+**Orientation, stated because getting it backwards is silent.** `d` is a distance: *lower*
+means closer to the author. So the quantity is
+
+```
+AUC = P(d_author < d_distractor) + ½ · P(d_author = d_distractor)
+```
+
+over all author×distractor pairs of held-out segments. An implementation computing the
+conventional "probability the positive scores higher" against `d` reports 1 − AUC, and a
+profile with excellent discrimination then reports 0.15 — a number low enough to look like a
+failure and high enough not to look like a bug. Nothing in the arithmetic would object.
+
+**Ties count as a half**, the Mann–Whitney convention. This is not a formality here: `d` is a
+mean of rank-transformed deviations that are themselves capped by the reference size, over
+six features, so exact ties are ordinary rather than rare. Dropping ties inflates AUC and
+counting them as wins inflates it further.
+
+**A bound, not a point estimate**, as everywhere else. The gate is on the **one-sided lower**
+confidence bound of AUC, from the same clustered bootstrap, at the same 0.95. AUC is a paired
+statistic, so each resample draws clusters from **both** classes — independently, from their
+own streams — and recomputes AUC on the resampled pair. A closed-form AUC standard error
+assumes independent segments, which is the assumption this whole section is built to avoid.
+
+**And the same degeneracy, from the other end.** Perfect separation resamples to 1.0 every
+time, so the bootstrap reports a lower bound of exactly 1.0 for a profile that has merely
+never misordered a pair yet. The bound is therefore **the lesser of the bootstrap percentile
+and 1 − 3/*c***, where *c* is min(author clusters, distractor clusters) — the rule of three
+again, at the cluster level, mirrored. Never claim a tighter bound than a perfect sample of
+this many independent units could support.
+
+**The floor is 0.80, and it is a judgement rather than a derivation.** Unlike the band
+minimums nothing implies it: it answers *how good is good enough*, which no arithmetic
+settles. Two things inform the choice. It is the conventional threshold above which a
+diagnostic measure is treated as actionable rather than merely better than chance. And this
+tool's output drives **edits to the user's own writing** — ADR 0006's loop accepts a rewrite
+whenever `d` improves, so a `d` that barely discriminates turns the loop into noise-driven
+vandalism. The bar belongs above "better than a coin".
+
+Declared before measurement and published with its measured outcome, like every other target
+here. **It may well not be met by v1's six Tier A features at paragraph scale**, and that is
+the intended behaviour rather than a number to tune down afterwards: the profile reports
+`uncalibrated`, `score` emits the raw distance and per-feature deltas without a band, and
+`rewrite` refuses. Section 2 already says where a target cannot be met the honest result is
+refusal, never a quietly relaxed target.
+
+**The floor implies its own cluster minimum**, as the band floor does. Since the bound cannot
+exceed 1 − 3/*c*, clearing 0.80 needs 3/*c* ≤ 0.20, so **at least fifteen clusters in each
+class**. That is less demanding than the band gate's thirty and sixty, so in practice the
+band gate binds first — which is the right ordering, since a band makes a narrower claim than
+the profile as a whole.
+
+**The two gates compose in one direction only.** Discrimination is prior: below its floor no
+band is emitted whatever the band-level evidence says, because a band is a label on a
+distance that has been shown not to carry information. The reverse does not hold — individual
+bands can fail while discrimination passes, and the profile stays usable for the bands that
+hold. That ordering is structural rather than a convention a caller has to remember: the
+release verdict owns the composition, and it is what `score` and `rewrite` are given.
+
 ### The band calibration floor
 
 ADR 0005 requires each band to be backed by held-out evidence, and the earlier statement of
