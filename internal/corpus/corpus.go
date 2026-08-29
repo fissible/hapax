@@ -69,6 +69,7 @@ const (
 	Train     Split = "train"
 	Calibrate Split = "calibrate"
 	Test      Split = "test"
+	Draft     Split = "draft"
 )
 
 // SplitWeights control the relative probability of each split.
