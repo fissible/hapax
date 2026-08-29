@@ -326,6 +326,24 @@ uncertainty. Author clustering is used wherever labels exist. This is the same t
 0006 gives its inert tells gate: state the weakened guarantee rather than let the number
 imply the strong one.
 
+Writing that down also forced a distinction the phrase "by document and author" had been
+hiding: the unit is not the same on both sides. Clustering the author's own distances by
+author would collapse that entire class into one cluster and leave nothing to resample. The
+author side clusters by document — the within-author variation — and the distractor side by
+author, the between-author variation, exactly as this section's own resampling rule says.
+
+**The threshold minimum turned out not to be a shipping minimum, by a factor of three.**
+Round 9 derived ⌈1/*p*⌉ as the sample size at which a threshold exists. Simulating the
+bootstrap on populations of that size shows why that is not enough: a threshold at the
+derived minimum rests on a single tail observation, and any resample drawing it twice
+qualifies nothing. At `p_author` = 0.05 with twenty author distances only about 58% of
+resamples qualify — and it is not the cluster count that is short, since the figure barely
+moves when every distance is given its own document. Sixty reach roughly 98%.
+
+→ Published rather than declared as a second minimum: the 90% qualification floor already
+enforces it, against the population actually supplied rather than a number picked in
+advance.
+
 **Every parameter of the bootstrap was unstated**, which for an interval means the reported
 width was whatever a default produced.
 

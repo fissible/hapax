@@ -748,14 +748,18 @@ have — the same error as overlapping windows, one level up. Clusters are drawn
 replacement to the original cluster count, independently within each class, and every
 segment in a drawn cluster comes with it.
 
-**The cluster unit is the document, and the author where an author is known.** For the
-author's own distances there is one author, so the document is the whole of it. For
-distractors the design has always said *by document and author* — but the resolution of
-issue #2 left no distractor corpus with per-author labels, so on the distractor side author
-clustering is usually unavailable. That is recorded rather than silently skipped: an
-interval clustered by document alone **understates** uncertainty, because it treats two
-documents by the same unlabelled author as independent evidence. The artifact names its
-clustering unit and flags the weaker one.
+**The cluster unit differs by class, and that is the point of clustering by both.** The
+author's own distances all come from one author, so clustering them by author would collapse
+the whole class into a single cluster and leave nothing to resample; they are clustered by
+**document**, which is the within-author variation this side is supposed to measure. The
+distractor distances are clustered by **author**, which is the between-author variation that
+side is supposed to measure, with documents nested inside.
+
+The resolution of issue #2 left no distractor corpus with per-author labels, so in practice
+the distractor side usually falls back to the document. That is recorded rather than
+silently skipped: an interval clustered by document alone **understates** uncertainty,
+because it counts two documents by the same unlabelled author as independent evidence. The
+artifact names its clustering unit and flags the weaker one.
 
 **Declared parameters**, all stand-ins awaiting measurement and all part of the interval's
 identity:
@@ -780,6 +784,25 @@ not usable and the threshold it belongs to is not shipped.
 **The interval is computed from the population that produced the thresholds**, verified by
 requiring that population to reproduce the threshold artifact's identity. An interval drawn
 from a different population is a statement about a boundary nobody calibrated.
+
+**The sample size that admits a threshold is not the size that admits an interval**, and the
+gap is large enough to publish rather than leave to be discovered. A threshold exists as soon
+as one observation sits in the tail — that is what the ⌈1/*p*⌉ minimum above says. But a
+resample that draws that one observation twice pushes the achieved rate over target and
+qualifies nothing, so at exactly the threshold minimum most resamples fail. Measured: at
+`p_author` = 0.05 with twenty author distances, **about 58% of resamples qualify even when
+every distance is in its own document**, because the cluster count is not what is short —
+the tail is. Sixty distances reach roughly 98%, and a hundred reach 100%.
+
+No second minimum is declared for this, because the 90% qualification floor already
+enforces it and does so against the population actually supplied rather than against a
+number chosen in advance. The consequence is simply stated: **⌈1/*p*⌉ is the minimum to
+compute a boundary, not the minimum to ship one.**
+
+**The generator is named, not defaulted.** Reproducibility across Go releases cannot rest on
+a standard-library implementation detail, so resampling draws from **PCG** (`math/rand/v2`),
+whose stream is defined by the algorithm rather than by whichever source the runtime happens
+to provide.
 
 ### Registers: user-named, distractor pools declared
 
