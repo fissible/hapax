@@ -932,10 +932,14 @@ emitted behind the prefix — blank lines included, since a blank line is where 
 fence would be most tempting to close — so content that reads as an instruction stays behind
 it exactly as ordinary content does.
 
-**The passage carries its own marker.** Distinguishing it from the exemplars by position alone
-would be a convention again: a prompt that simply put the passage first would satisfy "not
-fenced" while telling the model nothing about which text it is being asked to rewrite. The
-marker is explicit and is not the fence prefix.
+**The passage carries its own marker, on the line immediately before it.** Distinguishing it
+from the exemplars by position alone would be a convention again: a prompt that simply put the
+passage first would satisfy "not fenced" while telling the model nothing about which text it
+is being asked to rewrite. The marker is explicit, is not the fence prefix, and its adjacency
+to the passage is part of the contract — a marker somewhere in the prompt marks nothing.
+
+A blank exemplar line is emitted as the prefix alone, verbatim, so that "every line is fenced"
+is checkable rather than inferred from the lines that happen to have content.
 
 **Exemplars arrive exactly as requested, or not at all.** A selector returning fewer than
 asked for is a silent reduction of the anchor to the author's own prose, and a substitution is
