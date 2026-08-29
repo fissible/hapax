@@ -39,7 +39,7 @@ type BandReport struct {
 
 // Calibration is the authoritative, held-out classification artifact.
 type Calibration struct {
-	ID, ThresholdsID                                                               string
+	ID, ThresholdsID, PopulationID                                                 string
 	Low, High                                                                      float64
 	ProfileID, ReferenceID, FeatureManifestDigest, WeightScheme, DistanceAlgorithm string
 	ScoredTiers                                                                    []features.Tier
@@ -120,8 +120,19 @@ func (t *Thresholds) CalibrateBands(distances []ClassedDistance, floor BandFloor
 	if !out.Calibrated {
 		out.Reason = "no-claiming-band-emitted"
 	}
+	out.PopulationID = clusteredPopulationID(author, distractor, clustering)
 	out.ID = bandCalibrationID(&out, author, distractor, clustering)
 	return out, nil
+}
+
+// clusteredPopulationID identifies the held-out population and its independence
+// partition. It is deliberately shared by both release gates.
+func clusteredPopulationID(author, distractor []bootstrapCluster, clustering Clustering) string {
+	return identity.HashInputs(map[string]string{
+		"author-membership":     clusterMembershipID(author),
+		"clustering":            string(clustering),
+		"distractor-membership": clusterMembershipID(distractor),
+	})
 }
 
 func validBandFloor(floor BandFloor) bool {
