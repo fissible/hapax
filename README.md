@@ -68,9 +68,10 @@ to use a stronger one.
 
 The profile is built locally and never leaves. When `rewrite` calls a cloud model it sends
 the draft passage and a handful of exemplar sentences — never the corpus. `--local-only`
-(or `HAPAX_LOCAL_ONLY=1`) is a hard guarantee, verified by a test that fails on any
-outbound connection attempt: no cloud provider is constructed, no credential is read, no
-telemetry is emitted. A cloud failure is an error, never a silent downgrade.
+(or `HAPAX_LOCAL_ONLY=1`) is a hard guarantee, verified by a test that fails on any dial
+outside loopback: no cloud provider is constructed, no credential is read, no telemetry is
+emitted. Loopback, because the default provider is Ollama on localhost — the guarantee is
+about where bytes go, not whether a socket opens. A cloud failure is an error, never a silent downgrade.
 
 ## What this is not
 

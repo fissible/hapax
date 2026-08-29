@@ -18,14 +18,20 @@ never the corpus. Corpus text is fenced as untrusted data during prompt assembly
 may contain text that reads as instructions.
 
 `--local-only` / `HAPAX_LOCAL_ONLY=1` is asserted **by test**, not by documentation: no
-cloud provider constructed, no credential read from environment or config, no outbound
-connection attempted, no telemetry. The harness fails on any attempted dial.
+cloud provider constructed, no credential read from environment or config, **no connection
+to any non-loopback address** attempted, no telemetry. The harness fails on any dial outside
+loopback.
+
+Amended 2026-08-29: this originally read "no outbound connection attempted", which
+contradicted the same decision's default of Ollama over HTTP to localhost. The guarantee is
+about destination, not silence.
 
 A cloud failure is a hard error. There is never a silent downgrade to a local model, since
 that would change output quality without the author knowing.
 
 ## Consequences
 
-- Provider lifecycle work is real and accepted: credential handling, retries, cancellation,
-  request-size limits, integration tests.
+- Provider lifecycle work is real and accepted: credential handling, cancellation,
+  request-size limits, integration tests. **Retries are not in v1** — a retry is a second
+  charge and a second egress, and nothing yet requires one.
 - Additional providers are deferred until one is proven.

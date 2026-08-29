@@ -151,8 +151,10 @@ invariant, and the cap's obvious reading did not terminate. Do this again.
    profile, never nearest-neighbour to the draft. ADR 0004 also settles that
    exemplars are stable per profile, which rewrite now relies on.
 4. **`llm`** (component 9) — Ollama first, Anthropic as the one cloud provider.
-   ADR 0007's local-only assertions belong here: no provider constructed, no
-   credential read, no dial, no telemetry, **asserted by test**.
+   ADR 0007's local-only assertions belong here: no cloud provider constructed,
+   no credential read, **no dial outside loopback**, no telemetry, **asserted by
+   test**. Loopback is the exception because the default provider is Ollama on
+   localhost — the guarantee is about destination, not silence.
 5. **`cli`** (component 12) — the table says build it early against stub
    interfaces. That advice was not taken and the interfaces exist now anyway.
 
