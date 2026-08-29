@@ -880,7 +880,11 @@ failure modes, stated:
 **URLs and quoted strings are matched over the text, not the token stream.** The tokenizer
 splits `https://example.com/x` into eleven tokens, so a URL does not exist as a token at all;
 it is found by scanning for `http://`, `https://` and `www.` and taking the run up to
-whitespace. Quoted strings are double-quoted spans only, straight or curly. **Single quotes
+whitespace, then trimming trailing characters that cannot end a URL — `.,;:!?` and closing
+brackets and quotes. Without that trim, moving a URL from the middle of a sentence to its end
+would change the matched item from one ending in a comma to one ending in a full stop, and the
+gate would refuse a rewrite that touched nothing. A bare dotted domain with no scheme and no
+`www.` is deliberately not matched: any dotted token would otherwise be a URL. Quoted strings are double-quoted spans only, straight or curly. **Single quotes
 are excluded**, because an apostrophe and a closing single quote are the same character and
 telling them apart is not deterministic.
 
