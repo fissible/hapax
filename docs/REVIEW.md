@@ -313,6 +313,18 @@ No remaining Section 3 blockers.
 
 ## Round 14 (final) — raised at the implementation consensus gate
 
+**The request handed providers the raw exemplars alongside the assembled prompt.** Which
+restores exactly the problem moving prompt assembly into this component was meant to remove: a
+provider can ignore the prompt and build its outbound request from the unfenced strings, and
+the mechanical fence becomes a convention again. The frozen suite had blessed it — a test of
+mine asserted the parts travelled with the prompt, on the reasoning that a provider might not
+want to re-parse, which is a convenience argument against a safety property.
+
+→ The request carries the prompt and the non-prose identity and settings, and no raw prose.
+A provider needing a structured split is given assembled parts, not ingredients.
+
+## Round 14 (cont.) — raised at the implementation consensus gate
+
 **Exemplars were selected once per attempt rather than once per invocation.** ADR 0004 says
 *exemplars are stable per profile and largely cacheable, rather than recomputed per draft*,
 and this section had not carried that across. A loop asking the selector again on each attempt

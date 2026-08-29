@@ -206,10 +206,20 @@ func passingGate() *fakeGate {
 
 type request struct {
 	segment      string
-	exemplars    []string
+	raw          rewrite.RewriteRequest
 	profileID    string
 	invocationID string
 	localOnly    bool
+}
+
+// passageOf recovers the passage the prompt asks to be rewritten.
+func passageOf(prompt string) string {
+	marker := rewrite.PassageMarker + "\n"
+	at := strings.Index(prompt, marker)
+	if at < 0 {
+		return ""
+	}
+	return prompt[at+len(marker):]
 }
 
 type fakeProvider struct {
@@ -222,7 +232,10 @@ type fakeProvider struct {
 func (f *fakeProvider) Rewrite(ctx context.Context, req rewrite.RewriteRequest) (string, error) {
 	f.prompts = append(f.prompts, req.Prompt)
 	f.requests = append(f.requests, request{
-		segment: req.Segment, exemplars: append([]string(nil), req.Exemplars...),
+		// The passage is recovered from the prompt rather than read from a
+		// field, because the prompt is what a provider actually sends.
+		segment:   passageOf(req.Prompt),
+		raw:       req,
 		profileID: req.ProfileID, invocationID: req.InvocationID, localOnly: req.LocalOnly,
 	})
 	if f.err != nil {
@@ -670,12 +683,11 @@ func TestTheRequestCarriesSelectedExemplars(t *testing.T) {
 	if len(provider.requests) == 0 {
 		t.Fatalf("the provider was never called")
 	}
-	got := provider.requests[0]
-	if len(got.exemplars) != 2 {
-		t.Fatalf("the request carried %d exemplars, want the 2 requested", len(got.exemplars))
-	}
-	if got.exemplars[0] != "an exemplar sentence." {
-		t.Errorf("exemplars = %v, want the selector's own", got.exemplars)
+	prompt := provider.prompts[0]
+	for _, exemplar := range []string{"an exemplar sentence.", "another exemplar sentence."} {
+		if !strings.Contains(prompt, rewrite.FencePrefix+exemplar) {
+			t.Errorf("the prompt does not carry the selector's exemplar %q, fenced", exemplar)
+		}
 	}
 }
 
@@ -1017,19 +1029,46 @@ func TestExemplarsAreFencedIntoThePrompt(t *testing.T) {
 	}
 }
 
-// The prompt is what the provider is given; the structured parts travel with it
-// so a provider that wants them need not re-parse.
-func TestTheRequestCarriesBothThePromptAndItsParts(t *testing.T) {
+// The request carries the assembled prompt and NOTHING a provider could
+// assemble a different one from.
+//
+// Handing over the raw exemplars for convenience — so a provider need not
+// re-parse — would restore the whole problem: a provider could ignore the
+// prompt and build its outbound request from the unfenced strings, and the
+// mechanical fence would be a convention again. That is a convenience argument
+// against a safety property, and an earlier version of this test blessed it.
+//
+// Added by consensus. The check is structural rather than a field list: the
+// request is encoded, the prompt's own value removed, and no exemplar prose may
+// survive anywhere in what remains.
+func TestTheRequestCarriesNoProseBesidesThePrompt(t *testing.T) {
+	exemplars := []string{"an exemplar sentence.", "another exemplar sentence."}
 	loop, _, _, provider, _ := loopOver(t,
 		map[string]score.Report{original: scored(0.50), worse: scored(0.90)},
 		[]string{worse}, passingGate())
 
 	run(t, loop)
 	if provider.prompts[0] == "" {
-		t.Errorf("the request carried no assembled prompt")
+		t.Fatalf("the request carried no assembled prompt")
 	}
-	if len(provider.requests[0].exemplars) != 2 {
-		t.Errorf("the request carried %d exemplars alongside the prompt, want 2", len(provider.requests[0].exemplars))
+
+	encoded, err := json.Marshal(provider.requests[0].raw)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	remainder, err := json.Marshal(provider.prompts[0])
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	outside := strings.Replace(string(encoded), strings.Trim(string(remainder), `"`), "", 1)
+
+	for _, exemplar := range exemplars {
+		if strings.Contains(outside, exemplar) {
+			t.Errorf("the request exposes the raw exemplar %q outside the assembled prompt", exemplar)
+		}
+	}
+	if strings.Contains(outside, original) {
+		t.Errorf("the request exposes the raw passage outside the assembled prompt")
 	}
 }
 

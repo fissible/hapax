@@ -925,6 +925,14 @@ provider implementation would have to remember to fence them, and one that forgo
 no test that failed. So the request carries an **assembled prompt** built by this package, and
 fencing is mechanical rather than conventional.
 
+**And it carries nothing a provider could assemble a different prompt from.** Handing over the
+raw exemplars alongside the prompt — for convenience, so a provider need not re-parse — would
+restore the whole problem: a provider could ignore the assembled text and build its outbound
+request from the unfenced strings, and the fence would be a convention again. The request
+therefore holds the prompt and the non-prose identity and settings, and no raw prose at all.
+A provider needing a structured split, a system and a user message say, is given **assembled**
+parts rather than the ingredients.
+
 **The fence is a line prefix, because a line prefix cannot be escaped out of.** A delimiter
 pair can be broken by exemplar text that contains the delimiter, and escaping that text is a
 second mechanism with its own failure modes. **Every** line of every exemplar is instead
