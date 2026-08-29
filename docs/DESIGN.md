@@ -144,7 +144,8 @@ by construction" below.*
 | 8 | `preserve` | Deterministic semantic-preservation gate. Numbers, named entities, negations, URLs and quoted strings must survive an edit or it is rejected. Applied to **every** mutation, mechanical and LLM alike. | 0 |
 | 9 | `llm` | Provider interface. Ollama first, Anthropic as the one named cloud provider. Corpus text fenced as untrusted data in prompt assembly. Hard `--local-only` mode; cloud failure is a hard error, never a silent fallback. | — |
 | 10 | `rewrite` | The loop, depending on interfaces (`Scorer`, `Selector`, `Gate`, `Provider`, `Store`) rather than concrete components. Monotonic acceptance rule below. Retains before/after artifacts and rejection reasons. | 6, 7, 8, 9 |
-| 11 | `cli` | Built **early** as a thin shell against stub interfaces, so artifact formats and exit codes become real contracts rather than afterthoughts. | interfaces only |
+| 11 | `assemble` | Splices accepted replacements back into the original bytes. Ordered, non-overlapping raw spans; every untouched byte and excision preserved exactly; all-or-nothing output. | 3, 10 |
+| 12 | `cli` | Built **early** as a thin shell against stub interfaces, so artifact formats and exit codes become real contracts rather than afterthoughts. | interfaces only |
 
 ### Evaluation protocol
 
@@ -856,13 +857,27 @@ a small corpus and silently rejects the same improvement on a larger one — the
 *less* willing to improve as the evidence behind it grows.
 
 So ε is a floating-point tolerance, `1e-9`, and its job is exactly the one the ADR names:
-make ties rejections. The substantive protection against churn is the pass cap, which bounds
-the number of accepted rewrites directly rather than by proxy.
+make ties rejections. The substantive protection against churn is the pass cap.
 
-**The pass cap is three**, declared rather than derived. Each pass is a generator call; the
-loop is monotone in `d`, so further passes can only help the number while cost and drift
-rise. A cap is a safety envelope, not an optimum, and this is a stand-in like every other
-declared figure here.
+**The pass cap is three, and it counts attempts rather than acceptances.** Declared rather
+than derived: a cap is a safety envelope, not an optimum, and this is a stand-in like every
+other declared figure here. Its operational semantics are stated because the obvious reading
+does not terminate:
+
+- Every candidate consumes an attempt, **accepted or rejected**. A cap on acceptances alone
+  would let a provider that never produces an acceptable candidate loop without end, which is
+  the failure a cap exists to prevent.
+- On acceptance, `current` becomes the candidate and the next attempt is made against it. On
+  rejection, `current` is unchanged and the next attempt is made against the same text — the
+  provider is asked again, not abandoned, since a rejection is a property of one candidate
+  rather than of the segment.
+- The loop stops when attempts reach the cap, or when the provider returns no candidate. The
+  result is whatever `current` holds at that point, with every attempt and its verdict
+  recorded.
+
+Because acceptance requires a strict improvement in `d` and `current` only ever advances on
+acceptance, the sequence of accepted distances is strictly decreasing and the loop is
+monotone whatever the provider does.
 
 **A candidate must admit exactly one segment.** A rewrite of a paragraph that arrives as two
 paragraphs, or as something the lexical-token floor excludes, is not a rewrite of that
@@ -888,16 +903,69 @@ options, with suppressions honoured, or truncated. ADR 0006 already records that
 **inert while every shipped rule is unvalidated**, and that remains true; it is wired in so
 that validating a rule turns it on rather than requiring the loop to be rebuilt.
 
-**The generator is an interface and the loop never sees a network.** `rewrite` is the only
-component that touches an LLM, and it touches it through one method that takes the current
-text and returns a candidate. Everything else in the loop is deterministic, which is what
-lets the acceptance rule be tested exactly against a fake that returns scripted candidates.
+**The loop depends on the five interfaces the component table declares** — `Scorer`,
+`Selector`, `Gate`, `Provider` and `Store` — and not on a single generator method. An earlier
+draft of this section reduced the provider to one call taking the current text and returning a
+candidate, which silently deleted `Selector` from the design: a conforming provider written
+against it could not receive exemplars at all, and the exemplar path is not an optimisation
+but the mechanism by which the rewrite is anchored to the author rather than to the model's
+prior.
 
-**Reassembling a document is a separate concern and is not in this component.** The loop
-decides, per segment, what the text should be. Splicing accepted text back into the original
-bytes needs raw offsets and has to preserve the excisions `text` removes from a leaf's token
-view — a hazard of its own, and one that would be hidden inside an acceptance loop rather
-than tested on its own terms.
+**A provider is given a request, not a string.** `RewriteRequest` carries the current segment,
+the exemplars `Selector` chose, the profile and invocation identity the result is attributed
+to, and the provider settings including `--local-only`. That shape exists so ADR 0007's
+boundary is expressible: **only the draft passage and a handful of exemplars are ever sent,
+never the corpus.** A provider that received only a string could not honour that rule, because
+it would have nothing to send but the passage — and a later change adding exemplars would have
+no declared place to put them.
+
+**Prompt assembly is a named boundary, and exemplars cross it as untrusted data.** Corpus
+prose may itself read as instructions, so exemplars are fenced when the prompt is built and
+that fencing is the provider interface's obligation rather than a convention its
+implementations are trusted to remember. `--local-only` is asserted by test, per ADR 0007: no
+cloud provider constructed, no credential read, no dial attempted.
+
+Everything in the loop except `Provider` is deterministic, which is what lets the acceptance
+rule be tested exactly against fakes: a `Provider` returning scripted candidates, a `Selector`
+returning fixed exemplars, and a `Gate` with scripted verdicts.
+
+**What "retains before/after artifacts and rejection reasons" is allowed to mean.** The
+component table promises retention; the store's privacy invariant forbids **any reversible
+prose representation or textual derivative**, and says so for the database, its sidecars, any
+export, and all log and diagnostic output. Those two sentences are in direct tension, and
+resolving it by implementation would resolve it the wrong way — "auditable" is exactly the
+word under which prose gets persisted.
+
+The permitted audit record is therefore stated as a whitelist. For each attempt: the **span
+reference** it applied to, **content hashes** of the current and candidate text, the
+**distance and band** on each side, the **preserve verdict** and the identifiers of what it
+found missing, the **tells comparison** result, the **rejection code**, and the profile,
+provider and invocation identity. None of that is reversible to prose.
+
+**Candidate text exists only in the output the user asked for.** It is never written to the
+store, a log, a diagnostic dump or an export. A rejected candidate is not retained at all —
+only its hash and the code that rejected it — because a rejected rewrite is precisely prose
+the user never chose to keep.
+
+**Reassembling a document is not in this component, and it has an owner.** The loop decides,
+per segment, what the text should be; `assemble` turns those decisions into a document.
+Splicing needs raw offsets and must preserve the excisions `text` removes from a leaf's token
+view — a hazard of its own that would be hidden inside an acceptance loop rather than tested
+on its own terms. Saying only that it is "separate" would have left `hapax rewrite draft.md`
+with no component able to produce its output, which is not a boundary but a gap.
+
+`assemble` takes the original bytes and a set of replacements, each naming a **raw byte
+span** and its new text, and its contract is:
+
+- **Spans are ordered and non-overlapping.** Overlapping replacements have no defined result,
+  so they are refused rather than resolved by precedence.
+- **Every untouched byte survives exactly**, including the excisions inside a replaced leaf's
+  span and all material between spans. A replacement whose span contains an excision is
+  refused: the excised bytes are not the leaf's prose and the loop never measured them, so
+  overwriting them would discard content the rewrite never considered.
+- **All or nothing.** A failure anywhere — an unordered span, an overlap, an excision inside a
+  replacement — produces no output at all rather than a partially rewritten document. A file
+  half in the author's voice and half in the model's is worse than an error.
 
 ### `score`, and two things it found underneath it
 

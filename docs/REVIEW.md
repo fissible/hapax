@@ -311,6 +311,50 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 14 (continued) — raised on review of the rewrite design, before any test existed
+
+**The provider contract deleted `Selector` from the design.** The component table declares
+`rewrite` as depending on five interfaces — `Scorer`, `Selector`, `Gate`, `Provider`, `Store`
+— and the first draft of this section reduced the provider to one method taking the current
+text and returning a candidate. A provider written against that could not receive exemplars
+at all, which makes ADR 0007's boundary inexpressible: *only the draft passage and a handful
+of exemplars are ever sent, never the corpus*. A provider handed only a passage has nothing
+else it could send, so the rule would have been satisfied vacuously rather than honoured, and
+the anchor to the author's own prose would have been quietly removed.
+
+→ `RewriteRequest` carries the segment, the selected exemplars, the profile and invocation
+identity, and the provider settings including `--local-only`. Prompt assembly is a named
+boundary and fencing exemplars as untrusted data is the interface's obligation, not a
+convention implementations are trusted to remember.
+
+**Reassembly was declared "separate" with no owner, which is a gap rather than a boundary.**
+`hapax rewrite draft.md` had no component able to produce its output.
+
+→ `assemble` owns it, with a stated contract: ordered non-overlapping raw spans; every
+untouched byte and every excision inside a replaced span preserved exactly, a replacement
+spanning an excision being refused rather than resolved; and all-or-nothing output, since a
+file half in the author's voice and half in the model's is worse than an error.
+
+**"Retains before/after artifacts" and the store's privacy invariant were in direct
+tension.** The invariant forbids any reversible prose representation across the database, its
+sidecars, exports, logs and diagnostics. Left unresolved, "auditable" is the word under which
+prose gets persisted.
+
+→ The audit record is a whitelist: span reference, content hashes of both sides, distance and
+band, preserve verdict and what it found missing, tells comparison, rejection code, and
+provider and invocation identity. Candidate text lives only in the output the user asked for,
+and a **rejected** candidate is not retained at all — it is precisely prose the user never
+chose to keep.
+
+**The cap had no operational semantics, and the obvious reading does not terminate.** It was
+described as bounding accepted rewrites while each pass was called a generator call.
+
+→ It counts attempts, accepted or rejected: a cap on acceptances alone lets a provider that
+never produces an acceptable candidate loop for ever. `current` advances only on acceptance;
+a rejection leaves it unchanged and the provider is asked again against the same text, since
+a rejection is a property of one candidate rather than of the segment. The loop stops at the
+cap or when the provider returns no candidate.
+
 ## Round 14 — VERDICT: REVISE (raised while scoping `rewrite`)
 
 **ε was the wrong shape, and a plausible value for it would have made the tool worse as its
