@@ -311,6 +311,44 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 12 — VERDICT: REVISE (raised while scoping the discrimination gate)
+
+**"A predeclared minimum AUC" declared no minimum, no orientation and no tie rule.** Three
+omissions, and the middle one is the dangerous kind. `d` is a distance, so discrimination
+means `P(d_author < d_distractor)`; an implementation reaching for the conventional
+"probability the positive scores higher" computes 1 − AUC and reports 0.15 for a profile
+that separates cleanly. That is low enough to read as failure and high enough not to read as
+a bug, and no arithmetic anywhere would object.
+
+→ Orientation written into Section 2 as a formula rather than left to the reader. Ties count
+as a half, the Mann–Whitney convention, stated because `d` ties often: it is a mean of six
+rank-transformed deviations that are themselves capped by the reference size.
+
+**The floor is a judgement and is labelled as one.** 0.80. Unlike the band minimums nothing
+derives it — it answers how good is good enough. What informs it is that this tool's output
+drives edits to the user's own writing: ADR 0006's loop accepts a rewrite whenever `d`
+improves, so a barely-discriminating `d` turns that loop into noise-driven vandalism. Also
+recorded is that v1's six Tier A features at paragraph scale may well not clear it, and that
+this is the designed behaviour rather than a number to relax later.
+
+**The same bootstrap degeneracy, mirrored.** The band floor found that a rate observed as
+zero resamples to zero and reports an over-confident upper bound. Perfect separation is the
+same failure from the other end: AUC observed at 1.0 resamples to 1.0 and reports a lower
+bound of 1.0 for a profile that has merely never misordered a pair yet.
+
+→ The bound is the lesser of the bootstrap percentile and 1 − 3/*c* over the smaller class's
+cluster count. The floor then implies fifteen clusters per class, which is less demanding
+than the band gate's thirty and sixty — the right ordering, since a band makes a narrower
+claim than the profile as a whole.
+
+**Nothing said the gates compose, or in which direction.** ADR 0005 lists two gates and
+leaves a caller to apply them.
+
+→ Discrimination is prior: below its floor no band is emitted whatever the band-level
+evidence says. The reverse does not hold. The composition is owned by a release verdict
+rather than left as a convention, for the same reason the band collapse was moved inside the
+calibration — a rule a caller must remember is a rule a caller will forget.
+
 ## Round 11 (continued) — raised by the reviewer of the frozen-first test suite
 
 **The rule-of-three floor smuggled back the independence assumption the bootstrap exists to
