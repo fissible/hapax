@@ -876,27 +876,36 @@ zero resamples to zero every time, so the bootstrap reports an upper bound of ex
 a band that has simply never been wrong yet. That is the most over-confident answer
 available, and it is worst precisely where the evidence is thinnest.
 
-The bound is therefore **the greater of the clustered bootstrap percentile and 3/*n***,
-where *n* is the size of the class whose error is bounded — the rule of three, the one-sided
-95% bound on a zero count from *n* independent observations. Stated plainly, this is a
-declared conservatism rather than a theorem: **never claim a tighter bound than a perfect
-independent sample of this size could support.** The bootstrap contributes the clustering,
-the floor contributes what the bootstrap cannot see.
+The bound is therefore **the greater of the clustered bootstrap percentile and 3/*c***,
+where *c* is the number of **clusters** in the class whose error is bounded. Stated plainly,
+this is a declared conservatism rather than a theorem: **never claim a tighter bound than a
+perfect sample of this many independent units could support.** The bootstrap contributes the
+clustering; the floor contributes what the bootstrap cannot see.
 
-**The minimum held-out count is then a consequence rather than a second gate.** Since the
-bound is at least 3/*n*, a band whose target is *p* cannot clear it below *n* = ⌈3/*p*⌉:
-**60 author segments for `not you` at `p_author` = 0.05, and 30 distractor segments for
-`in range` at `p_distractor` = 0.10.** That figure is reported so a user is told how much
-more writing a band needs, but it is not tested separately — the bound already enforces it,
-and one rule that implies the other is better than two that could disagree.
+The denominator is the cluster count and not the segment count, and the difference is not
+cosmetic. A hundred error-free segments drawn from one document are one independent
+observation, not a hundred, and 3/100 would claim a bound of 0.03 from evidence that
+supports nothing of the sort. Applying the rule of three at the segment level would
+contradict the entire reason this section resamples clusters — it would smuggle the
+independence assumption back in through the floor after the bootstrap had been built to
+avoid it.
+
+**The minimum held-out count is then a consequence rather than a second gate, and it is a
+demanding one.** Since the bound is at least 3/*c*, a band whose target is *p* cannot clear
+it below *c* = ⌈3/*p*⌉ **clusters**: **60 held-out author documents for `not you` at
+`p_author` = 0.05, and 30 distractor clusters for `in range` at `p_distractor` = 0.10.**
+That is a real cost and it is stated rather than softened — a band is a claim about an error
+rate, and there is no sample size below this at which such a claim can be made. The figure
+is reported so a user knows what a band needs, and not tested separately, because one rule
+that implies the other is better than two that could disagree.
 
 **A class with no held-out segments at all bounds nothing**, and 3/0 is not a number. The
 bound is reported as 1 — the widest a rate can be — which fails every target below it and
 refuses the band. Reporting 0 there would be the same over-confidence the floor exists to
 stop, arrived at from the other direction.
 
-The count that matters is the size of the **class whose error is being bounded**, not the
-band's occupancy. Occupancy by the other class is not evidence about the rate the band
+The count that matters is the **class whose error is being bounded**, not the band's
+occupancy. Occupancy by the other class is not evidence about the rate the band
 claims. Occupancy is reported for both classes because it tells a reader whether a label is
 ever reached, but a band is not refused for being unvisited.
 
@@ -905,6 +914,14 @@ adjacent band in the only ordering that matters here — from a claim to no clai
 claiming bands fail, everything would report `drifting`, which is not a band set but an
 absence of one, so the profile reports `uncalibrated` instead of dressing the absence as a
 result.
+
+**Collapse is applied by the calibration, not left to the caller.** The threshold artifact
+answers a geometric question — which side of the boundaries a distance falls on — and the
+calibration answers the one that matters: which label may actually be emitted. A consumer
+that had to read the band reports and then apply the thresholds itself could emit a label
+the gate refused, which is the one outcome this whole section exists to prevent. So the
+calibration carries the classification, and it is the only one `score` and `rewrite` are
+given.
 
 ### Registers: user-named, distractor pools declared
 

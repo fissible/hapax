@@ -26,8 +26,17 @@ that no score may be emitted before a protocol exists that gives it meaning.
   distractor rate with confidence intervals. Discrimination alone cannot justify a label.
 - **Two gates.** Below the discrimination floor the profile is `uncalibrated`: raw distance
   and feature deltas are still emitted, no band is, and `rewrite` refuses to run. A band
-  failing its minimum held-out count or its declared interval is not emitted and collapses
-  to the adjacent wider band; other bands remain usable.
+  failing its calibration test is not emitted and collapses to `drifting`; other bands
+  remain usable.
+
+  *Amended 2026-08-29, on scoping the band gate.* This clause previously said a band failed
+  by missing "its minimum held-out count or its declared interval". Neither quantity existed:
+  no minimum was ever declared, and "the observed rate must fall inside its declared
+  confidence interval" is vacuous, since a point estimate always lies inside an interval
+  computed from it. The test is now stated in Section 2 under "The band calibration floor" —
+  a claiming band is emitted only when the one-sided upper bound on its own error rate,
+  measured on Test, is at or below the target its threshold was built to respect. The minimum
+  count is a consequence of that bound rather than a separate gate.
 - **Provenance.** Every result is stamped with corpus hash, profile version and feature-set
   version.
 
