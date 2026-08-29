@@ -919,11 +919,28 @@ never the corpus.** A provider that received only a string could not honour that
 it would have nothing to send but the passage — and a later change adding exemplars would have
 no declared place to put them.
 
-**Prompt assembly is a named boundary, and exemplars cross it as untrusted data.** Corpus
-prose may itself read as instructions, so exemplars are fenced when the prompt is built and
-that fencing is the provider interface's obligation rather than a convention its
-implementations are trusted to remember. `--local-only` is asserted by test, per ADR 0007: no
-cloud provider constructed, no credential read, no dial attempted.
+**Prompt assembly belongs to `rewrite`, not to its providers.** Corpus prose may itself read
+as instructions, and a request carrying raw exemplar strings cannot enforce anything: every
+provider implementation would have to remember to fence them, and one that forgot would have
+no test that failed. So the request carries an **assembled prompt** built by this package, and
+fencing is mechanical rather than conventional.
+
+**The fence is a line prefix, because a line prefix cannot be escaped out of.** A delimiter
+pair can be broken by exemplar text that contains the delimiter, and escaping that text is a
+second mechanism with its own failure modes. Every line of every exemplar is instead emitted
+behind a marker, so content that reads as an instruction stays behind it exactly as ordinary
+content does. The draft passage is marked distinctly from the exemplars, so the two are never
+confusable by position alone.
+
+**Exemplars arrive exactly as requested, or not at all.** A selector returning fewer than
+asked for is a silent reduction of the anchor to the author's own prose, and a substitution is
+worse. The loop requires the requested count and refuses otherwise rather than proceeding with
+a weaker prompt nobody chose.
+
+`--local-only` is asserted by test, per ADR 0007: no cloud provider constructed, no credential
+read, no dial attempted, no telemetry. That assertion belongs to the `llm` component, where a
+provider exists to construct; this component's obligation is to carry the setting into every
+request so a provider can honour it.
 
 Everything in the loop except `Provider` is deterministic, which is what lets the acceptance
 rule be tested exactly against fakes: a `Provider` returning scripted candidates, a `Selector`

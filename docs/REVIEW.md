@@ -311,6 +311,23 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 14 (further) — raised by the reviewer of the frozen-first test suite
+
+**A request carrying raw exemplar strings cannot enforce fencing.** The corrected design made
+fencing "the provider interface's obligation", which is a convention rather than a mechanism:
+every implementation would have to remember it, and one that forgot would have no failing
+test. This is the same shape as the finding that the provider contract had deleted `Selector`
+— a rule stated where nothing can check it.
+
+→ Prompt assembly moves into `rewrite`. The request carries an assembled prompt, and the fence
+is a **line prefix** rather than a delimiter pair, because a delimiter can be broken by
+exemplar text containing it while a prefix applied to every line cannot be escaped out of.
+
+**A selector returning fewer exemplars than asked for is a silent reduction.** The suite's own
+fake truncated quietly, which is exactly the behaviour the loop must refuse.
+
+→ The requested count is required. Fewer is an error, not a weaker prompt nobody chose.
+
 ## Round 14 (continued) — raised on review of the rewrite design, before any test existed
 
 **The provider contract deleted `Selector` from the design.** The component table declares
