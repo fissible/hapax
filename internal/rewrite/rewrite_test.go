@@ -275,8 +275,15 @@ func TestDeclaredFigures(t *testing.T) {
 	if rewrite.Epsilon != 1e-9 {
 		t.Errorf("Epsilon = %v, want 1e-9", rewrite.Epsilon)
 	}
-	if got := rewrite.DefaultOptions(); got.Attempts != 3 {
+	got := rewrite.DefaultOptions()
+	if got.Attempts != 3 {
 		t.Errorf("default attempts = %d, want 3", got.Attempts)
+	}
+	// A default that requested no exemplars would send a prompt with no author
+	// exemplar at all — the anchor to the author's own prose absent, silently,
+	// from the configuration a caller is most likely to reach for.
+	if got.Exemplars != 3 {
+		t.Errorf("default exemplars = %d, want 3", got.Exemplars)
 	}
 }
 
@@ -840,6 +847,24 @@ func TestRewriteRefusesBadInput(t *testing.T) {
 			loop.Options.Attempts = attempts
 			if _, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: original, SpanRef: "s"}); !errors.Is(err, rewrite.ErrInvalidOptions) {
 				t.Errorf("attempts %d: err = %v, want %v", attempts, err, rewrite.ErrInvalidOptions)
+			}
+		}
+	})
+
+	// Zero exemplars is not a configuration. ADR 0007 permits the passage and a
+	// handful of exemplars, and the exemplars are the anchor to the author's own
+	// prose rather than an optional extra — a prompt without them asks a model
+	// to write in a style it has not been shown.
+	//
+	// Added by consensus: the first implementation accepted it, and
+	// DefaultOptions left the count at zero, so the configuration a caller is
+	// most likely to reach for would have sent no exemplar at all.
+	t.Run("a non-positive exemplar count", func(t *testing.T) {
+		for _, exemplars := range []int{0, -1} {
+			loop := base()
+			loop.Options.Exemplars = exemplars
+			if _, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: original, SpanRef: "s"}); !errors.Is(err, rewrite.ErrInvalidOptions) {
+				t.Errorf("exemplars %d: err = %v, want %v", exemplars, err, rewrite.ErrInvalidOptions)
 			}
 		}
 	})

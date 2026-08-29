@@ -941,6 +941,12 @@ to the passage is part of the contract — a marker somewhere in the prompt mark
 A blank exemplar line is emitted as the prefix alone, verbatim, so that "every line is fenced"
 is checkable rather than inferred from the lines that happen to have content.
 
+**Zero exemplars is not a configuration.** ADR 0007 permits the passage *and a handful of
+exemplars*, and the exemplars are the anchor to the author's own prose rather than an
+optional extra: a prompt without them asks a model to write in a style it has not been shown.
+A non-positive count is refused rather than honoured, and the declared default is **three** —
+a handful, and few enough to keep the boundary tight.
+
 **Exemplars arrive exactly as requested, or not at all.** A selector returning fewer than
 asked for is a silent reduction of the anchor to the author's own prose, and a substitution is
 worse. The loop requires the requested count and refuses otherwise rather than proceeding with
