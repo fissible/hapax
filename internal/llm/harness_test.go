@@ -281,6 +281,9 @@ func localConfig(endpoint string) llm.Config {
 func cloudConfig() llm.Config {
 	cfg := llm.DefaultConfig()
 	cfg.Provider, cfg.Model, cfg.LocalOnly = llm.ProviderAnthropic, "claude-sonnet-5", false
+	// DefaultConfig carries the local endpoint, and a cloud provider carrying
+	// one is a construction error — so a cloud configuration must clear it.
+	cfg.LocalEndpoint = ""
 	return cfg
 }
 

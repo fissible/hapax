@@ -1203,7 +1203,12 @@ func TestSuccessIsTheTwoHundredClass(t *testing.T) {
 		for _, c := range []struct {
 			status int
 			ok     bool
-		}{{199, false}, {200, true}, {299, true}, {300, false}} {
+		}{{200, true}, {299, true}, {300, false}} {
+			// 199 is deliberately absent. Measured: a handler writing 199
+			// delivers 200 to the client, because Go's stack treats 1xx as
+			// informational and sends the implicit final status after it. A
+			// sub-200 final status cannot reach a client through a real server,
+			// so asserting it would test the harness rather than the provider.
 			t.Run(p.name+"/"+itoa(c.status), func(t *testing.T) {
 				h := newHarness(t, p.kind, p.addr)
 				h.handler = func(w http.ResponseWriter, r *http.Request) {
