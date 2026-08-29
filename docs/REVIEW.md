@@ -311,6 +311,38 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 10 (continued) — raised by the reviewer of the frozen-first test suite
+
+**The seed could be recorded, identifying, and entirely unused.** Naming PCG fixed the
+algorithm but not how a convenience method consumes it, so an implementation could record the
+declared seed, put it in the identity, and draw from a fixed hidden stream. Every structural
+assertion would still pass.
+
+→ The draw is specified as a pure function of the seed: one SplitMix64 stream per class,
+initialised to `seed + 1` and `seed + 2`, consumed one draw per cluster per resample, index
+taken modulo the cluster count. That is reproducible by a second implementation, which is
+what makes exact endpoint assertions possible — and an exact endpoint is the only thing that
+proves the seed was used at all. Naming PCG also left its two seed words undeclared, which
+this removes.
+
+**"Too wide to be actionable" had no test.** ADR 0005 has required it throughout; the
+interval slice computed widths and never judged them.
+
+→ Derived rather than declared: the two intervals must not overlap. If they do, the data does
+not resolve the boundaries from each other and the three regions are not distinguishable.
+Usability and actionability are reported separately because their remedies differ — more
+writing versus better separation — and the artifact carries the conjunction so a consumer
+cannot check one and miss the other.
+
+**A correction to a finding, recorded because the reasoning is instructive.** The reviewer
+held that a thin fixture of twenty distances over four documents qualifies only when all four
+documents are drawn exactly once, giving 4!/4⁴ ≈ 9.4%, and called the fixture flaky.
+Exhaustive enumeration over all 256 draws gives **56.25%**. The step that was missed is that
+a resample omitting the document holding the largest value can still qualify on the next
+value down. The fixture was changed anyway — to one document per distance — because the
+finding it exists to demonstrate is about the tail rather than the cluster count, and the
+fixture should say so directly.
+
 ## Round 10 — VERDICT: REVISE (raised while scoping the interval slice)
 
 **The clustering unit was specified as "by document and author" and one half of it no longer

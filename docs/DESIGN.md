@@ -772,7 +772,12 @@ identity:
   underlying data supports.
 - **A fixed declared seed**, recorded in the artifact. Section 2 forbids a score that changes
   on re-run, and a bootstrap is the one place in this pipeline where randomness enters; an
-  unrecorded seed would put it there.
+  unrecorded seed would put it there. The declared value is `0x68617061785F7631`.
+- **Percentile indices taken as order statistics, not interpolated.** On the *n* qualified
+  resample values sorted ascending, with α = 1 − confidence, the endpoints are the values at
+  ⌊α/2 × *n*⌋ and min(⌊(1 − α/2) × *n*⌋, *n* − 1). Every resample's threshold is a value some
+  segment produced, so an endpoint taken this way is one too — the same refusal of a boundary
+  the population never contained that governs the thresholds themselves.
 
 **A resample that yields no qualifying threshold is an outcome, not an error**, matching the
 treatment of degenerate cases above. Such resamples are counted and excluded from the
@@ -780,6 +785,19 @@ percentiles rather than aborting the estimate. But an interval assembled from a 
 degenerate resample distribution is describing a different population than the one asked
 about, so **at least 90% of resamples must qualify**; below that the interval is reported as
 not usable and the threshold it belongs to is not shipped.
+
+**Too wide to be actionable is a derived test, not another declared number.** ADR 0005 says
+a threshold whose interval is too wide is not shipped, and never said how wide is too wide.
+The geometry answers it without a stand-in: the interval on `t_low` and the interval on
+`t_high` must not overlap. If they do, the data does not resolve the two boundaries from
+each other, and `in range`, `drifting` and `not you` are not distinguishable regions — which
+is exactly what "not actionable" means here, and it needs no number.
+
+Usability and actionability are separate verdicts because they fail for different reasons and
+have different remedies: a population that qualifies too few resamples needs more writing,
+while one whose intervals overlap needs better separation. Both must hold before thresholds
+ship, so the artifact also carries the conjunction, and a consumer cannot reach for one
+verdict and miss the other.
 
 **The interval is computed from the population that produced the thresholds**, verified by
 requiring that population to reproduce the threshold artifact's identity. An interval drawn
@@ -799,10 +817,22 @@ enforces it and does so against the population actually supplied rather than aga
 number chosen in advance. The consequence is simply stated: **⌈1/*p*⌉ is the minimum to
 compute a boundary, not the minimum to ship one.**
 
-**The generator is named, not defaulted.** Reproducibility across Go releases cannot rest on
-a standard-library implementation detail, so resampling draws from **PCG** (`math/rand/v2`),
-whose stream is defined by the algorithm rather than by whichever source the runtime happens
-to provide.
+**The draw is specified, not delegated.** Reproducibility cannot rest on a standard-library
+implementation detail — not on which source the runtime provides, and not on how a
+convenience method happens to consume it. The resample indices are therefore a stated pure
+function of the seed:
+
+- Each class draws from its own **SplitMix64** stream, initialised to `seed + 1` for the
+  author class and `seed + 2` for the distractor class, so one class's cluster count cannot
+  shift the other's draws.
+- Draws are consumed in order — for each resample, one draw per cluster — and the cluster
+  index is the 64-bit output modulo the class's cluster count. The modulo bias at any
+  realistic cluster count is below 2⁻⁵⁸ and is accepted rather than rejection-sampled, which
+  would make the draw sequence depend on the cluster count.
+
+SplitMix64 is a published algorithm, so this is a specification a second implementation can
+reproduce, which is the property that matters. It is not a claim about statistical quality
+beyond what resampling needs.
 
 ### Registers: user-named, distractor pools declared
 
