@@ -311,6 +311,45 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 8 — VERDICT: REVISE (raised while scoping the distance `d`)
+
+**`z_max` survived a change that removed its job.** Winsorization was specified when
+deviations were unbounded standardized values. Round 7 made them bounded by construction,
+and nobody went back to ask what winsorization was still for. The arithmetic answers it: at
+a conventional 3 it does not bind until a feature carries 370 reference values, against an
+illustrative reference size of thirty, so as specified it is inert; set low enough to bind
+at realistic sizes it discards evidence the reference supports, and does so with one flat
+constant while the existing bound already scales per feature with the evidence behind it.
+
+→ Struck, with the same reasoning that struck `λ`: a parameter inherited from an earlier
+design that a later one made redundant, kept only because nothing forced the question. The
+cost of keeping it was not zero — a slot in the cache identity, a field in the reported
+record, and an owed sensitivity analysis over a value that changes nothing.
+
+**"Neither tier meets its minimum" named a minimum that was never stated.** The refusal rule
+has been in Section 2 and ADR 0006 throughout, and the quantity it turns on did not exist.
+
+→ A majority of the tier's manifest features must be available. Stated as a proportion
+rather than a count so it does not weaken as the manifest grows, and declared rather than
+derived, like every other minimum here.
+
+**`d` was a bare scalar, and ADR 0006 compares two of them.** The acceptance loop requires
+`d(candidate) ≤ d(current) − ε`. A rewrite can change which features are available, and a
+mean over one feature set is not comparable to a mean over another — the loop would accept a
+rewrite that moved only the denominator.
+
+→ `d` carries the set of features that produced it, so the comparison can be refused rather
+than silently made. Cheap here, and impossible to reconstruct later.
+
+**Tier B is empty and the design read as though it were not.** ADR 0003 puts three features
+in Tier B, all needing a rolling window that is not built; the manifest declares six Tier A
+features and nothing else.
+
+→ Stated plainly in Section 2, in the same spirit as ADR 0006's admission that its tells
+gate is currently inert: `d` and `d_A` are the same number in v1, every segment is reported
+Tier-A-only, and the blended path has no features to blend. The machinery is still built to
+specification rather than deferred, so Tier B's arrival does not find it unexercised.
+
 ## Round 7 — VERDICT: REVISE (raised while scoping the deviation slice)
 
 **The transformed deviation had no declared scale, and two later rules presuppose one.**

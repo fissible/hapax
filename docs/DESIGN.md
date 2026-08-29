@@ -268,12 +268,12 @@ Three disjoint roles, split by **whole document** and never by segment:
 
 | Split | Used for |
 |---|---|
-| **Train** | Feature selection, `z_max`, all tuning |
+| **Train** | Feature selection and all tuning |
 | **Calibrate** | Threshold and band-boundary estimation |
 | **Test** | Reported discrimination and band-rate figures |
 
-Anything fitted on Calibrate or Test contaminates the numbers it produces. `z_max` in
-particular must be fixed on Train, never chosen after seeing calibration results.
+Anything fitted on Calibrate or Test contaminates the numbers it produces, and nothing
+tunable may be chosen after seeing calibration results.
 
 ### Tier assignment is derived — and the derivation must not conflate three quantities
 
@@ -429,7 +429,7 @@ reinstate the problem this section is named for, since equal |z| is not equal ev
 across a bounded membership rate and a symmetric mean.
 
 **The transformed deviation stays on a z scale.** An empirical-CDF rank is a percentile in
-[0,1], and a percentile cannot be winsorized at `z_max` nor averaged into "Manhattan in
+[0,1], and a percentile cannot be winsorized nor averaged into "Manhattan in
 transformed space, the same form as Burrows' Delta" — Delta averages |z|. The rank is
 therefore mapped back through the normal quantile function, which keeps the comparability
 ranking bought while leaving the quantity on the scale the rest of Section 2 assumes.
@@ -444,8 +444,9 @@ taking their midrank. That is symmetric in both tails and never reaches 0 or 1.
 The consequence is stated rather than left to be discovered from a surprising histogram: the
 position bounds |deviation| at Φ⁻¹(1 − 1/2*m*), which is about **2.14 at thirty reference
 segments, 2.58 at a hundred, and only 1.69 at ten**. The reference size caps deviation
-magnitude on its own, `z_max` binds only above that cap, and at small reference sizes the
-cap — not `z_max` — is the operative limit. This is published beside the minimum reference
+magnitude on its own, and does so per feature rather than globally: a feature with a thin
+reference is capped harder than one with a thick one, which is the correct ordering and the
+one a single flat constant cannot express. This is published beside the minimum reference
 size, and is a further reason that minimum is a real figure rather than a formality.
 
 **Deviations are emitted in manifest order, and every manifest feature is
@@ -504,10 +505,23 @@ it happened to know about, which cannot notice a field added elsewhere.
 `d` is a weighted robust mean of transformed deviations — Manhattan in transformed space,
 the same form as Burrows' Delta, generalized beyond function words.
 
-**Winsorization, named as such.** Deviations are winsorized at `z_max`. This is a
-robust-loss choice, not a principle: it stops one broken feature dominating, and it
-deliberately discards strong *not you* evidence. `z_max` is fixed on Train and shipped with
-a sensitivity analysis over its value.
+**The robust loss is the rank transform, and `z_max` is struck.** Winsorization at a fixed
+`z_max` was specified when deviations were unbounded standardized values, where one broken
+feature really could dominate an average. After the rank transform it cannot: the plotting
+position bounds every deviation at Φ⁻¹(1 − 1/2*m*), so under uniform weights over *k*
+available features a single feature's largest possible share of `d` is its own cap over *k*.
+
+The numbers show `z_max` has nothing left to do. A conventional `z_max` = 3 does not bind
+until a feature carries 370 reference values, and this section's illustrative reference size
+is thirty; set low enough to bind at realistic sizes — 2.0 binds from twenty-one — it
+discards evidence the reference does support, and it discards it uniformly, ignoring that a
+thinly-referenced feature is already capped lower. The existing bound scales with the
+evidence behind each feature. A flat constant cannot, and would replace a better mechanism
+with a worse one.
+
+So `z_max` is struck rather than kept as an inert knob in the cache identity and the
+reported record, with a sensitivity analysis owed over a value that changes nothing. If a
+future scheme reintroduces an unbounded deviation, winsorization returns with it.
 
 **The weighting is declared, not implied.** Uniform, expert, inverse-redundancy and
 learned weights are materially different models, so the scheme is recorded and versioned
@@ -536,6 +550,36 @@ fitting left to restrain, and as a Tier A/Tier B blend it duplicates machinery t
 exists, since `d` averages over whichever features a segment makes available and a
 Tier-A-only score already carries its own threshold artifact. A future fitted-weights slice
 reintroduces it with a definition, which is when it earns a place in the reported record.
+
+**`d` is the mean of the absolute transformed deviations over the features a segment
+actually makes available**, with uniform weights. A feature that is undefined on the
+segment, or whose reference is too small, contributes nothing and is not counted in the
+denominator — averaging it in as a zero would read as "exactly typical", which is the single
+most misleading value available for something not measured.
+
+**A tier's minimum is a majority of its manifest features.** Section 2 says neither tier
+meeting its minimum gives insufficient evidence, and never said what the minimum was. It is
+stated as a proportion rather than a count so it does not silently weaken as the manifest
+grows: three of twenty available features would be 15% coverage under a fixed count of
+three, and the same words would mean something quite different. Like every other minimum
+here it is **declared, not derived**, and published with its measured consequences.
+
+**`d` records the features that produced it.** ADR 0006's acceptance loop compares
+`d(candidate) ≤ d(current) − ε`, and a rewrite can change which features are available — a
+candidate long enough to define a feature the original was not, or short enough to lose one.
+Two `d` values that are means over different feature sets are not on the same scale, and
+comparing them would let the loop accept a rewrite that only moved the denominator. The
+contributing set travels with the number so the comparison can be refused rather than
+silently made.
+
+**Tier B is empty in v1, so every score is a Tier-A-only score.** ADR 0003 assigns the
+function-word distribution, hapax ratio and sentence-opener distribution to Tier B, and all
+three need a rolling window of several hundred tokens that is not built. The manifest today
+declares six Tier A features and none in Tier B. The tier machinery is implemented as
+specified rather than deferred, because the alternative is discovering at Tier B's arrival
+that the blended path was never exercised — but the honest statement of the present position
+is that `d` and `d_A` are the same number, every segment is reported Tier-A-only, and the
+blended path has no features to blend.
 
 **Tier-A-only scores get their own calibration.** `d_A` alone is not drawn from the same
 distribution as the blended `d`, so it cannot share thresholds. It carries a separate
@@ -665,13 +709,13 @@ and it is not yet built.
 
 **Scoring artifacts are keyed by content, not by name.** The cache identity includes the
 hash of: the selected feature set, every transform and its parameters, the derived minimum
-sample sizes, `z_max`, the weighting scheme and its version, missingness rules, seeds,
+sample sizes, the weighting scheme and its version, missingness rules, seeds,
 split identity, the threshold artifact, and the distractor-pool identity. Anything that can
 change a score is in the key.
 
 ### Numerical targets are outputs, not inputs
 
-`p_author`, `p_distractor`, the AUC floor, the noise/signal fraction, `k`, `z_max` and every
+`p_author`, `p_distractor`, the AUC floor, the noise/signal fraction, `k` and every
 minimum sample size are **declared before measurement and published with their measured
 outcomes and intervals**. Where a target cannot be met, the honest result is a refusal to
 emit that band — never a quietly relaxed target.
