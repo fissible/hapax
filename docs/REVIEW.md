@@ -311,6 +311,36 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 11 (continued) — raised by the reviewer of the frozen-first test suite
+
+**The rule-of-three floor smuggled back the independence assumption the bootstrap exists to
+avoid.** The floor was written as 3/*n* over segments. But a hundred error-free segments
+drawn from one document are one independent observation, not a hundred, so 3/100 would claim
+a bound of 0.03 from evidence supporting nothing of the sort — and it would do so
+immediately after the bootstrap had gone to the trouble of resampling clusters precisely
+because segments are not independent. A floor is not exempt from the assumption the estimator
+rejects.
+
+→ The denominator is the **cluster** count. The consequence is much more demanding and is
+published rather than softened: a band needs ⌈3/*p*⌉ *clusters*, which is **60 held-out
+author documents** and **30 distractor clusters** at the v1 targets. That is what a claim
+about an error rate costs.
+
+**Nothing applied the collapse.** The gate decided which bands may be emitted and left a
+consumer to read the reports and apply the thresholds itself — which is exactly how a label
+the gate refused gets emitted anyway.
+
+→ The calibration carries the classification. The threshold artifact answers a geometric
+question, which side of the boundaries a distance falls on; the calibration answers the one
+that matters, which label may be emitted, collapsing refused bands to `drifting` and
+refusing entirely when uncalibrated. `score` and `rewrite` are given only the second.
+
+**ADR 0005 still carried the vacuous contract.** Section 2 superseded it, but an accepted ADR
+saying a band fails by missing "its minimum held-out count or its declared interval" would
+have let the old reading back in.
+
+→ Amended in place, with the reason recorded: neither quantity existed.
+
 ## Round 11 — VERDICT: REVISE (raised while scoping the band calibration slice)
 
 **The band calibration test did not test anything.** ADR 0005 and Section 1 both required
