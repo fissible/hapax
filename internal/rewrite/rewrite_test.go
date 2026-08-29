@@ -717,18 +717,28 @@ func TestExemplarsAreSelectedOncePerInvocation(t *testing.T) {
 		t.Errorf("the selector was asked %d times over 3 attempts, want once", selector.calls)
 	}
 
-	// And every request carried the same sample.
-	for i, req := range provider.requests {
-		if len(req.exemplars) != len(provider.requests[0].exemplars) {
-			t.Fatalf("request %d carried %d exemplars, want %d", i, len(req.exemplars), len(provider.requests[0].exemplars))
-		}
-		for j := range req.exemplars {
-			if req.exemplars[j] != provider.requests[0].exemplars[j] {
-				t.Errorf("request %d exemplar %d is %q, want the first request's %q",
-					i, j, req.exemplars[j], provider.requests[0].exemplars[j])
-			}
+	// And every request carried the same sample. The prompts themselves differ,
+	// because the passage advances on acceptance, so what is compared is the
+	// exemplar section — everything before the passage marker — which is the
+	// form the exemplars actually reach a provider in.
+	first := exemplarSectionOf(provider.prompts[0])
+	if first == "" {
+		t.Fatalf("the first prompt has no exemplar section")
+	}
+	for i, prompt := range provider.prompts {
+		if got := exemplarSectionOf(prompt); got != first {
+			t.Errorf("request %d carried a different exemplar section:\n%s\nwant:\n%s", i, got, first)
 		}
 	}
+}
+
+// exemplarSectionOf is everything before the passage marker.
+func exemplarSectionOf(prompt string) string {
+	at := strings.Index(prompt, rewrite.PassageMarker)
+	if at < 0 {
+		return ""
+	}
+	return prompt[:at]
 }
 
 // And the identity the result is attributed to, and the local-only setting,
