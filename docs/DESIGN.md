@@ -268,7 +268,7 @@ Three disjoint roles, split by **whole document** and never by segment:
 
 | Split | Used for |
 |---|---|
-| **Train** | Feature selection, weights `w`, `λ`, `z_max`, all tuning |
+| **Train** | Feature selection, `z_max`, all tuning |
 | **Calibrate** | Threshold and band-boundary estimation |
 | **Test** | Reported discrimination and band-rate figures |
 
@@ -428,6 +428,45 @@ paragraph-Delta error correction 1 exists to prevent. Standardizing without rank
 reinstate the problem this section is named for, since equal |z| is not equal evidence
 across a bounded membership rate and a symmetric mean.
 
+**The transformed deviation stays on a z scale.** An empirical-CDF rank is a percentile in
+[0,1], and a percentile cannot be winsorized at `z_max` nor averaged into "Manhattan in
+transformed space, the same form as Burrows' Delta" — Delta averages |z|. The rank is
+therefore mapped back through the normal quantile function, which keeps the comparability
+ranking bought while leaving the quantity on the scale the rest of Section 2 assumes.
+
+**The plotting position is declared, because it is visible in the output.** An empirical CDF
+over *n* reference values returns 0 for anything below all of them and 1 for anything above,
+and the normal quantile is infinite at both. At thirty reference segments that is not an
+edge case: it is one segment in thirty per tail. The segment is therefore ranked within the
+reference **plus itself** — *m* = *n* + 1 values — at the (*i* − ½)/*m* position, with ties
+taking their midrank. That is symmetric in both tails and never reaches 0 or 1.
+
+The consequence is stated rather than left to be discovered from a surprising histogram: the
+position bounds |deviation| at Φ⁻¹(1 − 1/2*m*), which is about **2.14 at thirty reference
+segments, 2.58 at a hundred, and only 1.69 at ten**. The reference size caps deviation
+magnitude on its own, `z_max` binds only above that cap, and at small reference sizes the
+cap — not `z_max` — is the operative limit. This is published beside the minimum reference
+size, and is a further reason that minimum is a real figure rather than a formality.
+
+**Deviations are emitted in manifest order, and every manifest feature is
+present.** This is a serialization contract, not a style preference: the reference
+distribution and the deviation record are both hashed into the scoring cache identity, and
+a set with no canonical order has no canonical hash. A feature that is unavailable appears
+with its reason rather than being omitted, so a reader can tell "measured and typical" from
+"not measured" without knowing the manifest by heart.
+
+**Undefined causes have a declared precedence.** A deviation can fail to exist for several
+reasons at once, and the reported one is the first reached checking the inputs in order:
+the segment value, the segment sampling variance, the profile statistic, the profile
+variance, then the combined variance. Left unstated, the reason a user is shown would depend
+on the order an implementation happened to write its guards in — and the reasons imply
+different remedies. Write more text, or fit a better profile, are not the same advice.
+
+**The deviation keeps its sign.** `d` takes absolute values, so the sign does not survive
+into the distance — but a segment below the author's usual comma density and one above it
+are different facts, and `rewrite` needs the direction. Discarding it at the source is
+irrecoverable; carrying it costs a float's sign bit.
+
 **The reference distribution is built on Calibrate and reported figures come from Test.**
 Section 2 assigns thresholds to Calibrate and reported figures to Test, so ranking a Test
 segment against a Calibrate-derived reference keeps the reported number honest. Train is
@@ -470,10 +509,33 @@ robust-loss choice, not a principle: it stops one broken feature dominating, and
 deliberately discards strong *not you* evidence. `z_max` is fixed on Train and shipped with
 a sensitivity analysis over its value.
 
-**Weights are learned, not asserted.** `w` and `λ` are fitted on Train against a declared
-objective — author-versus-distractor separation — with regularization and constraints
-stated, and a defined rule for missing features. Uniform, expert, inverse-redundancy and
-learned weights are materially different models; the choice is recorded, not implied.
+**The weighting is declared, not implied.** Uniform, expert, inverse-redundancy and
+learned weights are materially different models, so the scheme is recorded and versioned
+rather than left to be inferred from the code.
+
+**v1 declares uniform weights** — `w = 1` for every feature available on a segment — and
+defers fitting. Two reasons, both internal to this design. Fitting `w` against
+author-versus-distractor separation needs a distractor pool with genuine author diversity,
+and the corpus search closed without one; weights fitted on an engineering fixture would be
+exactly the false calibration claim that decision was taken to avoid. And fitting 150+
+weights on a personal corpus's Train split is the over-parameterization this section rejects
+Mahalanobis for, under a different name — a badly estimated weight vector is worse than an
+asserted flat one for the same reason an ill-conditioned covariance is worse than ignoring
+correlation.
+
+Uniform is a recorded stand-in, not a finding. It is named in the profile artifact and in
+the reported record, and the scheme and its version are part of the scoring cache identity,
+so a later fitted scheme cannot be served from a cache built under this one. A fitted scheme
+remains the intended destination and arrives with its objective, regularization,
+constraints, and missing-feature rule stated — the terms this paragraph previously asserted
+without meeting.
+
+**`λ` is struck.** It was named as Train-fitted in three places and defined in none. Neither
+available reading survives the uniform choice: as a regularization strength it has no
+fitting left to restrain, and as a Tier A/Tier B blend it duplicates machinery that already
+exists, since `d` averages over whichever features a segment makes available and a
+Tier-A-only score already carries its own threshold artifact. A future fitted-weights slice
+reintroduces it with a definition, which is when it earns a place in the reported record.
 
 **Tier-A-only scores get their own calibration.** `d_A` alone is not drawn from the same
 distribution as the blended `d`, so it cannot share thresholds. It carries a separate
@@ -603,8 +665,9 @@ and it is not yet built.
 
 **Scoring artifacts are keyed by content, not by name.** The cache identity includes the
 hash of: the selected feature set, every transform and its parameters, the derived minimum
-sample sizes, `z_max`, `w`, `λ`, missingness rules, seeds, split identity, the threshold
-artifact, and the distractor-pool identity. Anything that can change a score is in the key.
+sample sizes, `z_max`, the weighting scheme and its version, missingness rules, seeds,
+split identity, the threshold artifact, and the distractor-pool identity. Anything that can
+change a score is in the key.
 
 ### Numerical targets are outputs, not inputs
 

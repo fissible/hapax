@@ -311,6 +311,85 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 7 — VERDICT: REVISE (raised while scoping the deviation slice)
+
+**The transformed deviation had no declared scale, and two later rules presuppose one.**
+Correction 2 outputs an empirical-CDF rank, which is a percentile in [0,1]. `z_max`
+winsorization is vacuous on a bounded percentile, and a mean of percentiles is not "the same
+form as Burrows' Delta", which averages |z|. Round 5 fixed the order the corrections compose
+in and left the codomain unstated, which is the same class of omission one step further on.
+
+→ The rank is mapped back through the normal quantile function. Comparability across
+features is what ranking buys and it survives the mapping; the quantity lands back on the
+scale `z_max`, the Delta analogy, and the band logic all already assume.
+
+**An empirical CDF returns 0 and 1, where the normal quantile is infinite.** With thirty
+reference segments this is not an edge case — it is every segment more extreme than the
+reference has seen, which at thirty points is one in thirty per tail.
+
+→ The segment is ranked within the reference plus itself, *m* = *n* + 1 values, at the
+(*i* − ½)/*m* position with midranks for ties — symmetric in both tails and never 0 or 1.
+Ranking against the *n* reference values alone cannot be made symmetric: *n* points leave
+*n* + 1 gaps, so any position over *n* is short a cell at one end. Declared rather than
+chosen silently, because it is visible in the output: it caps |deviation| at
+Φ⁻¹(1 − 1/2*m*) — 2.14 at thirty reference segments, 2.58 at a hundred, 1.69 at ten. At
+small reference sizes that cap, not `z_max`, is the operative limit.
+
+**The reference split was a caller-supplied label with nothing behind it.** Raised by the
+reviewer of the frozen-first test suite. A reference is declared to be built on Calibrate,
+but a standardization carried no record of where it came from, so Train or Test segments
+passed with a Calibrate argument and the split boundary the whole reference rests on was
+enforced by the caller remembering it.
+
+→ Each standardization carries its own split, set at the point that actually knows it, and a
+reference refuses any segment not from the split it claims. The package still cannot verify
+a split it is never told — but it can refuse to accept a claim nobody made, which is the
+difference between an unchecked argument and a checked field.
+
+**Serialization order and undefined-cause precedence were being frozen in tests without
+being stated anywhere.** Also raised by the test reviewer, and correct as an objection: a
+test file is not where design is decided.
+
+→ Both adopted into Section 2 rather than dropped. Manifest order is load-bearing because
+the reference and the deviation record are hashed into the scoring cache identity and an
+unordered set has no canonical hash. Precedence is load-bearing because the causes imply
+different remedies, and which one a user is shown should not depend on the order the guards
+happened to be written in.
+
+**The sign had no stated fate.** `d` takes absolute values, which invites discarding the
+sign at the source.
+
+→ Kept. Below the author's usual comma density and above it are different facts, and
+`rewrite` needs the direction. It costs a sign bit and cannot be recovered later.
+
+## Round 6 — VERDICT: REVISE (raised while scoping the distance `d`)
+
+**The weighting scheme was asserted as fitted without the conditions for fitting.** Section 2
+declared `w` "learned, not asserted", fitted on Train against author-versus-distractor
+separation with regularization and constraints stated. None of those terms was stated
+anywhere, and two of the preconditions do not currently hold: there is no distractor pool
+with author diversity to separate against, and fitting 150+ weights on a personal corpus's
+Train split is the over-parameterization the same section rejects Mahalanobis for. A design
+cannot reject a covariance estimate at 150+ dimensions as unsupportable and then require a
+weight vector of the same dimension from the same data.
+
+→ v1 declares uniform weights, records the choice in the profile artifact and the reported
+record, and puts the scheme and its version in the scoring cache identity so a later fitted
+scheme cannot be served from a cache built under this one. Fitting stays the intended
+destination and arrives with its objective, regularization, constraints, and missing-feature
+rule actually stated.
+
+**`λ` was named in three places and defined in none.** It appeared in the Train-fitted list,
+in the weighting paragraph, and in the cache identity. Nothing said what quantity it
+weighted. A symbol that reaches the reported record without a definition is a field no one
+can fill in.
+
+→ Struck. Neither available reading survives the uniform choice: as a regularization
+strength it has nothing left to restrain, and as a Tier A/Tier B blend it duplicates
+machinery that already exists, since `d` averages over whichever features a segment makes
+available and a Tier-A-only score already carries its own threshold artifact. A future
+fitted-weights slice reintroduces it with a definition.
+
 ## Round 5 — VERDICT: REVISE (raised while scoping the eval deviation slice)
 
 **Two corrections were named without saying how they compose.** Section 2 gives a
