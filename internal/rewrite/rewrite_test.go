@@ -679,6 +679,46 @@ func TestTheRequestCarriesSelectedExemplars(t *testing.T) {
 	}
 }
 
+// ADR 0004: exemplars are stable per profile and largely cacheable, rather than
+// recomputed per draft. If they do not vary per draft they do not vary between
+// attempts on one segment either, so the selector is asked ONCE per invocation
+// however many attempts follow.
+//
+// A loop that asked again each time would let a stateful selector change the
+// author's own writing underneath a running rewrite: the second attempt would be
+// anchored to a sample the first never saw.
+//
+// Added by consensus: the first implementation selected per attempt, and neither
+// the design section nor the suite carried ADR 0004's rule across.
+func TestExemplarsAreSelectedOncePerInvocation(t *testing.T) {
+	loop, _, selector, provider, _ := loopOver(t,
+		map[string]score.Report{
+			original: scored(0.90), better: scored(0.60), betterYet: scored(0.30), worse: scored(0.95),
+		},
+		[]string{better, betterYet, worse}, passingGate())
+
+	run(t, loop)
+	if len(provider.requests) != 3 {
+		t.Fatalf("got %d attempts, want 3", len(provider.requests))
+	}
+	if selector.calls != 1 {
+		t.Errorf("the selector was asked %d times over 3 attempts, want once", selector.calls)
+	}
+
+	// And every request carried the same sample.
+	for i, req := range provider.requests {
+		if len(req.exemplars) != len(provider.requests[0].exemplars) {
+			t.Fatalf("request %d carried %d exemplars, want %d", i, len(req.exemplars), len(provider.requests[0].exemplars))
+		}
+		for j := range req.exemplars {
+			if req.exemplars[j] != provider.requests[0].exemplars[j] {
+				t.Errorf("request %d exemplar %d is %q, want the first request's %q",
+					i, j, req.exemplars[j], provider.requests[0].exemplars[j])
+			}
+		}
+	}
+}
+
 // And the identity the result is attributed to, and the local-only setting,
 // which a provider cannot honour if it is never told.
 func TestTheRequestCarriesItsIdentityAndSettings(t *testing.T) {

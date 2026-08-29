@@ -311,6 +311,31 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 14 (final) — raised at the implementation consensus gate
+
+**Exemplars were selected once per attempt rather than once per invocation.** ADR 0004 says
+*exemplars are stable per profile and largely cacheable, rather than recomputed per draft*,
+and this section had not carried that across. A loop asking the selector again on each attempt
+lets a stateful selector change the author's own writing underneath a running rewrite: the
+second attempt would be anchored to a sample the first never saw.
+
+→ Selected and count-checked once, before the loop, and reused for every request.
+
+Worth recording how this was reached, because both parties were wrong first. I defended
+per-attempt selection on the grounds that neither the design nor ADR 0007 required otherwise,
+and the reviewer agreed — but neither of us had read ADR 0004, which decides it in one
+sentence. The reviewer then reversed its own agreement, and checking the source rather than
+either recollection settled it. **A claim about what the design permits is worth exactly as
+much as the reading behind it**, and "the ADR I checked does not say" is not the same as "no
+ADR says".
+
+**Zero exemplars was an accepted configuration**, and `DefaultOptions` shipped it. Found at
+the same gate. A prompt with no exemplars asks a model to write in a style it has not been
+shown, so the anchor to the author's own prose would have been absent from the configuration a
+caller is most likely to reach for — silently, since nothing refused it.
+
+→ A non-positive count is refused, and the declared default is three.
+
 ## Round 14 (further) — raised by the reviewer of the frozen-first test suite
 
 **A request carrying raw exemplar strings cannot enforce fencing.** The corrected design made

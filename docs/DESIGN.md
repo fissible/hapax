@@ -941,6 +941,13 @@ to the passage is part of the contract — a marker somewhere in the prompt mark
 A blank exemplar line is emitted as the prefix alone, verbatim, so that "every line is fenced"
 is checkable rather than inferred from the lines that happen to have content.
 
+**Exemplars are selected once per invocation, not once per attempt.** ADR 0004 settles this
+and this section had failed to carry it across: *exemplars are stable per profile and largely
+cacheable, rather than recomputed per draft*. If they do not vary per draft they certainly do
+not vary between attempts on one segment, and a loop that asked again each time would let a
+stateful selector change the author's own writing underneath a running rewrite — so the second
+attempt would be measured against an anchor the first never saw.
+
 **Zero exemplars is not a configuration.** ADR 0007 permits the passage *and a handful of
 exemplars*, and the exemplars are the anchor to the author's own prose rather than an
 optional extra: a prompt without them asks a model to write in a style it has not been shown.
