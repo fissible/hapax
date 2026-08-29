@@ -341,14 +341,25 @@ rewrite that moved only the denominator.
 → `d` carries the set of features that produced it, so the comparison can be refused rather
 than silently made. Cheap here, and impossible to reconstruct later.
 
-**Tier B is empty and the design read as though it were not.** ADR 0003 puts three features
-in Tier B, all needing a rolling window that is not built; the manifest declares six Tier A
-features and nothing else.
+**Tier B does not exist, and the design read as though it were merely empty.** ADR 0003 puts
+three features in Tier B, all needing a rolling window that is not built. The manifest
+declares six Tier A features and nothing else, and `TierB` is not a declared constant. A
+first pass at this round proposed declaring it and building the tier machinery against it;
+that was wrong. An empty tier is a tier whose minimum can never be met, so every v1 score
+would be flagged partial against something that does not exist, and the machinery would be
+"exercised" only over a tier with no features in it.
 
-→ Stated plainly in Section 2, in the same spirit as ADR 0006's admission that its tells
-gate is currently inert: `d` and `d_A` are the same number in v1, every segment is reported
-Tier-A-only, and the blended path has no features to blend. The machinery is still built to
-specification rather than deferred, so Tier B's arrival does not find it unexercised.
+→ The tier set is derived from the manifest instead. Today it resolves to one tier and there
+is nothing to blend; the day a Tier B feature is added it resolves to two, with the per-tier
+minimums and the partial-score rule already in force and no code change. The manifest digest
+changes at that same moment, so no threshold artifact crosses the boundary.
+
+**The Tier-A-only threshold rule was stated as a case rather than a rule.** It said what
+happens when Tier B is unavailable and left Tier A unavailable with Tier B available
+undefined — reachable in principle, and silent.
+
+→ Generalized: any proper subset of the manifest's tiers carries its own threshold artifact
+and is flagged. The reason was never specific to Tier A.
 
 ## Round 7 — VERDICT: REVISE (raised while scoping the deviation slice)
 

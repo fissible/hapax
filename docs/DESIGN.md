@@ -572,24 +572,32 @@ comparing them would let the loop accept a rewrite that only moved the denominat
 contributing set travels with the number so the comparison can be refused rather than
 silently made.
 
-**Tier B is empty in v1, so every score is a Tier-A-only score.** ADR 0003 assigns the
-function-word distribution, hapax ratio and sentence-opener distribution to Tier B, and all
-three need a rolling window of several hundred tokens that is not built. The manifest today
-declares six Tier A features and none in Tier B. The tier machinery is implemented as
-specified rather than deferred, because the alternative is discovering at Tier B's arrival
-that the blended path was never exercised — but the honest statement of the present position
-is that `d` and `d_A` are the same number, every segment is reported Tier-A-only, and the
-blended path has no features to blend.
+**The tier set is derived from the manifest, not enumerated in the scoring code.** ADR 0003
+assigns the function-word distribution, hapax ratio and sentence-opener distribution to Tier
+B, and all three need a rolling window of several hundred tokens that is not built. The
+manifest today declares six Tier A features and nothing else — `TierB` is not a declared
+constant, because a tier with no features is a tier whose minimum can never be met, and
+enumerating it would flag every v1 score as partial against something that does not exist.
 
-**Tier-A-only scores get their own calibration.** `d_A` alone is not drawn from the same
-distribution as the blended `d`, so it cannot share thresholds. It carries a separate
-threshold artifact, and a segment scored Tier-A-only is reported as such.
+Reading the tier set off the manifest makes the machinery general without inventing an empty
+tier: today it resolves to one tier and there is nothing to blend, and the day a Tier B
+feature is added it resolves to two, with the per-tier minimums and the partial-score rule
+already in force. The manifest digest changes at that same moment, so no threshold artifact
+built under the one-tier manifest can be served for the two-tier one.
+
+**Any proper subset of the manifest's tiers carries its own threshold artifact.** Section 2
+previously stated this only for the Tier-A-only case. Stated generally it covers Tier B
+alone and any future tier without enumerating cases, and the reason is unchanged: a distance
+over a subset of the tiers is not drawn from the same distribution as the blend, so it
+cannot share thresholds. A score records the tiers that produced it, and is flagged when
+they are not all of them.
 
 Availability rules, matching ADR 0006:
 
-- Tier B unavailable ⇒ `d_A` with its own thresholds, flagged
-- Neither tier meets its minimum ⇒ **insufficient evidence**, no `d`, no band, and
-  `rewrite` passes the segment through untouched
+- Some but not all tiers meet their minimum ⇒ a distance over those tiers, with its own
+  thresholds, flagged as a partial score
+- No tier meets its minimum ⇒ **insufficient evidence**, no `d`, no band, and `rewrite`
+  passes the segment through untouched
 
 ### Feature redundancy: a declared procedure, not a gesture
 
