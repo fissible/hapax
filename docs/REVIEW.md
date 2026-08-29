@@ -311,6 +311,37 @@ snap direction was called "stated" without being stated; terminal punctuation wa
 
 No remaining Section 3 blockers.
 
+## Round 13 — VERDICT: REVISE (raised while scoping `score`)
+
+**The split vocabulary had no word for the thing the tool is for.** A standardized segment
+records its split, and only `train`, `calibrate` and `test` were nameable. A draft is none of
+them. Without a fourth value a draft must claim one of the three, and the only one it could
+survive is `test` — the split both release gates draw their evidence from. The scoring path
+would have fed the user's own unmeasured writing into the gates that decide whether the
+profile can be trusted at all.
+
+→ `draft` added, meaning scored, never fitted, never evidence. The corpus never assigns it,
+a reference admits only `calibrate`, and both gates require `test`, so it reaches the scoring
+path and nothing else. The vocabulary gets stricter, not looser.
+
+**A reference could not be stored.** Its per-feature distributions lived in an unexported
+field, so an encoded and restored reference held nothing and `Transform` reported
+`reference-too-small` for every feature. Found by asking what `score` loads.
+
+→ The distributions are part of the artifact. Worth recording is the shape of the failure
+rather than the fix: not a crash and not a corrupt artifact, but every paragraph reporting
+*insufficient evidence* — a legitimate verdict, indistinguishable from a real one, on a
+profile that was fine. This is the second artifact in this design found unable to survive
+storage, in a package already reviewed and merged. The property has to be tested by a round
+trip through the encoding, and now is.
+
+**"Uncalibrated still emits distance and deltas" implied two report shapes.** It does not
+need to. The band already carries its own definedness and reason, as a distance and a
+deviation do.
+
+→ One shape. A reader asks whether the band is defined rather than discovering a field that
+is sometimes absent.
+
 ## Round 12 — VERDICT: REVISE (raised while scoping the discrimination gate)
 
 **"A predeclared minimum AUC" declared no minimum, no orientation and no tie rule.** Three

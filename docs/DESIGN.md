@@ -841,6 +841,62 @@ SplitMix64 is a published algorithm, so this is a specification a second impleme
 reproduce, which is the property that matters. It is not a claim about statistical quality
 beyond what resampling needs.
 
+### `score`, and two things it found underneath it
+
+`score` measures a draft against a profile and emits, per paragraph, a calibrated band, the
+distance behind it, and the per-feature deltas with their direction — or *insufficient
+evidence*. Almost all of that is assembly: the deviation, the distance, the gates and the
+release verdict already exist. Building it surfaced two defects in what it assembles.
+
+**A draft belongs to no split, and the split vocabulary had no word for that.** Every
+standardized segment records the split it came from, and only `train`, `calibrate` and
+`test` were nameable. A draft is none of them: it is the thing the tool is *for*. Without a
+word for it a draft has to claim one of the three, and the only survivable lie is `test` —
+which is precisely the split the discrimination gate and the band floor draw their evidence
+from. A scoring path that labelled drafts `test` would let the user's own unmeasured writing
+into the gates that decide whether the profile can be trusted.
+
+So `draft` joins the vocabulary, meaning **scored, never fitted, never evidence**. It is
+never assigned by the corpus, which partitions only among the other three; a reference
+refuses anything but `calibrate`; and both release gates require `test`. The new value can
+therefore reach the scoring path and nothing else, which is a stronger guarantee than the
+one it replaces rather than a looser one.
+
+**A reference could not be stored.** The deviation reference held its per-feature
+distributions in an unexported field, so an encoded and restored reference came back holding
+nothing — and `Transform` then reported `reference-too-small` for every feature. `score` is
+the first consumer that loads a reference rather than building one, and the failure it would
+have hit is the worst shape available: not a corrupt artifact and not a crash, but *every
+paragraph reporting insufficient evidence*, which is a legitimate verdict and would have
+been read as one. The distributions are now part of the artifact.
+
+That is the same defect the band calibration slice found in its own artifact, in a package
+that had already been reviewed and merged. **Every artifact here is content-addressed so it
+can be stored and reused, and that property has to be tested, not assumed** — a round trip
+through the encoding, with behaviour compared before and after.
+
+**The report has one shape, not two.** ADR 0005 says an uncalibrated profile still emits the
+raw distance and per-feature deltas, and only the band is withheld. That is not a second
+report format: the band already carries its own definedness and reason, exactly as a distance
+and a deviation do. A reader distinguishes the cases by asking whether the band is defined,
+not by discovering a missing field.
+
+**Paragraph admission is the profile's, not a second copy.** A draft is split into segments
+by the same shared path the profile was fitted with and the same lexical-token floor.
+Measuring against a profile fitted on a different notion of paragraph is the error the shared
+path exists to prevent, and it would be invisible in the output.
+
+**v1 scores Tier A only, because that is what the manifest declares.** ADR 0003 gives `score`
+Tier A at paragraph scale and Tier B over rolling windows; Tier B has no features and the
+window is not built. The tier set is read off the manifest, so the day a Tier B feature is
+added the per-tier minimums and the partial-score rule are already in force — but the
+windowing mechanism arrives with it, and until then every score is a paragraph-scale Tier A
+score.
+
+**Direction is reported beside every delta.** The transformed deviation is signed for exactly
+this reason: `above` the author's usual, `below` it, or `typical` at zero. An undefined
+deviation has no direction, since there is nothing to take a sign of.
+
 ### The discrimination gate
 
 ADR 0005 names "a predeclared minimum AUC" and never declares one, nor says which direction
