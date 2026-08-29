@@ -573,6 +573,40 @@ func TestACoincidentBoundaryResolvesToInRange(t *testing.T) {
 	}
 }
 
+// Banding is not a calibration, and it imposes nothing about the split. The
+// boundaries are ESTIMATED on Calibrate, but Section 2 reports figures on Test,
+// and `score` bands a user's draft, which belongs to no split at all. A Band
+// that required Calibrate would make the scoring path unusable.
+//
+// Added by consensus after the first implementation shared one validator
+// between Calibrate and Band: the helper above always set Calibrate, so no test
+// could reach this.
+func TestBandDoesNotRequireACalibrationSplit(t *testing.T) {
+	th := calibrate(t, separated())
+
+	for _, split := range []corpus.Split{corpus.Test, corpus.Train, corpus.Calibrate, ""} {
+		name := string(split)
+		if name == "" {
+			name = "no split at all"
+		}
+		t.Run(name, func(t *testing.T) {
+			in := scored(eval.ClassAuthor, 25).Distance
+			in.Split = split
+
+			got, err := th.Band(in)
+			if err != nil {
+				t.Fatalf("Band refused a %q-split distance: %v", split, err)
+			}
+			if !got.Defined {
+				t.Fatalf("no band: %v", got.Reason)
+			}
+			if got.Band != eval.BandDrifting {
+				t.Errorf("band = %q, want %q", got.Band, eval.BandDrifting)
+			}
+		})
+	}
+}
+
 // A segment with no distance gets no band. ADR 0006 requires this: absence of
 // measurement is never treated as a result, and `in range` would be the worst
 // possible default for something that was never scored.
