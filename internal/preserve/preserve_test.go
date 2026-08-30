@@ -1255,3 +1255,66 @@ func TestAPossessiveIsADifferentEntity(t *testing.T) {
 		t.Errorf("want Anthropic lost and Anthropic's invented, got %v", got.Differences)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// The identifier grammar, owned here
+// ---------------------------------------------------------------------------
+
+// rewrite's audit record holds these identifiers, and nothing enforced that it
+// really did — the item text sat in that record for two slices. The consumer
+// cannot check the shape without duplicating this package's grammar, so the
+// grammar is exported and this package owns it.
+func TestValidIdentifierAcceptsWhatIdentifiersProduces(t *testing.T) {
+	got := check(t,
+		"Anthropic 5 not https://example.com/a \"one\"",
+		"Bureau 7 never https://example.com/b \"two\"")
+	if len(got.Identifiers()) != 10 {
+		t.Fatalf("got %d identifiers, want 10", len(got.Identifiers()))
+	}
+	for _, identifier := range got.Identifiers() {
+		if !preserve.ValidIdentifier(identifier) {
+			t.Errorf("ValidIdentifier(%q) = false for an identifier this package produced", identifier)
+		}
+	}
+}
+
+func TestValidIdentifierRejectsEverythingElse(t *testing.T) {
+	for _, c := range []struct{ name, value string }{
+		{"the item text the audit record used to hold", "number:1979"},
+		{"a bare url", "url:example.com"},
+		{"prose", "the author wrote 1979"},
+		{"empty", ""},
+		{"too few parts", "preserve-v1:number:lost"},
+		{"too many parts", "preserve-v1:number:lost:3d4c981bf761d9b8:extra"},
+		{"unknown version", "preserve-v2:number:lost:3d4c981bf761d9b8"},
+		{"unknown class", "preserve-v1:sentiment:lost:3d4c981bf761d9b8"},
+		{"unknown direction", "preserve-v1:number:moved:3d4c981bf761d9b8"},
+		{"digest too short", "preserve-v1:number:lost:3d4c98"},
+		{"digest too long", "preserve-v1:number:lost:3d4c981bf761d9b8a"},
+		{"digest not hex", "preserve-v1:number:lost:zzzzzzzzzzzzzzzz"},
+		{"digest upper case", "preserve-v1:number:lost:3D4C981BF761D9B8"},
+		{"whitespace in the digest", "preserve-v1:number:lost:3d4c981b f761d9b"},
+		{"leading space", " preserve-v1:number:lost:3d4c981bf761d9b8"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if preserve.ValidIdentifier(c.value) {
+				t.Errorf("ValidIdentifier(%q) = true", c.value)
+			}
+		})
+	}
+}
+
+// Every declared class and direction is accepted, so the grammar cannot drift
+// from the vocabulary it is supposed to describe.
+func TestValidIdentifierCoversEveryClassAndDirection(t *testing.T) {
+	for _, class := range []preserve.Class{
+		preserve.ClassNumber, preserve.ClassEntity, preserve.ClassNegation, preserve.ClassURL, preserve.ClassQuote,
+	} {
+		for _, direction := range []preserve.Direction{preserve.DirectionLost, preserve.DirectionInvented} {
+			identifier := preserve.Version + ":" + string(class) + ":" + string(direction) + ":3d4c981bf761d9b8"
+			if !preserve.ValidIdentifier(identifier) {
+				t.Errorf("ValidIdentifier(%q) = false", identifier)
+			}
+		}
+	}
+}
