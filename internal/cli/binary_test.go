@@ -57,11 +57,19 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 			if code != c.want {
 				t.Errorf("exit = %d, want %d; stderr %q", code, c.want, stderr.String())
 			}
-			if c.want <= 1 && !strings.Contains(stdout.String(), `"schema":"hapax.v1"`) {
-				t.Errorf("stdout carries no document: %q", stdout.String())
-			}
-			if c.want == 2 && stdout.Len() != 0 {
-				t.Errorf("a failing invocation wrote to stdout: %q", stdout.String())
+			if c.want <= 1 {
+				// The same stream contract Run is held to, not a substring:
+				// a binary emitting {"schema":"hapax.v1"} and nothing else
+				// would otherwise pass.
+				requireEnvelopeFields(t, stdout.String())
+				if stderr.Len() != 0 {
+					t.Errorf("a successful run wrote to stderr: %q", stderr.String())
+				}
+			} else {
+				if stdout.Len() != 0 {
+					t.Errorf("a failing invocation wrote to stdout: %q", stdout.String())
+				}
+				requireOneDiagnostic(t, stderr.String())
 			}
 		})
 	}

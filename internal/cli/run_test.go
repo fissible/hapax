@@ -451,4 +451,40 @@ func requireEnvelopeFields(t *testing.T, rendered string) {
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("envelope fields =\n%v\nwant\n%v", got, want)
 	}
+	// The DECODED values, not a struct: encoding/json turns "reason":null into
+	// the zero string, so a document emitting null where the contract says ""
+	// would pass a struct comparison.
+	if reason, ok := decoded["reason"].(string); !ok || reason != "" {
+		t.Errorf("reason = %#v, want the empty string and not null", decoded["reason"])
+	}
+	if decoded["profile"] != nil {
+		t.Errorf("profile = %#v, want null", decoded["profile"])
+	}
+	if rendered != strings.TrimRight(rendered, "\n")+"\n" || strings.Count(rendered, "\n") != 1 {
+		t.Errorf("stdout is not one newline-terminated line: %q", rendered)
+	}
+}
+
+// A finding with no rule-authored reason carries "" and not null, for the same
+// reason: a consumer switching on the field must not have to handle both.
+func TestAnEmptyFindingReasonIsAStringAndNotNull(t *testing.T) {
+	h := newHarness(t, nil)
+	if code := h.run("tells", "--json", draft(t, adverse)); code != 1 {
+		t.Fatalf("exit = %d", code)
+	}
+	var decoded struct {
+		Result struct {
+			Findings []map[string]any
+		}
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if len(decoded.Result.Findings) != 1 {
+		t.Fatalf("%d findings", len(decoded.Result.Findings))
+	}
+	if reason, ok := decoded.Result.Findings[0]["reason"].(string); !ok || reason != "" {
+		t.Errorf("finding reason = %#v, want the empty string and not null",
+			decoded.Result.Findings[0]["reason"])
+	}
 }
