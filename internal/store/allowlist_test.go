@@ -51,8 +51,9 @@ var declaredSchema = map[string][]string{
 	"reference_value": {"reference_id", "feature", "ordinal", "value"},
 	"threshold": {
 		"id", "profile_id", "reference_id", "population_id",
-		"t_low", "t_high", "achieved_low", "achieved_high",
-		"interval_low", "interval_high", "verdict",
+		"t_low", "t_high", "achieved_author", "achieved_distractor",
+		"interval_low_lower", "interval_low_upper",
+		"interval_high_lower", "interval_high_upper", "verdict",
 	},
 	"eval_result": {
 		"id", "profile_id", "reference_id", "auc", "lower_bound", "cap",
@@ -174,7 +175,7 @@ func TestTheTextualColumnsThisSliceWritesHaveGrammars(t *testing.T) {
 		{"a content hash that is not hex", writeDocumentHash("not-a-hash")},
 		{"a content hash of the wrong length", writeDocumentHash("abc123")},
 		{"an upper-case content hash", writeDocumentHash(strings.ToUpper(hashA))},
-		{"an unknown register", writeDocumentRegister("diary")},
+		{"a register outside the grammar", writeDocumentRegister("Diary")},
 		{"an unknown split", writeDocumentSplit("holdout")},
 	} {
 		t.Run(c.name, func(t *testing.T) {
