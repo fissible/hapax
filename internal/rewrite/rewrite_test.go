@@ -1554,7 +1554,7 @@ func TestTheVerdictAndItsIdentifiersMustAgree(t *testing.T) {
 func TestAPreservedVerdictCarriesNoIdentifiers(t *testing.T) {
 	loop, _, _, _, store := loopOver(t,
 		map[string]score.Report{original: scored(0.90), better: scored(0.10)},
-		[]string{better}, nil)
+		[]string{better}, passingGate())
 
 	run(t, loop)
 	if len(store.attempts) != 1 {
