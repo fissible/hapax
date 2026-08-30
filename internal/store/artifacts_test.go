@@ -1463,7 +1463,7 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 			t.Error("accepted")
 		}
 	})
-	t.Run("and a stored one that already does is corrupt", func(t *testing.T) {
+	t.Run("and a stored threshold that already does is corrupt", func(t *testing.T) {
 		s, prof, foreign := setUp(t)
 		own := referenceFixture(prof.ID)
 		mustPutReference(t, s, own)
@@ -1478,26 +1478,82 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 			t.Errorf("error = %v, want ErrCorrupt", err)
 		}
 	})
+	t.Run("and a stored eval result that already does is corrupt", func(t *testing.T) {
+		s, prof, foreign := setUp(t)
+		own := referenceFixture(prof.ID)
+		mustPutReference(t, s, own)
+		result := evalResultFixture(prof.ID, own.ID)
+		if err := s.PutEvalResult(ctx(), result); err != nil {
+			t.Fatalf("PutEvalResult: %v", err)
+		}
+		if _, err := openRaw(t, s).Exec("UPDATE eval_result SET reference_id = ?", foreign.ID); err != nil {
+			t.Fatalf("damaging: %v", err)
+		}
+		if _, err := s.LoadEvalResult(ctx(), result.ID); !errors.Is(err, store.ErrCorrupt) {
+			t.Errorf("error = %v, want ErrCorrupt", err)
+		}
+	})
 }
 
-// Store carries identities; it does not recompute them. Only the snapshot's
-// preimage is fully persisted (DESIGN: "verified, not trusted"), so the check
-// that remains for the rest is the digest form itself, which is asserted in
-// TestIdentitiesMustBeTheDeclaredDigestForm. A profile ID, for one, hashes the
-// outlier algorithm and four build floors this schema deliberately does not
-// hold, and an exemplar certificate ID hashes the density and medoid records.
-func TestNoArtifactIdentityIsRecomputableFromWhatIsStored(t *testing.T) {
-	notStored := map[string][]string{
-		"profile": {
-			"outlier-algorithm", "outlier-mads", "min-documents", "min-paragraphs",
-			"min-observations-per-feature", "profile-schema-version", "split",
-		},
+// Store carries identities; it does not recompute them, because only the
+// snapshot, document and node preimages are stored. That is a claim about the
+// SCHEMA, so it is checked against the schema: every input to a profile
+// identity is mapped to the column that holds it, or to nothing, and at least
+// one must hold nothing. When the map says everything is stored, the ID has
+// become recomputable and must be verified rather than carried.
+func TestAProfileIdentityIsNotRecomputableFromWhatIsStored(t *testing.T) {
+	// "" means the schema deliberately does not hold this input.
+	heldBy := map[string]string{
+		"feature-manifest-digest":      "profile.manifest_digest",
+		"register":                     "profile.register",
+		"snapshot-id":                  "profile.snapshot_id",
+		"unit":                         "profile.unit",
+		"variance-convention":          "profile.variance_convention",
+		"min-paragraph-lexical-tokens": "profile.min_paragraph_lexical_tokens",
+		"min-documents":                "",
+		"min-observations-per-feature": "",
+		"min-paragraphs":               "",
+		"outlier-algorithm":            "",
+		"outlier-mads":                 "",
+		"profile-schema-version":       "",
+		"split":                        "",
 	}
-	prof := &profile.Profile{}
-	inputs := prof.IdentityInputs()
-	for _, key := range notStored["profile"] {
-		if _, present := inputs[key]; !present {
-			t.Errorf("profile identity no longer hashes %q; if every input is now stored, the ID should be verified rather than carried", key)
+	inputs := (&profile.Profile{}).IdentityInputs()
+	for key := range inputs {
+		if _, mapped := heldBy[key]; !mapped {
+			t.Errorf("profile identity hashes %q, which this map does not account for", key)
 		}
 	}
+	for key, column := range heldBy {
+		if _, present := inputs[key]; !present {
+			t.Errorf("%q is mapped to %q but is no longer a profile identity input", key, column)
+			continue
+		}
+		if column == "" {
+			continue
+		}
+		table, name, _ := strings.Cut(column, ".")
+		if !declaredColumn(table, name) {
+			t.Errorf("%q is mapped to %s, which the schema does not declare", key, column)
+		}
+	}
+
+	unheld := 0
+	for _, column := range heldBy {
+		if column == "" {
+			unheld++
+		}
+	}
+	if unheld == 0 {
+		t.Error("every profile identity input is now stored; the ID must be verified, not carried")
+	}
+}
+
+func declaredColumn(table, column string) bool {
+	for _, declared := range declaredSchema[table] {
+		if declared == column {
+			return true
+		}
+	}
+	return false
 }
