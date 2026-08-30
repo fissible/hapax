@@ -1318,7 +1318,16 @@ func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
 			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Discrimination.Discriminates = c.discriminates
+			// Calibration is DERIVED from whether a claiming band was emitted,
+			// so moving the flag alone would contradict the reports beside it
+			// and refuse for a reason this test is not about.
+			setEmitted(&result.Calibration.Bands[0], c.calibrated)
+			setEmitted(&result.Calibration.Bands[2], c.calibrated)
 			result.Calibration.Calibrated = c.calibrated
+			result.Calibration.Reason = ""
+			if !c.calibrated {
+				result.Calibration.Reason = "no-claiming-band-emitted"
+			}
 			result.Shippable = c.shippable
 			if !c.shippable {
 				result.Reason = eval.ReleaseReasonDiscriminationFailed
@@ -1496,7 +1505,9 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 	})
 	t.Run("an eval result", func(t *testing.T) {
 		s, prof, foreign := setUp(t)
-		mustPutThreshold(t, s, prof.ID, foreign.ID)
+		// No threshold is written: one over this profile and that reference is
+		// itself the combination the case beside this one refuses. The release
+		// is refused for the reference, which is what is under test.
 		if err := s.PutEvalResult(ctx(), evalResultFixture(prof.ID, foreign.ID), store.LeaveHead); err == nil {
 			t.Error("accepted")
 		}
