@@ -10,6 +10,7 @@ import (
 	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
+	"github.com/fissible/hapax/internal/preserve"
 	"github.com/fissible/hapax/internal/score"
 )
 
@@ -26,9 +27,10 @@ const (
 )
 
 var (
-	ErrMissingInput   = errors.New("rewrite missing input")
-	ErrInvalidOptions = errors.New("rewrite invalid options")
-	ErrExemplars      = errors.New("rewrite wrong exemplar count")
+	ErrMissingInput       = errors.New("rewrite missing input")
+	ErrInvalidOptions     = errors.New("rewrite invalid options")
+	ErrExemplars          = errors.New("rewrite wrong exemplar count")
+	ErrPreserveIdentifier = errors.New("rewrite invalid preserve identifier")
 )
 
 // RejectionCode explains why a scored candidate or current segment was refused.
@@ -67,8 +69,8 @@ type Selector interface {
 }
 
 type Preservation struct {
-	Preserved bool
-	Missing   []string
+	Preserved   bool
+	Identifiers []string
 }
 
 type TellsVerdict struct {
@@ -98,7 +100,7 @@ type Attempt struct {
 	CurrentDistance, CandidateDistance  float64
 	CurrentBand, CandidateBand          eval.Band
 	Preserved                           bool
-	Missing                             []string
+	PreserveIdentifiers                 []string
 	TellsComparison                     int
 	TellsComparable, Accepted           bool
 	Rejection                           RejectionCode
@@ -179,8 +181,11 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			if err != nil {
 				return Outcome{}, err
 			}
+			if !validPreservation(preservation) {
+				return Outcome{}, fmt.Errorf("%w: attempt %d, span ref %q", ErrPreserveIdentifier, attempt.Index, attempt.SpanRef)
+			}
 			attempt.Preserved = preservation.Preserved
-			attempt.Missing = append([]string(nil), preservation.Missing...)
+			attempt.PreserveIdentifiers = append([]string(nil), preservation.Identifiers...)
 			tells, err := l.Gate.Tells(current, candidate)
 			if err != nil {
 				return Outcome{}, err
@@ -211,6 +216,18 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 		}
 	}
 	return outcome, nil
+}
+
+func validPreservation(verdict Preservation) bool {
+	if verdict.Preserved != (len(verdict.Identifiers) == 0) {
+		return false
+	}
+	for _, identifier := range verdict.Identifiers {
+		if !preserve.ValidIdentifier(identifier) {
+			return false
+		}
+	}
+	return true
 }
 
 func (l Loop) validate(segment Segment) error {
