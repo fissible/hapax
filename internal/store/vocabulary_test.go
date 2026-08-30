@@ -386,54 +386,90 @@ func relaxEnum(t *testing.T, s *store.Store, table, column string) {
 	}
 }
 
-// A reader that trusts the database is not validating. Every decoder is handed
-// an enum value outside its vocabulary and must call it corruption.
+// A reader that trusts the database is not validating. EVERY declared enum
+// column is handed a value outside its vocabulary, driven from the vocabulary
+// inventory itself so a column added there cannot go unprobed here.
 func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
-	for _, c := range []struct {
-		table, column string
-		load          func(s *store.Store, ids seededIDs) error
-	}{
-		{"profile", "unit",
-			func(s *store.Store, ids seededIDs) error { _, err := s.LoadProfile(ctx(), ids.Profile); return err }},
-		{"profile", "variance_convention",
-			func(s *store.Store, ids seededIDs) error { _, err := s.LoadProfile(ctx(), ids.Profile); return err }},
-		{"reference", "split",
-			func(s *store.Store, ids seededIDs) error { _, err := s.LoadReference(ctx(), ids.Reference); return err }},
-		{"threshold", "verdict",
-			func(s *store.Store, ids seededIDs) error { _, err := s.LoadThreshold(ctx(), ids.Threshold); return err }},
-		{"eval_result", "reason",
-			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
-				return err
-			}},
-		{"rewrite_attempt", "provider_id",
-			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
-				return err
-			}},
-		{"rewrite_attempt", "current_band",
-			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
-				return err
-			}},
-		{"rewrite_attempt", "rejection",
-			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
-				return err
-			}},
-		{"document", "split",
-			func(s *store.Store, ids seededIDs) error { _, err := s.Snapshot(ctx(), ids.Snapshot); return err }},
-		{"node", "role",
-			func(s *store.Store, ids seededIDs) error { _, err := s.Snapshot(ctx(), ids.Snapshot); return err }},
-	} {
-		t.Run(c.table+"."+c.column, func(t *testing.T) {
+	loadOwner := map[string]func(s *store.Store, ids seededIDs) error{
+		"document.split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
+		"document.admission": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
+		"node.kind": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
+		"node.role": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
+		"node.exclusion": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
+		"profile.unit": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadProfile(ctx(), ids.Profile)
+			return err
+		},
+		"profile.variance_convention": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadProfile(ctx(), ids.Profile)
+			return err
+		},
+		"reference.split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadReference(ctx(), ids.Reference)
+			return err
+		},
+		"threshold.verdict": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadThreshold(ctx(), ids.Threshold)
+			return err
+		},
+		"eval_result.reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"rewrite_attempt.provider_id": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			return err
+		},
+		"rewrite_attempt.current_band": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			return err
+		},
+		"rewrite_attempt.candidate_band": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			return err
+		},
+		"rewrite_attempt.rejection": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			return err
+		},
+	}
+
+	for qualified := range declaredVocabularies() {
+		if _, covered := loadOwner[qualified]; !covered {
+			t.Errorf("%s declares a vocabulary but no reader probes it", qualified)
+		}
+	}
+	for qualified := range loadOwner {
+		if _, declared := declaredVocabularies()[qualified]; !declared {
+			t.Errorf("%s is probed but declares no vocabulary", qualified)
+		}
+	}
+
+	for qualified, load := range loadOwner {
+		table, column, _ := strings.Cut(qualified, ".")
+		t.Run(qualified, func(t *testing.T) {
 			s := newStore(t)
 			ids := seedEveryArtifact(t, s)
-			relaxEnum(t, s, c.table, c.column)
-			if _, err := openRaw(t, s).Exec(enumUpdate(c.table, c.column, "not-in-the-set")); err != nil {
+			relaxEnum(t, s, table, column)
+			if _, err := openRaw(t, s).Exec(enumUpdate(table, column, "not-in-the-set")); err != nil {
 				t.Fatalf("damaging: %v", err)
 			}
-			if err := c.load(s, ids); !errors.Is(err, store.ErrCorrupt) {
+			if err := load(s, ids); !errors.Is(err, store.ErrCorrupt) {
 				t.Errorf("error = %v, want ErrCorrupt", err)
 			}
 		})
