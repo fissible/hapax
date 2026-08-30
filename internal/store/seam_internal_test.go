@@ -230,30 +230,42 @@ func openSeamed(t *testing.T, d deps) *Store {
 // truncated artifact back as a smaller valid one — the exact failure the
 // aggregate-integrity rule exists to prevent. Slice 2a fixed four loaders on
 // argument; this is the test that was missing.
+//
+// It does NOT require a loader to stream. An implementation that reads an
+// aggregate in a single row has no truncatable cursor and never sees the fault;
+// that is correct, and it passes here by returning a COMPLETE artifact. What
+// fails is a loader that streams, loses rows, and says nothing — or one that
+// reports the loss as corruption, which would tell a user their evidence is
+// damaged when a read was merely interrupted.
 func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		load func(s *Store, ids seamIDs) error
+		// load reports whether what came back is complete, alongside its error.
+		load func(s *Store, ids seamIDs) (bool, error)
 	}{
-		{"profile stats", func(s *Store, ids seamIDs) error {
-			_, err := s.LoadProfile(context.Background(), ids.Profile)
-			return err
+		{"profile stats", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.LoadProfile(context.Background(), ids.Profile)
+			return len(got.Stats) == len(features.Definitions()), err
 		}},
-		{"reference values", func(s *Store, ids seamIDs) error {
-			_, err := s.LoadReference(context.Background(), ids.Reference)
-			return err
+		{"reference values", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.LoadReference(context.Background(), ids.Reference)
+			total := 0
+			for _, values := range got.Values {
+				total += len(values)
+			}
+			return total == 3*len(features.Definitions()), err
 		}},
-		{"exemplar members", func(s *Store, ids seamIDs) error {
-			_, err := s.LoadExemplarSelection(context.Background(), ids.Selection)
-			return err
+		{"exemplar members", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.LoadExemplarSelection(context.Background(), ids.Selection)
+			return len(got.Members) == 3, err
 		}},
-		{"preserve identifiers", func(s *Store, ids seamIDs) error {
-			_, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
-			return err
+		{"preserve identifiers", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
+			return len(got.PreserveIdentifiers) == 3, err
 		}},
-		{"a snapshot's documents", func(s *Store, ids seamIDs) error {
-			_, err := s.Snapshot(context.Background(), ids.Snapshot)
-			return err
+		{"a snapshot's documents", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.Snapshot(context.Background(), ids.Snapshot)
+			return len(got.Documents) == 3, err
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -262,12 +274,18 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			s, ids := seededSeamStore(t, name)
 
 			faults.arm(2)
-			err := c.load(s, ids)
-			if !errors.Is(err, errInjectedRowFault) {
-				t.Errorf("error = %v, want the injected fault", err)
-			}
-			if errors.Is(err, ErrCorrupt) {
-				t.Error("a failing row stream was reported as corruption")
+			complete, err := c.load(s, ids)
+			faults.disarm()
+
+			switch {
+			case errors.Is(err, errInjectedRowFault):
+				// Streamed, lost rows, and said so. Correct.
+			case errors.Is(err, ErrCorrupt):
+				t.Errorf("an interrupted read was reported as corruption: %v", err)
+			case err != nil:
+				t.Errorf("unexpected error: %v", err)
+			case !complete:
+				t.Error("a truncated stream came back as a smaller valid artifact")
 			}
 		})
 	}
