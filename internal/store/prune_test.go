@@ -334,23 +334,28 @@ func TestPruneKeepsTheChildrenOfWhatItKeeps(t *testing.T) {
 	if after := loadKeptGraph(t, s, f); !reflect.DeepEqual(after, before) {
 		t.Errorf("the kept graph changed:\n%+v\nwant\n%+v", after, before)
 	}
+	// Exact counts derived from the fixture, not read back from the database
+	// after the fact — "at least what is there now" is true of anything.
+	referenceValues := 0
+	for _, values := range referenceFixture(f.KeptProfile.ID).Values {
+		referenceValues += len(values)
+	}
 	raw := openRaw(t, s)
 	for table, want := range map[string]int{
-		"profile_stat":    len(f.KeptProfile.Stats) * 2, // the kept and the audited profile
-		"reference_value": rowsIn(t, raw, "reference_value"),
+		// Two profiles survive: the one given, and the one an eval result names.
+		"profile_stat":    2 * len(profileStats()),
+		"reference_value": 2 * referenceValues,
+		// One selection survives, with the single member the fixture gives it.
+		"exemplar_member": 1,
+		// The kept snapshot's one vector, and its values.
+		"feature_vector": 1,
+		"feature_value":  len(vectorValues()),
+		// The retained audit record keeps everything it named.
+		"rewrite_attempt_identifier": len(f.Attempt.PreserveIdentifiers),
 	} {
-		if got := rowsIn(t, raw, table); got < want {
-			t.Errorf("%s has %d rows, want at least %d", table, got, want)
+		if got := rowsIn(t, raw, table); got != want {
+			t.Errorf("%s has %d rows, want %d", table, got, want)
 		}
-	}
-	if rowsIn(t, raw, "exemplar_member") == 0 {
-		t.Error("the kept selection lost its members")
-	}
-	if rowsIn(t, raw, "feature_vector") == 0 || rowsIn(t, raw, "feature_value") == 0 {
-		t.Error("the kept snapshot lost its feature vectors")
-	}
-	if rowsIn(t, raw, "rewrite_attempt_identifier") == 0 {
-		t.Error("the retained audit record lost its identifiers")
 	}
 }
 

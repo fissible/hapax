@@ -73,17 +73,27 @@ func TestAStoredReferenceThatDisagreesWithItselfIsCorrupt(t *testing.T) {
 		name   string
 		damage string
 	}{
+		// A SECOND snapshot has to exist for this to move anything: pointing a
+		// document at the snapshot it already belongs to is a no-op.
 		{"a document moved beneath another snapshot",
-			"UPDATE document SET snapshot_id = (SELECT id FROM snapshot) WHERE path = 'essays/b.md'"},
+			"UPDATE document SET snapshot_id = (SELECT id FROM snapshot WHERE id <> " +
+				"(SELECT snapshot_id FROM document WHERE path = 'essays/a.md')) WHERE path = 'essays/a.md'"},
 		{"a document renamed under its derived key",
 			"UPDATE document SET path = 'essays/renamed.md' WHERE path = 'essays/a.md'"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStore(t)
 			root, snapshot := corpusStore(t, s)
+			elsewhere := snapshotWrite(corpusDocument(t, t.TempDir(), "other/a.md", bodyB,
+				text.Span{Offset: 0, Length: 10}))
+			mustPutSnapshot(t, s, elsewhere)
 			nodeID := snapshot.Documents[0].Nodes[0].ID
-			if _, err := openRaw(t, s).Exec(c.damage); err != nil {
+			result, err := openRaw(t, s).Exec(c.damage)
+			if err != nil {
 				t.Fatalf("damaging: %v", err)
+			}
+			if affected, _ := result.RowsAffected(); affected != 1 {
+				t.Fatalf("the damage changed %d rows; the case would be vacuous", affected)
 			}
 			if _, err := s.Span(ctx(), nodeID); !errors.Is(err, store.ErrCorrupt) {
 				t.Errorf("Span error = %v, want ErrCorrupt", err)

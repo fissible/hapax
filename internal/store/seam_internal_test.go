@@ -261,7 +261,7 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
-			faults.arm(2)
+			faults.arm(3)
 			err := c.load(s, ids)
 			if !errors.Is(err, errInjectedRowFault) {
 				t.Errorf("error = %v, want the injected fault", err)
@@ -354,18 +354,21 @@ type rowFaults struct {
 	onExec    bool
 }
 
-func (f *rowFaults) arm(after int) {
+// arm fails the nth row read after arming. n is one-based: arm(1) fails the
+// very first.
+func (f *rowFaults) arm(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onExec = after, true, false
+	f.remaining, f.armed, f.onExec = n-1, true, false
 }
 
-// armExec fails the Nth statement EXECUTION rather than the Nth row, which is
-// how a fault is placed inside a write the caller has already begun.
-func (f *rowFaults) armExec(after int) {
+// armExec fails the nth statement EXECUTION rather than the nth row, which is
+// how a fault is placed inside a write the caller has already begun. Also
+// one-based.
+func (f *rowFaults) armExec(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onExec = after, true, true
+	f.remaining, f.armed, f.onExec = n-1, true, true
 }
 
 func (f *rowFaults) disarm() {
@@ -590,10 +593,11 @@ func TestAPruneThatFailsPartWayThroughRemovesNothing(t *testing.T) {
 	before := graphCensus(t, s)
 
 	faults.armExec(2)
-	if _, err := s.Prune(context.Background(), []string{ids.Profile}); err == nil {
-		t.Fatal("a prune whose write failed reported success")
-	}
+	_, err := s.Prune(context.Background(), []string{ids.Profile})
 	faults.disarm()
+	if !errors.Is(err, errInjectedRowFault) {
+		t.Fatalf("error = %v, want the fault injected into Prune's second write", err)
+	}
 
 	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
 		t.Errorf("a failed prune left the graph as\n%v\nwant\n%v", after, before)
