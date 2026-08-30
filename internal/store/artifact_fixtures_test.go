@@ -216,6 +216,7 @@ func notANumber() float64 { return math.NaN() }
 // can load exactly the one it damaged.
 type seededIDs struct {
 	Snapshot, Profile, Reference, Threshold, EvalResult, Selection, Invocation string
+	Nodes                                                                      []string
 }
 
 // seedEveryArtifact writes one valid instance of each artifact this slice owns.
@@ -248,34 +249,35 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	return seededIDs{
 		Snapshot: snapshot.ID, Profile: prof.ID, Reference: ref.ID,
 		Threshold: threshold.ID, EvalResult: result.ID, Selection: selection.ID,
-		Invocation: attempt.InvocationID,
+		Invocation: attempt.InvocationID, Nodes: selection.Members,
 	}
 }
 
-// walkTypes descends a persistence struct's fields, failing if any transitively
-// named type is one that carries prose.
-func walkTypes(t *testing.T, declared reflect.Type, forbidden map[string]bool, seen map[reflect.Type]bool) {
+// walkTypes descends a persistence struct's fields, failing on any named type
+// that is not in the permitted set.
+func walkTypes(t *testing.T, declared reflect.Type, permitted map[string]bool, seen map[reflect.Type]bool) {
 	t.Helper()
 	if seen[declared] {
 		return
 	}
 	seen[declared] = true
-	if name := declared.PkgPath(); name != "" {
-		parts := strings.Split(name, "/")
-		if qualified := parts[len(parts)-1] + "." + declared.Name(); forbidden[qualified] {
-			t.Errorf("a persistence struct reaches %s", qualified)
+	if pkg := declared.PkgPath(); pkg != "" {
+		parts := strings.Split(pkg, "/")
+		qualified := parts[len(parts)-1] + "." + declared.Name()
+		if !permitted[qualified] {
+			t.Errorf("a persistence struct reaches %s, which is not permitted", qualified)
 			return
 		}
 	}
 	switch declared.Kind() {
 	case reflect.Pointer, reflect.Slice, reflect.Array:
-		walkTypes(t, declared.Elem(), forbidden, seen)
+		walkTypes(t, declared.Elem(), permitted, seen)
 	case reflect.Map:
-		walkTypes(t, declared.Key(), forbidden, seen)
-		walkTypes(t, declared.Elem(), forbidden, seen)
+		walkTypes(t, declared.Key(), permitted, seen)
+		walkTypes(t, declared.Elem(), permitted, seen)
 	case reflect.Struct:
 		for i := 0; i < declared.NumField(); i++ {
-			walkTypes(t, declared.Field(i).Type, forbidden, seen)
+			walkTypes(t, declared.Field(i).Type, permitted, seen)
 		}
 	}
 }

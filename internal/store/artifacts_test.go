@@ -2,8 +2,11 @@ package store_test
 
 import (
 	"errors"
+	"fmt"
+	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/fissible/hapax/internal/eval"
@@ -917,7 +920,8 @@ func TestDamageTheSchemaCannotPreventIsCorruptNotSmaller(t *testing.T) {
 				_, err := s.LoadExemplarSelection(ctx(), ids.Selection)
 				return err
 			}},
-		{"a selection member pointing at another profile's node", "UPDATE exemplar_member SET node_id = (SELECT node_id FROM node ORDER BY node_id LIMIT 1)",
+		{"a selection naming the same node twice",
+			"UPDATE exemplar_member SET node_id = (SELECT node_id FROM exemplar_member WHERE ordinal = 0)",
 			func(s *store.Store, ids seededIDs) error {
 				_, err := s.LoadExemplarSelection(ctx(), ids.Selection)
 				return err
@@ -1020,22 +1024,403 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 	}
 }
 
-// No persistence struct may reach a prose-bearing owner type. exemplar.Candidate
-// carries the passage itself, and it is one field away from a selection.
-func TestNoPersistenceStructReachesProse(t *testing.T) {
-	forbidden := map[string]bool{
-		"exemplar.Candidate": true, "exemplar.Certificate": true,
-		"rewrite.Segment": true, "rewrite.Attempt": true,
-		"corpus.Document": true, "profile.Profile": true,
-		"deviation.Reference": true, "eval.Thresholds": true,
-		"eval.Calibration": true, "eval.Discrimination": true, "eval.Release": true,
-		"text.Document": true, "score.Report": true,
+// A blacklist of prose-bearing types would pass anything newly written, so the
+// rule is inverted: every named type a persistence struct transitively reaches
+// must appear here. Widening it is a decision a reviewer makes.
+//
+// This cannot catch a plain string field holding prose — nothing about `string`
+// says which — which is what TestTheCodecFieldSetsAreExactlyTheAllowlist and
+// the column grammars are for.
+func TestEveryTypeAPersistenceStructReachesIsPermitted(t *testing.T) {
+	permitted := map[string]bool{
+		"features.ID": true, "features.Vector": true, "features.FeatureValue": true,
+		"corpus.Split": true, "corpus.Admission": true,
+		"text.Kind": true, "text.Role": true, "text.ContainerKind": true,
+		"text.ExclusionReason": true,
+		"profile.Unit":         true, "profile.VarianceConvention": true,
+		"eval.Band": true, "eval.Interval": true,
+		"eval.ThresholdVerdict": true, "eval.ReleaseReason": true,
+		"llm.ProviderID": true, "rewrite.RejectionCode": true,
+		"store.Profile": true, "store.ProfileStat": true, "store.Reference": true,
+		"store.Threshold": true, "store.EvalResult": true, "store.ExemplarSelection": true,
+		"store.RewriteAttempt": true, "store.SnapshotWrite": true,
+		"store.Document": true, "store.Node": true,
 	}
 	for _, value := range []any{
 		store.Profile{}, store.ProfileStat{}, store.Reference{}, store.Threshold{},
 		store.EvalResult{}, store.ExemplarSelection{}, store.RewriteAttempt{},
 		store.SnapshotWrite{}, store.Document{}, store.Node{},
 	} {
-		walkTypes(t, reflect.TypeOf(value), forbidden, map[reflect.Type]bool{})
+		walkTypes(t, reflect.TypeOf(value), permitted, map[reflect.Type]bool{})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// What a refusal, a reopen and a race must leave behind
+// ---------------------------------------------------------------------------
+
+// ErrConflict is not enough on its own: an implementation that overwrites and
+// then reports a conflict destroys the artifact it was meant to protect. Every
+// artifact is reloaded after its refused write and must be unchanged.
+func TestARefusedConflictLeavesTheStoredArtifactUntouched(t *testing.T) {
+	s := newStore(t)
+	ids := seedEveryArtifact(t, s)
+
+	profBefore, err := s.LoadProfile(ctx(), ids.Profile)
+	if err != nil {
+		t.Fatalf("LoadProfile: %v", err)
+	}
+	refBefore, err := s.LoadReference(ctx(), ids.Reference)
+	if err != nil {
+		t.Fatalf("LoadReference: %v", err)
+	}
+	thresholdBefore, err := s.LoadThreshold(ctx(), ids.Threshold)
+	if err != nil {
+		t.Fatalf("LoadThreshold: %v", err)
+	}
+	resultBefore, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+	if err != nil {
+		t.Fatalf("LoadEvalResult: %v", err)
+	}
+	selectionBefore, err := s.LoadExemplarSelection(ctx(), ids.Selection)
+	if err != nil {
+		t.Fatalf("LoadExemplarSelection: %v", err)
+	}
+	attemptBefore, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+	if err != nil {
+		t.Fatalf("LoadRewriteAttempt: %v", err)
+	}
+
+	changedProfile := profileFixture(ids.Snapshot)
+	changedProfile.Stats[0].Mean += 1
+	changedReference := referenceFixture(ids.Profile)
+	changedReference.Values[features.Definitions()[0].ID] = []float64{9}
+	changedThreshold := thresholdFixture(ids.Profile, ids.Reference)
+	changedThreshold.High += 0.01
+	changedResult := evalResultFixture(ids.Profile, ids.Reference)
+	changedResult.AUC += 0.01
+	changedSelection := selectionFixture(ids.Profile, ids.Nodes[1], ids.Nodes[0], ids.Nodes[2])
+	changedAttempt := attemptFixture(ids.Profile, ids.Nodes[0])
+	changedAttempt.PreserveIdentifiers = changedAttempt.PreserveIdentifiers[:1]
+
+	for name, write := range map[string]func() error{
+		"profile":            func() error { return s.PutProfile(ctx(), changedProfile, store.LeaveHead) },
+		"reference":          func() error { return s.PutReference(ctx(), changedReference) },
+		"threshold":          func() error { return s.PutThreshold(ctx(), changedThreshold) },
+		"eval result":        func() error { return s.PutEvalResult(ctx(), changedResult) },
+		"exemplar selection": func() error { return s.PutExemplarSelection(ctx(), changedSelection) },
+		"rewrite attempt":    func() error { return s.PutRewriteAttempt(ctx(), changedAttempt) },
+	} {
+		if err := write(); !errors.Is(err, store.ErrConflict) {
+			t.Errorf("%s: error = %v, want ErrConflict", name, err)
+		}
+	}
+
+	for name, check := range map[string]func() (any, any){
+		"profile": func() (any, any) { got, _ := s.LoadProfile(ctx(), ids.Profile); return got, profBefore },
+		"reference": func() (any, any) {
+			got, _ := s.LoadReference(ctx(), ids.Reference)
+			return got, refBefore
+		},
+		"threshold": func() (any, any) {
+			got, _ := s.LoadThreshold(ctx(), ids.Threshold)
+			return got, thresholdBefore
+		},
+		"eval result": func() (any, any) {
+			got, _ := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return got, resultBefore
+		},
+		"exemplar selection": func() (any, any) {
+			got, _ := s.LoadExemplarSelection(ctx(), ids.Selection)
+			return got, selectionBefore
+		},
+		"rewrite attempt": func() (any, any) {
+			got, _ := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			return got, attemptBefore
+		},
+	} {
+		if got, want := check(); !reflect.DeepEqual(got, want) {
+			t.Errorf("%s survived the conflict as\n%+v\nwant\n%+v", name, got, want)
+		}
+	}
+}
+
+// The store is a file, not a process. A cache that never reaches SQLite would
+// pass every round trip above and lose everything on the next invocation.
+func TestEveryArtifactSurvivesAReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hapax.db")
+	first, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ids := seedEveryArtifact(t, first)
+	head := "essays"
+	if err := first.PutProfile(ctx(), profileFixture(ids.Snapshot), store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	before := loadEverything(t, first, ids)
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+	if got := loadEverything(t, second, ids); !reflect.DeepEqual(got, before) {
+		t.Errorf("after reopen =\n%+v\nwant\n%+v", got, before)
+	}
+	if got, err := second.ProfileHead(ctx(), head); err != nil || got != ids.Profile {
+		t.Errorf("head after reopen = %q, %v, want %q", got, err, ids.Profile)
+	}
+}
+
+// Two writers of the SAME artifact both succeed: the loser of a unique-key race
+// has compared nothing yet, so it rereads the winning row and accepts identical
+// content. Returning ErrConflict on the collision itself would fail a safe retry.
+func TestConcurrentIdenticalArtifactWritersBothSucceed(t *testing.T) {
+	s := newStore(t)
+	snapshot := storedGraph(t, s)
+	prof := profileFixture(snapshot.ID)
+	nodes := []string{
+		snapshot.Documents[0].Nodes[0].ID,
+		snapshot.Documents[0].Nodes[1].ID,
+	}
+
+	const writers = 8
+	for _, c := range []struct {
+		name  string
+		setUp func()
+		write func() error
+	}{
+		{"profile", func() {}, func() error { return s.PutProfile(ctx(), prof, store.LeaveHead) }},
+		{"reference", func() { mustPutProfile(t, s, prof) },
+			func() error { return s.PutReference(ctx(), referenceFixture(prof.ID)) }},
+		{"exemplar selection", func() { mustPutProfile(t, s, prof) },
+			func() error { return s.PutExemplarSelection(ctx(), selectionFixture(prof.ID, nodes...)) }},
+		{"rewrite attempt", func() { mustPutProfile(t, s, prof) },
+			func() error { return s.PutRewriteAttempt(ctx(), attemptFixture(prof.ID, nodes[0])) }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			c.setUp()
+			errs := make(chan error, writers)
+			var start sync.WaitGroup
+			start.Add(1)
+			for i := 0; i < writers; i++ {
+				go func() {
+					start.Wait()
+					errs <- c.write()
+				}()
+			}
+			start.Done()
+			for i := 0; i < writers; i++ {
+				if err := <-errs; err != nil {
+					t.Errorf("writer %d: %v", i, err)
+				}
+			}
+		})
+	}
+}
+
+func loadEverything(t *testing.T, s *store.Store, ids seededIDs) []any {
+	t.Helper()
+	prof, err := s.LoadProfile(ctx(), ids.Profile)
+	if err != nil {
+		t.Fatalf("LoadProfile: %v", err)
+	}
+	ref, err := s.LoadReference(ctx(), ids.Reference)
+	if err != nil {
+		t.Fatalf("LoadReference: %v", err)
+	}
+	threshold, err := s.LoadThreshold(ctx(), ids.Threshold)
+	if err != nil {
+		t.Fatalf("LoadThreshold: %v", err)
+	}
+	result, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+	if err != nil {
+		t.Fatalf("LoadEvalResult: %v", err)
+	}
+	selection, err := s.LoadExemplarSelection(ctx(), ids.Selection)
+	if err != nil {
+		t.Fatalf("LoadExemplarSelection: %v", err)
+	}
+	attempt, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+	if err != nil {
+		t.Fatalf("LoadRewriteAttempt: %v", err)
+	}
+	return []any{prof, ref, threshold, result, selection, attempt}
+}
+
+// ---------------------------------------------------------------------------
+// Semantics the artifacts carry
+// ---------------------------------------------------------------------------
+
+// Shippability is not an independent flag. A result that claims to ship while a
+// gate failed is the stale-reuse failure the whole release contract exists to
+// prevent, and it is expressible as a constraint.
+func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
+	for _, c := range []struct {
+		discriminates, calibrated, shippable bool
+	}{
+		{true, true, true}, {true, false, false}, {false, true, false}, {false, false, false},
+		{true, true, false}, {true, false, true}, {false, true, true}, {false, false, true},
+	} {
+		want := c.shippable == (c.discriminates && c.calibrated)
+		t.Run(fmt.Sprintf("%v-%v-%v", c.discriminates, c.calibrated, c.shippable), func(t *testing.T) {
+			s := newStore(t)
+			_, prof := seededProfile(t, s)
+			ref := referenceFixture(prof.ID)
+			mustPutReference(t, s, ref)
+			result := evalResultFixture(prof.ID, ref.ID)
+			result.Discriminates, result.Calibrated, result.Shippable = c.discriminates, c.calibrated, c.shippable
+			if !c.shippable {
+				result.Reason = eval.ReleaseReasonDiscriminationFailed
+			}
+			err := s.PutEvalResult(ctx(), result)
+			if want && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !want && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// The verdict is not an opinion beside the numbers: separated MEANS the bounds
+// are ordered. Both directions, because only asserting one lets a verdict that
+// is always "pair-incompatible" pass.
+func TestTheThresholdVerdictIsItsOrdering(t *testing.T) {
+	for _, c := range []struct {
+		name      string
+		verdict   eval.ThresholdVerdict
+		low, high float64
+		want      bool
+	}{
+		{"separated and ordered", eval.VerdictSeparated, 0.4, 0.9, true},
+		{"separated but crossed", eval.VerdictSeparated, 0.9, 0.4, false},
+		{"separated but equal", eval.VerdictSeparated, 0.5, 0.5, false},
+		{"incompatible and crossed", eval.VerdictPairIncompatible, 0.9, 0.4, true},
+		{"incompatible and equal", eval.VerdictPairIncompatible, 0.5, 0.5, true},
+		{"incompatible yet ordered", eval.VerdictPairIncompatible, 0.4, 0.9, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			_, prof := seededProfile(t, s)
+			ref := referenceFixture(prof.ID)
+			mustPutReference(t, s, ref)
+			threshold := thresholdFixture(prof.ID, ref.ID)
+			threshold.Verdict, threshold.Low, threshold.High = c.verdict, c.low, c.high
+			threshold.IntervalLow = eval.Interval{Lower: c.low - 0.05, Upper: c.low + 0.05}
+			threshold.IntervalHigh = eval.Interval{Lower: c.high - 0.05, Upper: c.high + 0.05}
+			err := s.PutThreshold(ctx(), threshold)
+			if c.want && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.want && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// An accepted attempt was scored in both bands. Storing acceptance beside an
+// absent band would record a decision no measurement supports.
+func TestAnAcceptedAttemptWasScoredOnBothSides(t *testing.T) {
+	for _, c := range []struct {
+		name               string
+		current, candidate eval.Band
+		want               bool
+	}{
+		{"both bands present", eval.BandDrifting, eval.BandInRange, true},
+		{"no current band", "", eval.BandInRange, false},
+		{"no candidate band", eval.BandDrifting, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			snapshot, prof := seededProfile(t, s)
+			attempt := acceptedAttempt(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+			attempt.CurrentBand, attempt.CandidateBand = c.current, c.candidate
+			err := s.PutRewriteAttempt(ctx(), attempt)
+			if c.want && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.want && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// A digest that is well formed but not this binary's manifest would let a
+// profile built under one feature contract be read as if it were built under
+// another — the stale-reuse failure cache identity exists to prevent.
+func TestAWellFormedButForeignFeatureContractIsRefused(t *testing.T) {
+	foreign := identity.HashBytes([]byte("a manifest from another version"))
+	for _, c := range []struct {
+		name  string
+		write func(t *testing.T, s *store.Store) error
+	}{
+		{"a profile manifest digest", func(t *testing.T, s *store.Store) error {
+			snapshot := storedGraph(t, s)
+			prof := profileFixture(snapshot.ID)
+			prof.ManifestDigest = foreign
+			return s.PutProfile(ctx(), prof, store.LeaveHead)
+		}},
+		{"a profile feature set version", func(t *testing.T, s *store.Store) error {
+			snapshot := storedGraph(t, s)
+			prof := profileFixture(snapshot.ID)
+			prof.FeatureSetVersion = features.SetVersion + 1
+			return s.PutProfile(ctx(), prof, store.LeaveHead)
+		}},
+		{"a reference manifest digest", func(t *testing.T, s *store.Store) error {
+			_, prof := seededProfile(t, s)
+			ref := referenceFixture(prof.ID)
+			ref.ManifestDigest = foreign
+			return s.PutReference(ctx(), ref)
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			if err := c.write(t, newStore(t)); err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// An exemplar of a profile comes from that profile's own corpus. A member from
+// another snapshot is a representative of a pool the profile never saw.
+func TestASelectionMayOnlyNameNodesInItsProfilesSnapshot(t *testing.T) {
+	s := newStore(t)
+	_, prof := seededProfile(t, s)
+
+	other := snapshotWrite(document("letters/c.md", identity.HashBytes([]byte("elsewhere")), node(0, 0, 9)))
+	mustPutSnapshot(t, s, other)
+	foreign := withDerivedIDs(other).Documents[0].Nodes[0].ID
+
+	if err := s.PutExemplarSelection(ctx(), selectionFixture(prof.ID, foreign)); err == nil {
+		t.Error("accepted a member from another snapshot")
+	}
+}
+
+// The error a refused identifier produces must not carry the identifier. The
+// invariant's scope covers diagnostic output, and this is the one column that
+// has already leaked once.
+func TestARefusedIdentifierIsNotEchoedBackInTheError(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	attempt := attemptFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+	secret := "preserve-v1:number:lost:the year 1979 in Warsaw"
+	attempt.PreserveIdentifiers = []string{secret}
+
+	err := s.PutRewriteAttempt(ctx(), attempt)
+	if err == nil {
+		t.Fatal("accepted")
+	}
+	for _, fragment := range []string{secret, "1979", "Warsaw"} {
+		if strings.Contains(err.Error(), fragment) {
+			t.Errorf("the error repeats %q: %v", fragment, err)
+		}
 	}
 }
