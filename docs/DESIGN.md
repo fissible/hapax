@@ -2162,10 +2162,21 @@ user names — both are strings that would otherwise be free text by another nam
 that column is the one that already held prose once.
 
 **Every read is validated.** Unknown enum values, non-finite floats and rows whose `(kind, id)`
-disagrees with where they were found are all `ErrCorrupt` — and for content-addressed
-artifacts, so is a decoded content that no longer hashes to its stored ID. Corruption must
-never be able to present itself as *insufficient evidence*, which is a legitimate verdict this
-system emits and would therefore be believed.
+disagrees with where they were found are all `ErrCorrupt`, as is an artifact that names a
+parent outside its own graph — a threshold or eval result combining one profile with another
+profile's reference. Corruption must never be able to present itself as *insufficient
+evidence*, which is a legitimate verdict this system emits and would therefore be believed.
+
+**Recomputing an identity is possible only where its preimage is stored**, which is the
+snapshot, the document and the node — and it is required of exactly those. This line
+previously said a decoded content that no longer hashes to its stored ID is `ErrCorrupt` for
+every content-addressed artifact, which no schema of this shape can satisfy: a profile ID
+hashes the outlier algorithm and four build floors, and an exemplar certificate ID hashes the
+density, medoid and tie records, none of which are columns here and none of which should be —
+persisting a preimage so the ID can be rechecked would mean persisting the working records
+the artifact table exists to keep out. Every other ID is **carried**, and what is checked of
+it is its digest form and its referential closure. Widening the schema until an ID becomes
+recomputable is a change that must make it verified.
 
 ### Dangling spans, and exactly how many exemplars is enough
 

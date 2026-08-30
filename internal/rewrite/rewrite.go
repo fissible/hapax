@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	RejectionNone RejectionCode = ""
 	// Epsilon rejects ties while remaining below the resolution of a score.
 	Epsilon = 1e-9
 
@@ -25,6 +26,10 @@ const (
 	// PassageMarker labels the unfenced passage immediately following it.
 	PassageMarker = "PASSAGE TO REWRITE:"
 )
+
+func RejectionCodes() []RejectionCode {
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
+}
 
 var (
 	ErrMissingInput       = errors.New("rewrite missing input")

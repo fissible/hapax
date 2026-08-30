@@ -27,6 +27,8 @@ const (
 	UnitParagraph Unit = "paragraph"
 )
 
+func Units() []Unit { return []Unit{UnitDocument, UnitParagraph} }
+
 // VarianceConvention identifies how profile variances are calculated.
 type VarianceConvention string
 
@@ -34,6 +36,8 @@ const (
 	// SampleVariance uses the n-1 denominator.
 	SampleVariance VarianceConvention = "sample"
 )
+
+func VarianceConventions() []VarianceConvention { return []VarianceConvention{SampleVariance} }
 
 const (
 	// MADMedianV1 trims values beyond a configured number of scaled median absolute deviations.
