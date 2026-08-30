@@ -84,6 +84,12 @@ func enumUpdate(table, column, value string) string {
 			return set(column+" = ''", "accepted = 0", "rejection = 'not-improved'")
 		}
 		return set(column + " = " + quoted)
+	case "calibration_band.band":
+		// The band is half the primary key, so setting every row to one value
+		// collides. Reduce to a single report first, then move it: what is
+		// under test is the vocabulary, not the key.
+		return "DELETE FROM calibration_band WHERE band <> 'drifting'; " +
+			set("band = "+quoted)
 	case "threshold.verdict":
 		if value == string(eval.VerdictSeparated) {
 			return set("verdict = "+quoted, "t_low = 0.4", "t_high = 0.9")
