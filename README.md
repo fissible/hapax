@@ -8,10 +8,13 @@ moved *toward you* rather than merely away from the model.
 
 The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 
-> **Status: pre-alpha.** Seven library components are built and tested — text
-> admission, tokenization, corpus indexing, feature extraction, the tell linter
-> and the author profile. **There is no CLI yet**, and no scoring or rewriting.
-> The commands below are the planned interface, not working ones. See
+> **Status: pre-alpha.** Twelve library components are built and tested: text
+> admission and structure, the tell linter, corpus indexing, feature extraction,
+> the author profile, the calibration harness and its release gates, scoring,
+> exemplar selection, the semantic-preservation gate, document reassembly, the
+> rewrite loop, and the model providers. The artifact store is half built.
+> **There is no CLI yet**, so the commands below are the planned interface
+> rather than working ones — nothing here is wired together end to end. See
 > [PROJECT.md](PROJECT.md) for exactly what exists.
 
 ---

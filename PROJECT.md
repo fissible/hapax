@@ -24,13 +24,15 @@ model, then review.
 | 2 | `corpus` | **built** | walk, dedupe, split, snapshot identity |
 | 3 | `features` | **built** | Tier A candidates |
 | 4 | `profile` | **built** | paragraph-unit. Readiness withheld until the minimums are derived |
-| 5 | `eval` | not started | blocked in practice — see below |
-| 6 | `score` | not started | needs `eval` thresholds |
-| 7 | `select` | not started | needs `profile` |
-| 8 | `preserve` | not started | needs `text` |
-| 9 | `llm` | not started | leaf; Ollama + one cloud provider |
-| 10 | `rewrite` | not started | needs 6–9 |
-| 11 | `cli` | not started | intended early as a thin shell; deferred while there was nothing to expose |
+| 5 | `eval` | **built** | deviation, distance `d`, thresholds, clustered bootstrap, band floor, AUC gate |
+| 6 | `score` | **built** | PR #32. Added the `draft` split; found a reference that could not be stored |
+| 7 | `select` | **built** | PR #39, package `exemplar` — `select` is a Go keyword |
+| 8 | `preserve` | **built** | PR #34 |
+| 9 | `llm` | **built** | PR #41. Ollama + Anthropic, dial seam, AST egress guard |
+| 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
+| 11 | `assemble` | **built** | PR #37 |
+| 12 | `store` | **partial** | PR #45: schema entire, snapshot aggregate only. Slice 2 below |
+| 13 | `cli` | not started | design settled (exit codes, mode resolution); needs `store` slice 2 |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -40,11 +42,15 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 
 | # | Title | Blocked on |
 |---|---|---|
-| [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | partially delivered; rest needs `score`, `eval` |
+| [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
 | [#2](https://github.com/fissible/hapax/issues/2) | Select and licence-verify a register-matched distractor corpus | nothing — actionable, blocks release |
-| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `text` contract versioning exists; actionable |
+| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` slice 2: this is what `Prune` and the unavailable-marking rule are for |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
-| [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | needs `profile` (now built) |
+| [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
+| [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | needs a real corpus (#2) |
+| [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | needs `cli` and a real corpus |
+| [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | needs a real corpus (#2) |
+| [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | nothing — next |
 
 ## Issue #2 — resolved on the fallback
 
@@ -119,6 +125,52 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-30 (preserve, assemble, select, llm, the audit fix, store slice 1)
+
+**Merged since the last note:** `preserve` (#34), `assemble` (#37), `select`
+(#39, package `exemplar`), `llm` (#41), the audit-record privacy fix (#43), and
+`store` slice 1 (#45). Components 0–11 are complete; 12 is half.
+
+**Next, in order:**
+
+1. **`store` slice 2** (issue #44) — the remaining artifact operations
+   (profile, reference, threshold, eval_result, exemplar_selection,
+   rewrite_attempt, profile_head), plus rehydration and `Prune`. The schema and
+   every constraint already exist from #45, so this is codecs and traversal
+   against tables that are already there. `Prune`'s tests were drafted during
+   slice 1 and deliberately **not** kept: the API moved underneath them, and
+   the six design rounds behind `Prune` are recorded in DESIGN, which is the
+   part worth having. Write them fresh from the declared roots and edges.
+2. **`cli`** (component 13) — the composition root. Exit codes, mode resolution
+   and the command surface are settled in DESIGN; what remains is wiring and the
+   output schema. Several obligations other components deliberately pushed
+   outward land here together: reading `HAPAX_LOCAL_ONLY`, constructing the
+   credential factory only on the cloud path, choosing which profile is current
+   (since `Prune` takes roots as arguments and refuses to decide), and the
+   `no LLM, no network` guarantee for `score` and `tells` — testable the way
+   `llm`'s was, with a dial function that fails the test if called.
+
+**The design round is now the highest-value part of the process.** Reviewing a
+design before writing any test has caught, across these slices: `select`
+reusing a distance that measures the wrong thing; the local-only guarantee
+contradicting itself across five documents; `Prune` traversing away from what
+it meant to keep; and a prose leak that had been sitting in merged code for two
+slices. None of those would have been found by testing the thing I was about to
+build.
+
+**Three defects were found by guards written for something else.** `ciconfig`'s
+Go-version check caught `go get` bumping `go.mod` past what CI installs; the
+race detector caught `store` mutating its caller's slice; CI's `go mod tidy`
+check caught thirty missing `go.sum` entries. Keep writing that kind of test.
+
+**Where a claim cannot be made mechanical, narrow it rather than implying it.**
+`llm`'s AST guard is a structural backstop and says so; `store`'s foreign-key
+enforcement is declared but not exercised in slice 1 and says so; the process
+barrier forces contention without proving all eight writers blocked and says
+so. Codex accepted all three and overruled a fourth — migration atomicity —
+correctly, because an *internal* seam is not the public test-only API worth
+refusing.
+
 ### 2026-08-29 (rewrite)
 
 **Completed: the monotonic acceptance loop** (PR #33, all three checks green).
@@ -135,28 +187,6 @@ churn is bounded by the cap, which counts attempts rather than acceptances.
 found with no code in existence: the provider contract had deleted `Selector`,
 reassembly had no owner, the audit record conflicted with the store's privacy
 invariant, and the cap's obvious reading did not terminate. Do this again.
-
-**Next, in order:**
-
-1. **`preserve`** (component 8) — deterministic, and the interface it implements
-   already exists and is exercised by rewrite's fakes. Numbers, named entities,
-   negations, URLs and quoted strings must survive an edit. Its own design
-   questions: what counts as a named entity without a model, and whether "5" and
-   "five" are the same number.
-2. **`assemble`** (component 11) — added to the table this slice. Ordered
-   non-overlapping raw spans, every untouched byte and every excision inside a
-   replaced span preserved, all-or-nothing output. `score` does not currently
-   expose leaf spans, so that gap is part of the slice.
-3. **`select`** (component 7) — medoids and high-density regions of the named
-   profile, never nearest-neighbour to the draft. ADR 0004 also settles that
-   exemplars are stable per profile, which rewrite now relies on.
-4. **`llm`** (component 9) — Ollama first, Anthropic as the one cloud provider.
-   ADR 0007's local-only assertions belong here: no cloud provider constructed,
-   no credential read, **no dial outside loopback**, no telemetry, **asserted by
-   test**. Loopback is the exception because the default provider is Ollama on
-   localhost — the guarantee is about destination, not silence.
-5. **`cli`** (component 12) — the table says build it early against stub
-   interfaces. That advice was not taken and the interfaces exist now anyway.
 
 **Process notes, and this slice has the sharpest ones yet.**
 
