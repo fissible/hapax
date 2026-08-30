@@ -108,15 +108,31 @@ func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
 		t.Fatalf("parsing cmd/hapax: %v", err)
 	}
 	forbidden := map[string]bool{"Credentials": true, "Dial": true, "OpenStore": true}
-	scanned := 0
+	scanned, deps := 0, 0
 	for _, pkg := range packages {
 		for name, file := range pkg.Files {
 			scanned++
 			ast.Inspect(file, func(n ast.Node) bool {
-				ident, ok := n.(*ast.Ident)
-				if ok && forbidden[ident.Name] {
+				if ident, ok := n.(*ast.Ident); ok && forbidden[ident.Name] {
 					t.Errorf("%s names %s; no A1 command is served by one, so the binary "+
 						"must not be able to populate it by any route", name, ident.Name)
+				}
+				// A POSITIONAL literal populates fields without naming them, so
+				// the name check alone is not the guarantee it claims to be.
+				literal, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				selector, ok := literal.Type.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "Deps" {
+					return true
+				}
+				deps++
+				for _, element := range literal.Elts {
+					if _, named := element.(*ast.KeyValueExpr); !named {
+						t.Errorf("%s builds Deps positionally, which populates fields "+
+							"without naming them; every field must be named", name)
+					}
 				}
 				return true
 			})
@@ -124,5 +140,8 @@ func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no non-test source was scanned in cmd/hapax; this guard is vacuous")
+	}
+	if deps == 0 {
+		t.Fatal("no cli.Deps literal was found in cmd/hapax; this guard is vacuous")
 	}
 }

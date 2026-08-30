@@ -66,7 +66,13 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 			if code != c.want {
 				t.Errorf("exit = %d, want %d; stderr %q", code, c.want, stderr.String())
 			}
-			if c.want <= 1 {
+			switch {
+			case c.want > 1:
+				if stdout.Len() != 0 {
+					t.Errorf("a failing invocation wrote to stdout: %q", stdout.String())
+				}
+				requireOneDiagnostic(t, stderr.String())
+			case c.asJSON:
 				// Literally the same helper Run's tests use, so the binary and
 				// the function cannot be held to different standards.
 				want := cleanResult(path)
@@ -74,11 +80,8 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 					want = adverseResult(path)
 				}
 				requireSuccessfulDocument(t, stdout.String(), stderr.String(), c.status, want)
-			} else {
-				if stdout.Len() != 0 {
-					t.Errorf("a failing invocation wrote to stdout: %q", stdout.String())
-				}
-				requireOneDiagnostic(t, stderr.String())
+			default:
+				requireSuccessfulHumanOutput(t, stdout.String(), stderr.String(), c.status)
 			}
 		})
 	}
