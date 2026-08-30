@@ -179,8 +179,9 @@ found while implementing against them. Worth carrying forward:
    now has typed operations and the graph they hang from is closed. What
    remains is the part that touches the user's files: open once, hash what was
    read, then slice; the closed outcome vocabulary `ok` / `missing` /
-   `unreadable` / `content-changed` / `span-invalid`, with a malformed *stored*
-   reference being `ErrCorrupt` rather than an outcome; `unavailable_at` set on
+   `unreadable` / `content-changed` — four, not five; `span-invalid` was
+   unreachable and is gone — with a malformed *stored* reference being
+   `ErrCorrupt` rather than an outcome; `unavailable_at` set on
    the first `missing` or `unreadable` and cleared on the first `ok`; and
    `Prune` over the roots DESIGN declares. `Prune`'s tests were drafted during
    slice 1 and deliberately **not** kept: the API moved underneath them, and
