@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"errors"
 	"regexp"
 	"sort"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"github.com/fissible/hapax/internal/llm"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/rewrite"
+	"github.com/fissible/hapax/internal/store"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -350,3 +352,90 @@ func TestNoTableNamesAValueNoVocabularyDeclares(t *testing.T) {
 }
 
 var sqlLiteral = regexp.MustCompile(`'([^']*)'`)
+
+// relaxEnum removes one column's closed set from the live schema, so a value
+// the database would normally refuse can be stored. That is not a hypothetical:
+// the ledger, not the schema, answers "what version is this", so a database
+// whose DDL was altered outside this binary still opens — and read validation
+// is the only thing left between it and a believed result.
+//
+// The substitution follows the schema's spelling and fails loudly if it stops
+// matching, rather than quietly relaxing nothing.
+func relaxEnum(t *testing.T, s *store.Store, table, column string) {
+	t.Helper()
+	db := openRaw(t, s)
+	var ddl string
+	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE name = ?", table).Scan(&ddl); err != nil {
+		t.Fatalf("sql for %s: %v", table, err)
+	}
+	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(column) + `\s+IN\s*\([^)]*\)`)
+	relaxed := pattern.ReplaceAllString(ddl, column+" IS NOT NULL")
+	if relaxed == ddl {
+		t.Fatalf("no closed set found for %s.%s; this damage would be vacuous", table, column)
+	}
+	for _, statement := range []string{"PRAGMA writable_schema=ON"} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatalf("%s: %v", statement, err)
+		}
+	}
+	if _, err := db.Exec("UPDATE sqlite_master SET sql = ? WHERE name = ?", relaxed, table); err != nil {
+		t.Fatalf("relaxing %s: %v", table, err)
+	}
+	if _, err := db.Exec("PRAGMA writable_schema=OFF"); err != nil {
+		t.Fatalf("writable_schema off: %v", err)
+	}
+}
+
+// A reader that trusts the database is not validating. Every decoder is handed
+// an enum value outside its vocabulary and must call it corruption.
+func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
+	for _, c := range []struct {
+		table, column string
+		load          func(s *store.Store, ids seededIDs) error
+	}{
+		{"profile", "unit",
+			func(s *store.Store, ids seededIDs) error { _, err := s.LoadProfile(ctx(), ids.Profile); return err }},
+		{"profile", "variance_convention",
+			func(s *store.Store, ids seededIDs) error { _, err := s.LoadProfile(ctx(), ids.Profile); return err }},
+		{"reference", "split",
+			func(s *store.Store, ids seededIDs) error { _, err := s.LoadReference(ctx(), ids.Reference); return err }},
+		{"threshold", "verdict",
+			func(s *store.Store, ids seededIDs) error { _, err := s.LoadThreshold(ctx(), ids.Threshold); return err }},
+		{"eval_result", "reason",
+			func(s *store.Store, ids seededIDs) error {
+				_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+				return err
+			}},
+		{"rewrite_attempt", "provider_id",
+			func(s *store.Store, ids seededIDs) error {
+				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+				return err
+			}},
+		{"rewrite_attempt", "current_band",
+			func(s *store.Store, ids seededIDs) error {
+				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+				return err
+			}},
+		{"rewrite_attempt", "rejection",
+			func(s *store.Store, ids seededIDs) error {
+				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+				return err
+			}},
+		{"document", "split",
+			func(s *store.Store, ids seededIDs) error { _, err := s.Snapshot(ctx(), ids.Snapshot); return err }},
+		{"node", "role",
+			func(s *store.Store, ids seededIDs) error { _, err := s.Snapshot(ctx(), ids.Snapshot); return err }},
+	} {
+		t.Run(c.table+"."+c.column, func(t *testing.T) {
+			s := newStore(t)
+			ids := seedEveryArtifact(t, s)
+			relaxEnum(t, s, c.table, c.column)
+			if _, err := openRaw(t, s).Exec(enumUpdate(c.table, c.column, "not-in-the-set")); err != nil {
+				t.Fatalf("damaging: %v", err)
+			}
+			if err := c.load(s, ids); !errors.Is(err, store.ErrCorrupt) {
+				t.Errorf("error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}

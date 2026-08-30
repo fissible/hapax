@@ -1557,3 +1557,27 @@ func declaredColumn(table, column string) bool {
 	}
 	return false
 }
+
+// And a stored selection that already names a foreign node is corrupt. The
+// write-side refusal above says nothing about a database damaged outside this
+// binary, which is the case where reading it as a smaller valid selection would
+// silently change which exemplars a rewrite was given.
+func TestAStoredSelectionNamingAForeignNodeIsCorrupt(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	selection := selectionFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+	if err := s.PutExemplarSelection(ctx(), selection); err != nil {
+		t.Fatalf("PutExemplarSelection: %v", err)
+	}
+
+	other := snapshotWrite(document("letters/c.md", identity.HashBytes([]byte("elsewhere")), node(0, 0, 9)))
+	mustPutSnapshot(t, s, other)
+	foreign := withDerivedIDs(other).Documents[0].Nodes[0].ID
+
+	if _, err := openRaw(t, s).Exec("UPDATE exemplar_member SET node_id = ?", foreign); err != nil {
+		t.Fatalf("damaging: %v", err)
+	}
+	if _, err := s.LoadExemplarSelection(ctx(), selection.ID); !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
