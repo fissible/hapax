@@ -107,6 +107,23 @@ const (
 	ScreeningFlagged       Screening = "flagged"
 )
 
+var severities = []Severity{Info, Warn, Error}
+var provenances = []Provenance{Derived, Unvalidated, UserDefined}
+var categories = []Category{Formatting, AuthorDeviation, SourceContamination}
+var screenings = []Screening{ScreeningNotRun, ScreeningIndeterminate, ScreeningFlagged}
+
+// Screenings returns the closed screening vocabulary.
+func Screenings() []Screening { return append([]Screening(nil), screenings...) }
+
+// Severities returns the closed severity vocabulary.
+func Severities() []Severity { return append([]Severity(nil), severities...) }
+
+// Provenances returns the closed provenance vocabulary.
+func Provenances() []Provenance { return append([]Provenance(nil), provenances...) }
+
+// Categories returns the closed category vocabulary.
+func Categories() []Category { return append([]Category(nil), categories...) }
+
 type CodeFenceAwareness string
 
 const Unavailable CodeFenceAwareness = "unavailable"

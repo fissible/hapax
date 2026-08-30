@@ -32,7 +32,10 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 			// test walks; a package that cannot reach a type cannot reach it on
 			// any path, including one that lazily fills a nil callback.
 			allowedImports: []string{
-				"context", "encoding/json", "errors", "fmt", "io", "sort", "strings",
+				// time is here so Deps.Now can be typed. It cannot open a
+				// socket or read the environment, so it does not weaken what
+				// this list is for.
+				"context", "encoding/json", "errors", "fmt", "io", "sort", "strings", "time",
 				"github.com/fissible/hapax/internal/mode",
 				"github.com/fissible/hapax/internal/tells",
 				"github.com/fissible/hapax/internal/text",
