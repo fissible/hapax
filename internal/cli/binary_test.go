@@ -24,14 +24,15 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 	}
 
 	for _, c := range []struct {
-		name string
-		body string
-		args []string
-		want int
+		name   string
+		body   string
+		args   []string
+		want   int
+		status string
 	}{
-		{"a clean draft", clean, nil, 0},
-		{"a draft with a finding", adverse, nil, 1},
-		{"an unknown command", clean, []string{"score"}, 2},
+		{"a clean draft", clean, nil, 0, "ok"},
+		{"a draft with a finding", adverse, nil, 1, "adverse"},
+		{"an unknown command", clean, []string{"score"}, 2, ""},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "draft.md")
@@ -58,13 +59,9 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 				t.Errorf("exit = %d, want %d; stderr %q", code, c.want, stderr.String())
 			}
 			if c.want <= 1 {
-				// The same stream contract Run is held to, not a substring:
-				// a binary emitting {"schema":"hapax.v1"} and nothing else
-				// would otherwise pass.
-				requireEnvelopeFields(t, stdout.String())
-				if stderr.Len() != 0 {
-					t.Errorf("a successful run wrote to stderr: %q", stderr.String())
-				}
+				// Literally the same helper Run's tests use, so the binary and
+				// the function cannot be held to different standards.
+				requireSuccessfulDocument(t, stdout.String(), stderr.String(), c.status)
 			} else {
 				if stdout.Len() != 0 {
 					t.Errorf("a failing invocation wrote to stdout: %q", stdout.String())

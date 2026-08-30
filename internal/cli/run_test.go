@@ -122,18 +122,12 @@ func TestRunEmitsTheConvertedReport(t *testing.T) {
 	}
 
 	var got struct {
-		Schema, Command, Status, Reason string
-		Profile                         *string
-		Result                          cli.TellsResult
+		Result cli.TellsResult
 	}
 	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
 		t.Fatalf("unmarshal %q: %v", h.Stdout.String(), err)
 	}
-	if got.Schema != cli.Schema || got.Command != "tells" || got.Status != "adverse" ||
-		got.Reason != "" || got.Profile != nil {
-		t.Errorf("envelope = %+v", got)
-	}
-	requireEnvelopeFields(t, h.Stdout.String())
+	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "adverse")
 	// Measured against tells directly: the double-space rule matches at byte 16.
 	want := cli.TellsResult{
 		Path: path, Screening: "indeterminate", Count: 1,
@@ -156,18 +150,12 @@ func TestRunEmitsACompleteDocumentForACleanDraft(t *testing.T) {
 		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
 	var got struct {
-		Schema, Command, Status, Reason string
-		Profile                         *string
-		Result                          cli.TellsResult
+		Result cli.TellsResult
 	}
 	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	if got.Schema != cli.Schema || got.Command != "tells" || got.Status != "ok" ||
-		got.Reason != "" || got.Profile != nil {
-		t.Errorf("envelope = %+v", got)
-	}
-	requireEnvelopeFields(t, h.Stdout.String())
+	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "ok")
 	want := cli.TellsResult{Path: path, Screening: "indeterminate", Count: 0, Findings: []cli.TellsFinding{}}
 	if !reflect.DeepEqual(got.Result, want) {
 		t.Errorf("result =\n%+v\nwant\n%+v", got.Result, want)
@@ -434,34 +422,46 @@ func requireNoDocument(t *testing.T, h *harness) {
 	requireOneDiagnostic(t, h.Stderr.String())
 }
 
-// The envelope carries exactly six fields — no more, so a document cannot grow
-// one silently, and no fewer, so an absent one cannot pass as null.
-func requireEnvelopeFields(t *testing.T, rendered string) {
+// requireSuccessfulDocument is the WHOLE stream contract for a run that
+// produced a verdict, used by both Run's tests and the binary's so the two
+// cannot be held to different standards: the exact six fields, correct values
+// and types for every one of them, one newline-terminated line on stdout, and
+// nothing at all on stderr.
+func requireSuccessfulDocument(t *testing.T, stdout, stderr, wantStatus string) {
 	t.Helper()
+	if stderr != "" {
+		t.Errorf("a successful run wrote to stderr: %q", stderr)
+	}
+	if stdout != strings.TrimRight(stdout, "\n")+"\n" || strings.Count(stdout, "\n") != 1 {
+		t.Errorf("stdout is not one newline-terminated line: %q", stdout)
+	}
 	var decoded map[string]any
-	if err := json.Unmarshal([]byte(rendered), &decoded); err != nil {
-		t.Fatalf("unmarshal: %v", err)
+	if err := json.Unmarshal([]byte(stdout), &decoded); err != nil {
+		t.Fatalf("stdout is not one JSON document: %q: %v", stdout, err)
 	}
 	got := make([]string, 0, len(decoded))
 	for name := range decoded {
 		got = append(got, name)
 	}
 	sort.Strings(got)
-	want := []string{"command", "profile", "reason", "result", "schema", "status"}
-	if !reflect.DeepEqual(got, want) {
+	if want := []string{"command", "profile", "reason", "result", "schema", "status"}; !reflect.DeepEqual(got, want) {
 		t.Errorf("envelope fields =\n%v\nwant\n%v", got, want)
 	}
-	// The DECODED values, not a struct: encoding/json turns "reason":null into
-	// the zero string, so a document emitting null where the contract says ""
-	// would pass a struct comparison.
-	if reason, ok := decoded["reason"].(string); !ok || reason != "" {
-		t.Errorf("reason = %#v, want the empty string and not null", decoded["reason"])
+	// The DECODED values and their types, not a struct: encoding/json turns
+	// "reason":null into the zero string, so a document emitting null where the
+	// contract says "" would pass a struct comparison.
+	for name, want := range map[string]any{
+		"schema": cli.Schema, "command": "tells", "status": wantStatus, "reason": "",
+	} {
+		if value, ok := decoded[name].(string); !ok || value != want {
+			t.Errorf("%s = %#v, want the string %q", name, decoded[name], want)
+		}
 	}
 	if decoded["profile"] != nil {
 		t.Errorf("profile = %#v, want null", decoded["profile"])
 	}
-	if rendered != strings.TrimRight(rendered, "\n")+"\n" || strings.Count(rendered, "\n") != 1 {
-		t.Errorf("stdout is not one newline-terminated line: %q", rendered)
+	if _, ok := decoded["result"].(map[string]any); !ok {
+		t.Errorf("result = %#v, want an object", decoded["result"])
 	}
 }
 
