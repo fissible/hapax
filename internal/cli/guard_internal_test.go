@@ -66,6 +66,14 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 						if !allowed[path] {
 							t.Errorf("%s imports %q, which the composition root may not reach", name, path)
 						}
+						// A dot import or a rename makes every later check
+						// spelling-dependent: Deps{...} stops being a selector,
+						// and os.Getenv stops being called os.Getenv.
+						if spec.Name != nil {
+							t.Errorf("%s imports %q as %q; the composition root's imports are "+
+								"unrenamed so the guards below can see what they are looking at",
+								name, path, spec.Name.Name)
+						}
 					}
 					ast.Inspect(file, func(n ast.Node) bool {
 						selector, ok := n.(*ast.SelectorExpr)
@@ -123,8 +131,18 @@ func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
 				if !ok {
 					return true
 				}
-				selector, ok := literal.Type.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "Deps" {
+				// Either spelling: cli.Deps, or a bare Deps reachable through a
+				// dot import or a local alias.
+				switch typed := literal.Type.(type) {
+				case *ast.SelectorExpr:
+					if typed.Sel.Name != "Deps" {
+						return true
+					}
+				case *ast.Ident:
+					if typed.Name != "Deps" {
+						return true
+					}
+				default:
 					return true
 				}
 				deps++
