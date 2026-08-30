@@ -8,11 +8,15 @@ import (
 	"testing"
 )
 
-// The AST guard says cmd/hapax may not reach around the seams; it cannot say
-// that main WIRES them, or that it returns what Run returned. A main that read
-// a credential before calling Run would satisfy every other test in this
-// package, because no other test invokes it.
-func TestTheBinaryIsTheRunFunction(t *testing.T) {
+// The binary honours the same contract Run does. Every other test in this
+// package calls Run directly, so a main that read a credential or wrote to the
+// wrong stream before delegating would pass all of them.
+//
+// It does NOT prove that main DELEGATES: a duplicate implementation with the
+// same behaviour would pass. Proving the call graph would need a seam inside
+// main, which is a worse trade than testing what the binary actually does —
+// the contract is the exit code and the stream, not the call.
+func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "hapax")
 	build := exec.Command("go", "build", "-o", binary, "github.com/fissible/hapax/cmd/hapax")
 	if out, err := build.CombinedOutput(); err != nil {

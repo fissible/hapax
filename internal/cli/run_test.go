@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -132,6 +133,7 @@ func TestRunEmitsTheConvertedReport(t *testing.T) {
 		got.Reason != "" || got.Profile != nil {
 		t.Errorf("envelope = %+v", got)
 	}
+	requireEnvelopeFields(t, h.Stdout.String())
 	// Measured against tells directly: the double-space rule matches at byte 16.
 	want := cli.TellsResult{
 		Path: path, Screening: "indeterminate", Count: 1,
@@ -154,15 +156,21 @@ func TestRunEmitsACompleteDocumentForACleanDraft(t *testing.T) {
 		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
 	var got struct {
-		Status string
-		Result cli.TellsResult
+		Schema, Command, Status, Reason string
+		Profile                         *string
+		Result                          cli.TellsResult
 	}
 	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
+	if got.Schema != cli.Schema || got.Command != "tells" || got.Status != "ok" ||
+		got.Reason != "" || got.Profile != nil {
+		t.Errorf("envelope = %+v", got)
+	}
+	requireEnvelopeFields(t, h.Stdout.String())
 	want := cli.TellsResult{Path: path, Screening: "indeterminate", Count: 0, Findings: []cli.TellsFinding{}}
-	if got.Status != "ok" || !reflect.DeepEqual(got.Result, want) {
-		t.Errorf("status %q result\n%+v\nwant ok and\n%+v", got.Status, got.Result, want)
+	if !reflect.DeepEqual(got.Result, want) {
+		t.Errorf("result =\n%+v\nwant\n%+v", got.Result, want)
 	}
 	if !strings.Contains(h.Stdout.String(), `"findings":[]`) {
 		t.Errorf("findings is not an empty list: %s", h.Stdout.String())
@@ -229,15 +237,16 @@ func TestADraftThatWillNotAdmitExitsThree(t *testing.T) {
 // Codes 2 and 3 carry no document, --json or not, because inventing a status
 // for a failure would blur the correspondence the whole scheme rests on.
 func TestFailuresWriteNoDocumentEvenAskedForJSON(t *testing.T) {
+	notText := draft(t, "Prose interrupted by \xff\xfe invalid bytes.\n")
 	for _, args := range [][]string{
 		{"tells", "--json", "--nonsense"},
 		{"tells", "--json", filepath.Join(t.TempDir(), "absent.md")},
+		{"tells", "--json", notText},
+		{"tells", "--json"},
 	} {
 		h := newHarness(t, nil)
 		h.run(args...)
-		if h.Stdout.Len() != 0 {
-			t.Errorf("%v wrote %q to stdout", args, h.Stdout.String())
-		}
+		requireNoDocument(t, h)
 	}
 }
 
@@ -304,6 +313,7 @@ func TestAMalformedEnvironmentExitsTwo(t *testing.T) {
 			if code := h.run("tells", draft(t, clean)); code != 2 {
 				t.Errorf("exit = %d, want 2", code)
 			}
+			requireNoDocument(t, h)
 		})
 	}
 }
@@ -313,6 +323,7 @@ func TestAMalformedEnvironmentExitsTwoEvenWithTheFlag(t *testing.T) {
 	if code := h.run("tells", "--local-only", draft(t, clean)); code != 2 {
 		t.Errorf("exit = %d, want 2", code)
 	}
+	requireNoDocument(t, h)
 }
 
 // Mode is resolved before anything else can happen. With a malformed value and
@@ -331,6 +342,7 @@ func TestModeIsResolvedBeforeAnySeamCanRun(t *testing.T) {
 	if read {
 		t.Error("the draft was read before the mode was resolved")
 	}
+	requireNoDocument(t, h)
 }
 
 // A1's commands need no store, no provider and no credential, and the harness
@@ -409,5 +421,34 @@ func TestTheEnvironmentSelectsLocalOnlyOnASuccessfulRun(t *testing.T) {
 	}
 	if got := h.document(t)["status"]; got != "ok" {
 		t.Errorf("status = %v, want ok", got)
+	}
+}
+
+// A failing invocation writes nothing to stdout and exactly one line to stderr,
+// whatever was asked for.
+func requireNoDocument(t *testing.T, h *harness) {
+	t.Helper()
+	if h.Stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want nothing", h.Stdout.String())
+	}
+	requireOneDiagnostic(t, h.Stderr.String())
+}
+
+// The envelope carries exactly six fields — no more, so a document cannot grow
+// one silently, and no fewer, so an absent one cannot pass as null.
+func requireEnvelopeFields(t *testing.T, rendered string) {
+	t.Helper()
+	var decoded map[string]any
+	if err := json.Unmarshal([]byte(rendered), &decoded); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	got := make([]string, 0, len(decoded))
+	for name := range decoded {
+		got = append(got, name)
+	}
+	sort.Strings(got)
+	want := []string{"command", "profile", "reason", "result", "schema", "status"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("envelope fields =\n%v\nwant\n%v", got, want)
 	}
 }
