@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -172,4 +173,25 @@ func sortFKs[T any](fks []T) {
 	sort.Slice(fks, func(i, j int) bool {
 		return fmt.Sprintf("%+v", fks[i]) < fmt.Sprintf("%+v", fks[j])
 	})
+}
+
+// withDerivedIDs is what a round trip should equal. PutSnapshot does not fill
+// these in — it must not modify its caller's aggregate — so the expectation is
+// built here from the declared preimages rather than read out of the input.
+func withDerivedIDs(write store.SnapshotWrite) store.SnapshotWrite {
+	out := write
+	out.Documents = make([]store.Document, len(write.Documents))
+	for i, doc := range write.Documents {
+		doc.ID = identity.HashInputs(map[string]string{"snapshot": write.ID, "path": doc.Path})
+		nodes := make([]store.Node, len(doc.Nodes))
+		for j, leaf := range doc.Nodes {
+			leaf.ID = identity.HashInputs(map[string]string{
+				"document": doc.ID, "ordinal": strconv.Itoa(leaf.Ordinal),
+			})
+			nodes[j] = leaf
+		}
+		doc.Nodes = nodes
+		out.Documents[i] = doc
+	}
+	return out
 }

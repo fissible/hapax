@@ -29,8 +29,13 @@ func TestASnapshotRoundTrips(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if !reflect.DeepEqual(got, write) {
-		t.Errorf("round trip differs:\n%+v\nwant\n%+v", got, write)
+	if want := withDerivedIDs(write); !reflect.DeepEqual(got, want) {
+		t.Errorf("round trip differs:\n%+v\nwant\n%+v", got, want)
+	}
+	// And the caller's aggregate is untouched: a write that filled in IDs would
+	// be modifying data it was only given to read.
+	if write.Documents[0].ID != "" || write.Documents[0].Nodes[0].ID != "" {
+		t.Error("PutSnapshot wrote derived identities into the caller's aggregate")
 	}
 }
 
@@ -89,8 +94,8 @@ func TestRewritingAnIdenticalSnapshotSucceedsAndADifferentOneConflicts(t *testin
 			if err != nil {
 				t.Fatalf("Snapshot after conflict: %v", err)
 			}
-			if !reflect.DeepEqual(got, write) {
-				t.Errorf("the stored aggregate changed after a refused write:\n%+v\nwant\n%+v", got, write)
+			if want := withDerivedIDs(write); !reflect.DeepEqual(got, want) {
+				t.Errorf("the stored aggregate changed after a refused write:\n%+v\nwant\n%+v", got, want)
 			}
 		})
 	}
