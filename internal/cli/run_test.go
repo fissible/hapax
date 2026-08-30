@@ -3,7 +3,6 @@ package cli_test
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,7 +13,6 @@ import (
 	"time"
 
 	"github.com/fissible/hapax/internal/cli"
-	"github.com/fissible/hapax/internal/store"
 )
 
 // harness gives Run an environment where every dependency A1 must NOT reach
@@ -37,18 +35,6 @@ func newHarness(t *testing.T, environment map[string]string) *harness {
 		},
 		Now:      func() time.Time { return time.Date(2026, 8, 30, 12, 0, 0, 0, time.UTC) },
 		ReadFile: os.ReadFile,
-		Dial: func(context.Context, string, string) (net.Conn, error) {
-			t.Fatal("a dial was attempted; no A1 command may reach the network")
-			return nil, nil
-		},
-		Credentials: func(context.Context) (string, error) {
-			t.Fatal("a credential was read; no A1 command may construct a provider")
-			return "", nil
-		},
-		OpenStore: func(string) (*store.Store, error) {
-			t.Fatal("a store was opened; no A1 command needs one")
-			return nil, nil
-		},
 	}
 	return h
 }
@@ -296,20 +282,6 @@ func TestModeIsResolvedBeforeAnySeamCanRun(t *testing.T) {
 		t.Error("the draft was read before the mode was resolved")
 	}
 	requireNoDocument(t, h)
-}
-
-// A1's commands need no store, no provider and no credential, and the harness
-// proves it: those seams fail the test if called. This test exists so that the
-// claim is named rather than only implied by the others passing.
-func TestTheOfflineCommandTouchesNothingItDoesNotNeed(t *testing.T) {
-	for _, args := range [][]string{
-		{"tells", draft(t, clean)},
-		{"tells", "--local-only", draft(t, adverse)},
-		{"tells", "--json", draft(t, adverse)},
-	} {
-		h := newHarness(t, nil)
-		h.run(args...)
-	}
 }
 
 // ---------------------------------------------------------------------------

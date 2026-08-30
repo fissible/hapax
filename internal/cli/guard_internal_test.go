@@ -25,13 +25,17 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 		{
 			dir:         ".",
 			allowGetenv: false,
+			// Neither internal/llm nor internal/store nor net is here, and that
+			// is the guarantee rather than a convenience. A1 cannot construct a
+			// provider, read a credential or open a store because it cannot
+			// NAME them. A failing seam in a harness only covers the paths a
+			// test walks; a package that cannot reach a type cannot reach it on
+			// any path, including one that lazily fills a nil callback.
 			allowedImports: []string{
 				"context", "encoding/json", "errors", "fmt", "io", "sort", "strings",
 				"github.com/fissible/hapax/internal/mode",
-				"github.com/fissible/hapax/internal/store",
 				"github.com/fissible/hapax/internal/tells",
 				"github.com/fissible/hapax/internal/text",
-				"github.com/fissible/hapax/internal/llm",
 			},
 		},
 		{
@@ -98,16 +102,15 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 	}
 }
 
-// A1 constructs no provider and no credential, and the binary is where that
-// could quietly stop being true: the Run harness fails the test if its injected
-// Credentials or Dial seam is called, but the binary runs against the real
-// process and the guard above must let it read the real environment.
+// A1 constructs no provider, no credential and no store, and the import rule
+// above is what says so: internal/cli cannot name internal/llm, internal/store
+// or net, so there is no path — including one that lazily fills a nil callback
+// inside Run — by which it could.
 //
-// So the check is on the NAMES. Checking one cli.Deps literal was not enough —
-// a main could build an empty literal to satisfy it and assign the fields
-// afterwards. If Credentials, Dial and OpenStore do not appear in cmd/hapax at
-// all, in any form, they cannot be populated by any route.
-func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
+// What is left for the binary is that it builds its Deps by NAME. A positional
+// literal populates fields without naming them, which would silently carry
+// whatever a later slice adds.
+func TestTheBinaryBuildsItsDepsByName(t *testing.T) {
 	set := token.NewFileSet()
 	packages, err := parser.ParseDir(set, "../../cmd/hapax", func(info fs.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
@@ -115,18 +118,15 @@ func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing cmd/hapax: %v", err)
 	}
-	forbidden := map[string]bool{"Credentials": true, "Dial": true, "OpenStore": true}
+	// Deps carries no provider, credential or store field in A1, because
+	// internal/cli cannot name those packages at all. What is left to check is
+	// that the literal is built by NAME: a positional one would populate
+	// whatever fields a later slice adds without saying so.
 	scanned, deps := 0, 0
 	for _, pkg := range packages {
 		for name, file := range pkg.Files {
 			scanned++
 			ast.Inspect(file, func(n ast.Node) bool {
-				if ident, ok := n.(*ast.Ident); ok && forbidden[ident.Name] {
-					t.Errorf("%s names %s; no A1 command is served by one, so the binary "+
-						"must not be able to populate it by any route", name, ident.Name)
-				}
-				// A POSITIONAL literal populates fields without naming them, so
-				// the name check alone is not the guarantee it claims to be.
 				literal, ok := n.(*ast.CompositeLit)
 				if !ok {
 					return true
