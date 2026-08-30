@@ -32,7 +32,7 @@ model, then review.
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema and snapshots, #48 the codecs, #49 rehydration and `Prune` |
-| 13 | `cli` | not started | design settled (exit codes, mode resolution); nothing blocks it |
+| 13 | `cli` | **partial** | A1: contracts, exit codes, output document, mode, `tells`. A2 blocked on #50 |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 

@@ -396,8 +396,14 @@ The codes partition on one question — *did the tool produce a verdict?*
 
 0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
 rather than a failure. A refusal carries a reason from a closed set — `uncalibrated`,
-`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider` — because a script
-must not have to parse prose to tell them apart.
+`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile` —
+because a script must not have to parse prose to tell them apart.
+
+`no-profile` was added when `cli` was designed. The other four were written before any
+composition root existed and none of them covers the most common first-run state there is:
+a store with no profile head at all, because nothing has been indexed yet. That is an unmet
+precondition, not a user error — naming a register that does not exist is exit 2 and lists
+the ones that do, but asking for a profile before there are any is an ordinary thing to do.
 
 Two distinctions the codes deliberately do **not** carry, because the result document does:
 `eval` reporting an uncalibrated profile is a *completed measurement*, so it exits 1 rather
@@ -2198,6 +2204,19 @@ rather than a label a caller chooses, and `invocation_id` is a digest rather tha
 user names — both are strings that would otherwise be free text by another name.
 `preserve_identifiers` is validated against `preserve.ValidIdentifier` on the way in, because
 that column is the one that already held prose once.
+
+**A stored `eval_result` does not reconstruct a release, and `score` needs one.** The
+artifact table above says it holds "discrimination and band figures with provenance"; the
+columns carry neither. `eval.Calibration.Band` consults each band report's `Emitted` flag —
+a band that calibrated but was not emitted is downgraded to `drifting` — and
+`sameBandCalibrationBinding` requires the feature manifest digest, weight scheme, distance
+algorithm and scored tiers. None of those is persisted. Since `hapax score` is a separate
+invocation from `hapax eval`, it has nothing to load, and no read-model design fixes that:
+the artifact is not there. Persisting a complete release — the calibration's thresholds,
+floor, band reports and binding, and the discrimination's population, protocol and metrics —
+is its own slice, along with the explicit rule for which release a profile's `score` uses,
+since a profile may have several. Nothing caught this until a component first tried to read a
+release back, which is the argument for building the composition root early rather than last.
 
 **Every read is validated.** Unknown enum values, non-finite floats and rows whose `(kind, id)`
 disagrees with where they were found are all `ErrCorrupt`, as is an artifact that names a

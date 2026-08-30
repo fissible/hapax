@@ -12,10 +12,13 @@ The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 > admission and structure, the tell linter, corpus indexing, feature extraction,
 > the author profile, the calibration harness and its release gates, scoring,
 > exemplar selection, the semantic-preservation gate, document reassembly, the
-> rewrite loop, and the model providers. The artifact store is half built.
-> **There is no CLI yet**, so the commands below are the planned interface
-> rather than working ones — nothing here is wired together end to end. See
-> [PROJECT.md](PROJECT.md) for exactly what exists.
+> rewrite loop, the model providers, and the artifact store.
+>
+> **Of the commands below, only `hapax tells` runs.** It is the first slice of
+> the CLI, which also settled the exit codes, the output document and the
+> `--local-only` mode resolution the rest will use. The other five are the
+> planned interface rather than working ones. See [PROJECT.md](PROJECT.md) for
+> exactly what exists.
 
 ---
 
