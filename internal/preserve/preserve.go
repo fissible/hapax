@@ -52,6 +52,8 @@ type Result struct {
 
 var classes = []Class{ClassNumber, ClassEntity, ClassNegation, ClassURL, ClassQuote}
 
+var directions = []Direction{DirectionLost, DirectionInvented}
+
 var negations = []string{
 	"cannot", "neither", "never", "no", "nobody", "none", "nor", "not", "nothing", "nowhere", "without",
 	"aren't", "aren’t", "can't", "can’t", "couldn't", "couldn’t", "didn't", "didn’t", "doesn't", "doesn’t", "don't", "don’t",
@@ -77,6 +79,45 @@ func (r Result) Identifiers() []string {
 		identifiers[i] = Version + ":" + string(difference.Class) + ":" + string(difference.Direction) + ":" + hex.EncodeToString(digest[:])[:16]
 	}
 	return identifiers
+}
+
+// ValidIdentifier reports whether identifier has the exact, non-reversible
+// audit identifier grammar produced by Result.Identifiers.
+func ValidIdentifier(identifier string) bool {
+	parts := strings.Split(identifier, ":")
+	if len(parts) != 4 || parts[0] != Version {
+		return false
+	}
+	if !declaredClass(Class(parts[1])) || !declaredDirection(Direction(parts[2])) {
+		return false
+	}
+	if len(parts[3]) != 16 {
+		return false
+	}
+	for _, c := range parts[3] {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func declaredClass(class Class) bool {
+	for _, declared := range classes {
+		if class == declared {
+			return true
+		}
+	}
+	return false
+}
+
+func declaredDirection(direction Direction) bool {
+	for _, declared := range directions {
+		if direction == declared {
+			return true
+		}
+	}
+	return false
 }
 
 // Check compares protected surface forms in current and candidate.

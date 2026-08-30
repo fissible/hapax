@@ -145,7 +145,8 @@ by construction" below.*
 | 9 | `llm` | Provider interface. Ollama first, Anthropic as the one named cloud provider. Corpus text fenced as untrusted data in prompt assembly. Hard `--local-only` mode; cloud failure is a hard error, never a silent fallback. | — |
 | 10 | `rewrite` | The loop, depending on interfaces (`Scorer`, `Selector`, `Gate`, `Provider`, `Store`) rather than concrete components. Monotonic acceptance rule below. Retains before/after artifacts and rejection reasons. | 6, 7, 8, 9 |
 | 11 | `assemble` | Splices accepted replacements back into the original bytes. Ordered, non-overlapping raw spans; every untouched byte and excision preserved exactly; all-or-nothing output. | 3, 10 |
-| 12 | `cli` | Built **early** as a thin shell against stub interfaces, so artifact formats and exit codes become real contracts rather than afterthoughts. | interfaces only |
+| 12 | `store` | SQLite artifact persistence: the declared artifact kinds and their identities, forward migration, the persistence allowlist enforcing the privacy invariant, and span rehydration with no substitution and no silent reduction. Typed per-artifact operations, never a generic put. | 0, 2, 3, 4 |
+| 13 | `cli` | Composition root. Resolves the mode once, constructs the credential factory only on the cloud path, wires every component, and owns the command surface, output schema and exit codes. | all |
 
 ### Evaluation protocol
 
@@ -364,12 +365,55 @@ string equal to a profile ID, and no filter should be pretending otherwise.
 
 ### Commands
 
-- `hapax init ~/writing/ --profile essays` — build corpus and profile; report contamination
+- `hapax index ~/writing/ --profile essays` — build corpus and profile; report contamination
 - `hapax profile` — the profile, human-readable
 - `hapax eval` — calibration report: how well the profile distinguishes the author
 - `hapax score draft.md` — band, per-feature deltas, insufficient-evidence markers. **No LLM, no network**
 - `hapax tells draft.md` — linter only
 - `hapax rewrite draft.md` — the full gated loop
+
+### Exit codes, and the split that produced them
+
+Row 12 originally said `cli` should be built **early**, against stub interfaces, so that
+artifact formats and exit codes became real contracts rather than afterthoughts. It was built
+last instead. The intent was right and the ordering was wrong in a way worth recording: exit
+codes appeared exactly once in this document — in that table row — and were never specified,
+which is precisely the afterthought the row warned about.
+
+Building `cli` against an unbuilt store would repeat the same mistake, so **`store` is its own
+component and is built first**. It owns durable artifacts and privacy-sensitive lifecycle
+rules; `cli` is then a thin adapter over command services and result classifications.
+
+The codes partition on one question — *did the tool produce a verdict?*
+
+| | meaning |
+|---|---|
+| 0 | completed, nothing adverse |
+| 1 | completed, adverse finding |
+| 2 | invalid invocation: unknown command, bad flag, malformed `HAPAX_LOCAL_ONLY` |
+| 3 | operational failure: IO, store, provider |
+| 4 | refusal, with a machine-readable reason |
+
+0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
+rather than a failure. A refusal carries a reason from a closed set — `uncalibrated`,
+`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider` — because a script
+must not have to parse prose to tell them apart.
+
+Two distinctions the codes deliberately do **not** carry, because the result document does:
+`eval` reporting an uncalibrated profile is a *completed measurement*, so it exits 1 rather
+than 4 — the measurement exists and is adverse. `score` on that same profile exits 4, because
+no band can be issued at all. And `rewrite` exits 0 both when nothing needed changing and
+when everything that did was improved; which of those happened is a named state in the output,
+not an exit code, since a caller wanting the difference wants the detail with it.
+
+A malformed `HAPAX_LOCAL_ONLY` is code 2 — an invalid invocation, not a refusal. *Failing
+closed* means it can never select cloud mode or construct a credential factory; it does not
+mean its classification becomes ambiguous.
+
+**Mode resolution belongs to every composition root, not to `cli` specifically.** `cli` is
+today's only one, but an MCP or skill wrapper would be another, and each must resolve one
+immutable mode and pass it inward — otherwise the next wrapper bypasses the guarantee that
+`llm`'s own tests cannot enforce from inside.
 
 ### Notes
 
@@ -1891,6 +1935,21 @@ stays as files the user owns — **hapax is never the system of record for anyon
 | `exemplar` | Profile plus leaf reference | **A span reference only** |
 | `threshold` | Profile plus distractor-pool plus calibration-protocol identity | `t_low`, `t_high`, achieved rates, intervals, or the pair-incompatible verdict |
 | `eval_result` | All of the above, hashed | Discrimination and band figures with provenance |
+| `rewrite_attempt` | Invocation plus attempt index | The audit whitelist `rewrite.Attempt` declares: hashes, span reference, distances, bands, verdicts and a rejection code. **No prose** |
+
+That last row was missing. `rewrite.Store.RecordAttempt` has existed since the rewrite slice
+and the artifact table never named what it writes, which is exactly how an audit record ends
+up holding whatever seemed useful at the time.
+
+**And writing it down found that it already holds prose.** `rewrite.Attempt.Missing` carries
+the preserve gate's *item text* — its own frozen test pins `["number:1979", "url:example.com"]`
+— while the whitelist two sections above says the record holds "the identifiers of what it
+found missing". The sequencing explains it without excusing it: `rewrite` was frozen before
+`preserve` existed, `preserve` later introduced `Result.Identifiers()` explicitly for this
+record, and nothing went back. So the field must carry identifiers before `store` persists
+it, and that correction is its own slice rather than something the store works around —
+a store that quietly categorised the prose away would leave the leak in memory, in logs and
+in any diagnostic dump, all of which the invariant covers.
 
 ### The privacy invariant, stated as a prohibition
 

@@ -46,7 +46,7 @@ package rewrite_test
 // across the database, its sidecars, exports, logs and diagnostics. "Auditable"
 // is the word under which prose gets persisted, so what may be retained is
 // enumerated: span reference, content hashes of both sides, distance and band,
-// preserve verdict and what it found missing, tells comparison, rejection code,
+// preserve verdict and the identifiers of what it found, tells comparison,
 // and provider and invocation identity. A rejected candidate is not retained at
 // all — it is precisely prose the user never chose to keep.
 
@@ -172,10 +172,10 @@ func (f *fakeSelector) Exemplars(n int) ([]string, error) {
 }
 
 type gateVerdict struct {
-	preserved  bool
-	missing    []string
-	comparison int
-	comparable bool
+	preserved   bool
+	identifiers []string
+	comparison  int
+	comparable  bool
 }
 
 type fakeGate struct {
@@ -185,7 +185,7 @@ type fakeGate struct {
 
 func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
 	v := f.verdict(candidate)
-	return rewrite.Preservation{Preserved: v.preserved, Missing: v.missing}, nil
+	return rewrite.Preservation{Preserved: v.preserved, Identifiers: v.identifiers}, nil
 }
 
 func (f *fakeGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
@@ -388,7 +388,7 @@ func TestEachGuardRefusesOnItsOwn(t *testing.T) {
 	}{
 		{
 			name:    "preserve fails",
-			verdict: gateVerdict{preserved: false, missing: []string{"number:1979"}, comparison: -1, comparable: true},
+			verdict: gateVerdict{preserved: false, identifiers: []string{"preserve-v1:number:lost:3d4c981bf761d9b8"}, comparison: -1, comparable: true},
 			want:    rewrite.RejectionNotPreserved,
 		},
 		{
@@ -443,11 +443,22 @@ func TestAnEqualTellsComparisonIsNoWorse(t *testing.T) {
 	}
 }
 
-// What preserve found missing is recorded, since a rejection a user cannot act
+// What preserve found is recorded, since a rejection a user cannot act
 // on is not much better than a silent one.
-func TestWhatPreserveFoundMissingIsRecorded(t *testing.T) {
+// The audit record holds preserve's IDENTIFIERS, which are version-bound and
+// carry a digest of the item rather than the item. An earlier version of this
+// test pinned "number:1979" and "url:example.com" — the item text — while its
+// own message called them identifiers. rewrite was frozen before preserve
+// existed, preserve later added Result.Identifiers() for exactly this record,
+// and nothing came back to change the consumer.
+func TestWhatPreserveFoundIsRecordedAsIdentifiers(t *testing.T) {
 	gate := &fakeGate{fallback: gateVerdict{
-		preserved: false, missing: []string{"number:1979", "url:example.com"}, comparison: -1, comparable: true,
+		preserved: false,
+		identifiers: []string{
+			"preserve-v1:number:lost:3d4c981bf761d9b8",
+			"preserve-v1:url:lost:4d897f4d66e152ae",
+		},
+		comparison: -1, comparable: true,
 	}}
 	loop, _, _, _, store := loopOver(t,
 		map[string]score.Report{original: scored(0.90), better: scored(0.10)},
@@ -457,8 +468,10 @@ func TestWhatPreserveFoundMissingIsRecorded(t *testing.T) {
 	if len(store.attempts) != 1 {
 		t.Fatalf("got %d attempts, want 1", len(store.attempts))
 	}
-	if got := store.attempts[0].Missing; len(got) != 2 || got[0] != "number:1979" || got[1] != "url:example.com" {
-		t.Errorf("missing = %v, want the two identifiers preserve reported", got)
+	got := store.attempts[0].PreserveIdentifiers
+	want := []string{"preserve-v1:number:lost:3d4c981bf761d9b8", "preserve-v1:url:lost:4d897f4d66e152ae"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("identifiers = %v, want %v", got, want)
 	}
 }
 
@@ -1205,7 +1218,7 @@ func (c *countingGate) Tells(current, candidate string) (rewrite.TellsVerdict, e
 func TestTheAuditRecordIsCompleteOnBothOutcomes(t *testing.T) {
 	gate := &fakeGate{
 		verdicts: map[string]gateVerdict{
-			worse: {preserved: false, missing: []string{"number:1979"}, comparison: 1, comparable: true},
+			worse: {preserved: false, identifiers: []string{"preserve-v1:number:lost:3d4c981bf761d9b8"}, comparison: 1, comparable: true},
 		},
 		fallback: gateVerdict{preserved: true, comparison: -1, comparable: true},
 	}
@@ -1261,8 +1274,8 @@ func TestTheAuditRecordIsCompleteOnBothOutcomes(t *testing.T) {
 	if rejected.Preserved {
 		t.Errorf("the rejected attempt records preserve as passing")
 	}
-	if len(rejected.Missing) != 1 || rejected.Missing[0] != "number:1979" {
-		t.Errorf("missing = %v", rejected.Missing)
+	if len(rejected.PreserveIdentifiers) != 1 || rejected.PreserveIdentifiers[0] != "preserve-v1:number:lost:3d4c981bf761d9b8" {
+		t.Errorf("identifiers = %v", rejected.PreserveIdentifiers)
 	}
 	// The rest of the whitelist on the rejected side too. Zeroes here would
 	// satisfy every other assertion while recording nothing about what happened.
@@ -1428,4 +1441,126 @@ func realScorerFor(t *testing.T) rewrite.Scorer {
 func itoa(n int) string {
 	digits := "0123456789"
 	return string([]byte{digits[(n/100)%10], digits[(n/10)%10], digits[n%10]})
+}
+
+// The whitelist says the audit record holds identifiers. Nothing enforced it,
+// which is how the item text got in and stayed for two slices. A Gate is an
+// interface, so the only place this can be enforced is here — but the grammar
+// belongs to preserve, which exports ValidIdentifier rather than having this
+// package restate it.
+func TestAnIdentifierThatIsNotOneIsRefused(t *testing.T) {
+	for _, c := range []struct{ name, value string }{
+		{"the item text this bug recorded", "number:1979"},
+		{"a bare url", "url:example.com"},
+		{"prose", "the author wrote 1979"},
+		{"too few parts", "preserve-v1:number:lost"},
+		{"unknown class", "preserve-v1:sentiment:lost:3d4c981bf761d9b8"},
+		{"unknown direction", "preserve-v1:number:moved:3d4c981bf761d9b8"},
+		{"digest is not hex", "preserve-v1:number:lost:zzzzzzzzzzzzzzzz"},
+		{"digest is upper case", "preserve-v1:number:lost:3D4C981BF761D9B8"},
+		{"digest is the wrong length", "preserve-v1:number:lost:3d4c98"},
+		{"empty", ""},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			gate := &fakeGate{fallback: gateVerdict{
+				preserved: false, identifiers: []string{c.value}, comparison: -1, comparable: true,
+			}}
+			loop, _, _, _, store := loopOver(t,
+				map[string]score.Report{original: scored(0.90), better: scored(0.10)},
+				[]string{better}, gate)
+
+			_, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: original, SpanRef: "s"})
+			// Fatal: a nil error here would make the interpolation check below
+			// panic, hiding the contract failure behind a crash.
+			if !errors.Is(err, rewrite.ErrPreserveIdentifier) {
+				t.Fatalf("error = %v, want ErrPreserveIdentifier", err)
+			}
+			// NOTHING is recorded. Absence of the value from a recorded attempt
+			// is not enough; the attempt itself must not exist.
+			if len(store.attempts) != 0 {
+				t.Errorf("recorded %d attempts while refusing: %+v", len(store.attempts), store.attempts)
+			}
+			// And the error must not carry the value. An error is logged, and
+			// the invariant covers log output.
+			if c.value != "" && strings.Contains(err.Error(), c.value) {
+				t.Errorf("the error interpolates the rejected value: %v", err)
+			}
+		})
+	}
+}
+
+// A well-formed set passes, so the rule is not simply "refuse everything".
+func TestWellFormedIdentifiersAreAccepted(t *testing.T) {
+	gate := &fakeGate{fallback: gateVerdict{
+		preserved: false,
+		identifiers: []string{
+			"preserve-v1:number:lost:3d4c981bf761d9b8",
+			"preserve-v1:entity:invented:3f4c74bbed3b8787",
+			"preserve-v1:quote:lost:8979dd3e31925881",
+		},
+		comparison: -1, comparable: true,
+	}}
+	loop, _, _, _, store := loopOver(t,
+		map[string]score.Report{original: scored(0.90), better: scored(0.10)},
+		[]string{better}, gate)
+
+	run(t, loop)
+	if len(store.attempts) != 1 {
+		t.Fatalf("got %d attempts, want 1", len(store.attempts))
+	}
+	if len(store.attempts[0].PreserveIdentifiers) != 3 {
+		t.Errorf("identifiers = %v, want all three", store.attempts[0].PreserveIdentifiers)
+	}
+}
+
+// A preserved verdict carries no identifiers, and an unpreserved one carries at
+// least one. Either mismatch makes the audit record untruthful about what the
+// gate actually decided, which is a different failure from a leak and needs its
+// own rule.
+func TestTheVerdictAndItsIdentifiersMustAgree(t *testing.T) {
+	t.Run("preserved with identifiers", func(t *testing.T) {
+		gate := &fakeGate{fallback: gateVerdict{
+			preserved: true, identifiers: []string{"preserve-v1:number:lost:3d4c981bf761d9b8"},
+			comparison: -1, comparable: true,
+		}}
+		loop, _, _, _, store := loopOver(t,
+			map[string]score.Report{original: scored(0.90), better: scored(0.10)},
+			[]string{better}, gate)
+		if _, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: original, SpanRef: "s"}); !errors.Is(err, rewrite.ErrPreserveIdentifier) {
+			t.Errorf("error = %v, want ErrPreserveIdentifier", err)
+		}
+		if len(store.attempts) != 0 {
+			t.Errorf("recorded %d attempts while refusing", len(store.attempts))
+		}
+	})
+
+	t.Run("unpreserved with none", func(t *testing.T) {
+		gate := &fakeGate{fallback: gateVerdict{
+			preserved: false, identifiers: nil, comparison: -1, comparable: true,
+		}}
+		loop, _, _, _, store := loopOver(t,
+			map[string]score.Report{original: scored(0.90), better: scored(0.10)},
+			[]string{better}, gate)
+		if _, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: original, SpanRef: "s"}); !errors.Is(err, rewrite.ErrPreserveIdentifier) {
+			t.Errorf("error = %v, want ErrPreserveIdentifier", err)
+		}
+		if len(store.attempts) != 0 {
+			t.Errorf("recorded %d attempts while refusing", len(store.attempts))
+		}
+	})
+}
+
+// A preserved verdict with no identifiers is the ordinary case and must pass.
+func TestAPreservedVerdictCarriesNoIdentifiers(t *testing.T) {
+	loop, _, _, _, store := loopOver(t,
+		map[string]score.Report{original: scored(0.90), better: scored(0.10)},
+		[]string{better}, passingGate())
+
+	run(t, loop)
+	if len(store.attempts) != 1 {
+		t.Fatalf("got %d attempts, want 1", len(store.attempts))
+	}
+	if got := store.attempts[0].PreserveIdentifiers; len(got) != 0 {
+		t.Errorf("a preserved attempt recorded %v", got)
+	}
 }
