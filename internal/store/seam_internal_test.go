@@ -261,7 +261,7 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
-			faults.arm(3)
+			faults.arm(2)
 			err := c.load(s, ids)
 			if !errors.Is(err, errInjectedRowFault) {
 				t.Errorf("error = %v, want the injected fault", err)
@@ -354,8 +354,9 @@ type rowFaults struct {
 	onExec    bool
 }
 
-// arm fails the nth row read after arming. n is one-based: arm(1) fails the
-// very first.
+// arm fails the nth row read OF EVERY STREAM. One-based, so arm(2) delivers one
+// row and then fails — a stream truncated part way, which is the case a loader
+// that ignores rows.Err() reads back as a smaller valid artifact.
 func (f *rowFaults) arm(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -377,16 +378,21 @@ func (f *rowFaults) disarm() {
 	f.armed = false
 }
 
-// shouldFail counts down across every row read once armed for rows.
-func (f *rowFaults) shouldFail() bool { return f.countDown(false) }
-
-// shouldFailExec counts down across every execution once armed for execs.
-func (f *rowFaults) shouldFailExec() bool { return f.countDown(true) }
-
-func (f *rowFaults) countDown(exec bool) bool {
+// failsRowAt reports whether the nth read OF ONE STREAM should fail. Counting
+// per stream rather than globally keeps the fault where it is aimed: a global
+// countdown lands somewhere that depends on how many rows the loader happened
+// to read first, which differs per loader and moves whenever a fixture grows.
+func (f *rowFaults) failsRowAt(nth int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.armed || f.onExec != exec {
+	return f.armed && !f.onExec && nth == f.remaining+1
+}
+
+// shouldFailExec counts down across every execution once armed for execs.
+func (f *rowFaults) shouldFailExec() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.armed || !f.onExec {
 		return false
 	}
 	if f.remaining > 0 {
@@ -448,18 +454,20 @@ func (s faultStmt) Query(args []driver.Value) (driver.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &faultRows{rows, s.faults}, nil
+	return &faultRows{inner: rows, faults: s.faults}, nil
 }
 
 type faultRows struct {
 	inner  driver.Rows
 	faults *rowFaults
+	seen   int
 }
 
 func (r *faultRows) Columns() []string { return r.inner.Columns() }
 func (r *faultRows) Close() error      { return r.inner.Close() }
 func (r *faultRows) Next(dest []driver.Value) error {
-	if r.faults.shouldFail() {
+	r.seen++
+	if r.faults.failsRowAt(r.seen) {
 		return errInjectedRowFault
 	}
 	return r.inner.Next(dest)
@@ -489,7 +497,7 @@ func registerFaultDriver(t *testing.T, faults *rowFaults) string {
 func driverNamesSoFar() []string { return sql.Drivers() }
 
 type seamIDs struct {
-	Snapshot, Profile, Reference, Selection, Invocation string
+	Snapshot, Profile, Reference, Selection, Invocation, Orphan string
 }
 
 // seededSeamStore builds one of every artifact whose loader iterates a row
@@ -504,8 +512,11 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 	t.Cleanup(func() { _ = s.Close() })
 	ctx := context.Background()
 
+	// Three spans, so every child stream this test truncates has a row after
+	// the one the fault lands on.
 	write := seamSnapshot(seamDocument(t, root, "essays/a.md",
-		text.Span{Offset: 0, Length: 31}, text.Span{Offset: 33, Length: 34}))
+		text.Span{Offset: 0, Length: 31}, text.Span{Offset: 33, Length: 34},
+		text.Span{Offset: 0, Length: 10}))
 	if err := s.PutSnapshot(ctx, write); err != nil {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
@@ -530,8 +541,8 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 	}
 	selection := ExemplarSelection{
 		ID: identity.HashInputs(map[string]string{"a": "selection"}), ProfileID: prof.ID,
-		N: 2, CertificateID: identity.HashInputs(map[string]string{"a": "certificate"}),
-		Members: []string{nodeID, seamNodeID(write, 0, 1)},
+		N: 3, CertificateID: identity.HashInputs(map[string]string{"a": "certificate"}),
+		Members: []string{nodeID, seamNodeID(write, 0, 1), seamNodeID(write, 0, 2)},
 	}
 	if err := s.PutExemplarSelection(ctx, selection); err != nil {
 		t.Fatalf("PutExemplarSelection: %v", err)
@@ -549,9 +560,22 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 	if err := s.PutRewriteAttempt(ctx, attempt); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}
+	// A profile no root reaches, so a Prune told to keep only prof HAS something
+	// to remove. Without it a failed prune could roll back nothing and pass.
+	orphanWrite := seamSnapshot(seamDocument(t, root, "orphan/a.md", text.Span{Offset: 0, Length: 31}))
+	if err := s.PutSnapshot(ctx, orphanWrite); err != nil {
+		t.Fatalf("PutSnapshot orphan: %v", err)
+	}
+	orphan := prof
+	orphan.ID = identity.HashInputs(map[string]string{"a": "orphan-profile"})
+	orphan.SnapshotID, orphan.Register = orphanWrite.ID, "orphan"
+	if err := s.PutProfile(ctx, orphan, AdvanceHead); err != nil {
+		t.Fatalf("PutProfile orphan: %v", err)
+	}
+
 	return s, seamIDs{
 		Snapshot: write.ID, Profile: prof.ID, Reference: ref.ID,
-		Selection: selection.ID, Invocation: attempt.InvocationID,
+		Selection: selection.ID, Invocation: attempt.InvocationID, Orphan: orphan.ID,
 	}
 }
 
@@ -578,6 +602,7 @@ func seamIdentifiers() []string {
 	result := preserve.Result{Differences: []preserve.Difference{
 		{Class: preserve.ClassNumber, Direction: preserve.DirectionLost, Item: "1979"},
 		{Class: preserve.ClassURL, Direction: preserve.DirectionInvented, Item: "example.com"},
+		{Class: preserve.ClassEntity, Direction: preserve.DirectionLost, Item: "Warsaw"},
 	}}
 	return result.Identifiers()
 }
@@ -601,6 +626,18 @@ func TestAPruneThatFailsPartWayThroughRemovesNothing(t *testing.T) {
 
 	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
 		t.Errorf("a failed prune left the graph as\n%v\nwant\n%v", after, before)
+	}
+	// And the orphan really was removable, so the rollback above meant something.
+	faults.disarm()
+	pruned, err := s.Prune(context.Background(), []string{ids.Profile})
+	if err != nil {
+		t.Fatalf("Prune after disarming: %v", err)
+	}
+	if pruned.Profiles == 0 {
+		t.Error("nothing was prunable; the rollback proved nothing")
+	}
+	if _, err := s.LoadProfile(context.Background(), ids.Orphan); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the orphan survived an unfaulted prune: %v", err)
 	}
 }
 
