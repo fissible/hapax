@@ -246,17 +246,26 @@ func TestAReportsFiguresMustBeMeasurements(t *testing.T) {
 }
 
 // Both gates measure the held-out Test split, unconditionally, in eval itself.
-func TestBothGatesMeasureTheHeldOutSplit(t *testing.T) {
-	for _, split := range []corpus.Split{corpus.Train, corpus.Calibrate, corpus.Draft} {
-		t.Run(string(split), func(t *testing.T) {
-			s := newStore(t)
-			release := releaseFor(t, s)
-			release.Discrimination.Split = split
-			release.Calibration.Split = split
-			if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
-				t.Error("accepted")
-			}
-		})
+// Each is moved on its own: a validator that checked only one would pass if
+// they always moved together.
+func TestEachGateMeasuresTheHeldOutSplit(t *testing.T) {
+	for _, gate := range []struct {
+		name  string
+		alter func(*store.EvalResult, corpus.Split)
+	}{
+		{"discrimination", func(r *store.EvalResult, split corpus.Split) { r.Discrimination.Split = split }},
+		{"calibration", func(r *store.EvalResult, split corpus.Split) { r.Calibration.Split = split }},
+	} {
+		for _, split := range []corpus.Split{corpus.Train, corpus.Calibrate, corpus.Draft} {
+			t.Run(gate.name+"/"+string(split), func(t *testing.T) {
+				s := newStore(t)
+				release := releaseFor(t, s)
+				gate.alter(&release, split)
+				if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+					t.Error("accepted")
+				}
+			})
+		}
 	}
 }
 
@@ -806,6 +815,26 @@ func TestACalibrationsThresholdIsItsOwnProfilesAndReferences(t *testing.T) {
 			t.Error("accepted")
 		}
 	})
+	// Differing in BOTH profile and reference would pass an implementation that
+	// checked only the profile, so here is one that differs in reference alone.
+	t.Run("the same profile's other reference", func(t *testing.T) {
+		s, prof, ref, _ := setUp(t)
+		sibling := referenceFixture(prof.ID)
+		sibling.ID, sibling.MinSegments = fakeID("reference", "sibling"), 40
+		mustPutReference(t, s, sibling)
+		siblingThreshold := thresholdFixture(prof.ID, sibling.ID)
+		siblingThreshold.ID = fakeID("threshold", "sibling")
+		if err := s.PutThreshold(ctx(), siblingThreshold); err != nil {
+			t.Fatalf("PutThreshold: %v", err)
+		}
+
+		release := evalResultFixture(prof.ID, ref.ID)
+		release.Calibration.ThresholdsID = siblingThreshold.ID
+		release.ID = releaseID(release.Calibration.ID, release.Discrimination.ID)
+		if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+			t.Error("accepted a threshold belonging to another of this profile's references")
+		}
+	})
 	t.Run("and a stored one that already does is corrupt", func(t *testing.T) {
 		s, prof, ref, foreign := setUp(t)
 		release := evalResultFixture(prof.ID, ref.ID)
@@ -837,12 +866,26 @@ func TestDerivedReleaseStateIsCheckedOnRead(t *testing.T) {
 			"UPDATE calibration_band SET min_class_clusters = 1 WHERE band = 'in-range'"},
 		{"the gates measuring different populations",
 			"UPDATE eval_result SET calibration_population_id = discrimination_id"},
-		{"the gates carrying different bindings",
+		{"the gates carrying different weight schemes",
 			"UPDATE eval_result SET calibration_weight_scheme = 'weighted-v1'"},
-		{"a calibration bound that is not its threshold's",
+		{"the gates carrying different manifests",
+			"UPDATE eval_result SET calibration_manifest_digest = discrimination_population_id"},
+		{"the gates carrying different distance algorithms",
+			"UPDATE eval_result SET calibration_distance_algorithm = 'distance-other-v1'"},
+		{"the gates carrying different scored tiers",
+			"UPDATE eval_result SET discrimination_scored_tiers = ''"},
+		{"a calibration low bound that is not its threshold's",
 			"UPDATE eval_result SET calibration_low = 0.41"},
-		{"a shippability that is not the conjunction",
-			"UPDATE eval_result SET discriminates = 0"},
+		{"a calibration high bound that is not its threshold's",
+			"UPDATE eval_result SET calibration_high = 0.91"},
+		{"a discrimination measuring a split of its own",
+			"UPDATE eval_result SET discrimination_split = 'calibrate'"},
+		{"a calibration measuring a split of its own",
+			"UPDATE eval_result SET calibration_split = 'calibrate'"},
+		// shippable = discriminates AND calibrated is already a CHECK from
+		// slice 2a, so it is refused by the database and never reaches a
+		// reader. It is asserted in
+		// TestTheDatabaseItselfRefusesTheContradictionsItCanExpress.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStore(t)
