@@ -835,13 +835,37 @@ func TestACalibrationsThresholdIsItsOwnProfilesAndReferences(t *testing.T) {
 			t.Error("accepted a threshold belonging to another of this profile's references")
 		}
 	})
-	t.Run("and a stored one that already does is corrupt", func(t *testing.T) {
+	t.Run("and a stored one from another profile is corrupt", func(t *testing.T) {
 		s, prof, ref, foreign := setUp(t)
 		release := evalResultFixture(prof.ID, ref.ID)
 		if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err != nil {
 			t.Fatalf("PutEvalResult: %v", err)
 		}
 		if _, err := openRaw(t, s).Exec("UPDATE eval_result SET calibration_thresholds_id = ?", foreign.ID); err != nil {
+			t.Fatalf("damaging: %v", err)
+		}
+		if _, err := s.LoadEvalResult(ctx(), release.ID); !errors.Is(err, store.ErrCorrupt) {
+			t.Errorf("error = %v, want ErrCorrupt", err)
+		}
+	})
+	// And one from the same profile's OTHER reference. A reader checking only
+	// the profile would reject the case above and accept this one.
+	t.Run("and a stored one from another reference is corrupt", func(t *testing.T) {
+		s, prof, ref, _ := setUp(t)
+		sibling := referenceFixture(prof.ID)
+		sibling.ID, sibling.MinSegments = fakeID("reference", "sibling"), 40
+		mustPutReference(t, s, sibling)
+		siblingThreshold := thresholdFixture(prof.ID, sibling.ID)
+		siblingThreshold.ID = fakeID("threshold", "sibling")
+		if err := s.PutThreshold(ctx(), siblingThreshold); err != nil {
+			t.Fatalf("PutThreshold: %v", err)
+		}
+		release := evalResultFixture(prof.ID, ref.ID)
+		if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err != nil {
+			t.Fatalf("PutEvalResult: %v", err)
+		}
+		if _, err := openRaw(t, s).Exec(
+			"UPDATE eval_result SET calibration_thresholds_id = ?", siblingThreshold.ID); err != nil {
 			t.Fatalf("damaging: %v", err)
 		}
 		if _, err := s.LoadEvalResult(ctx(), release.ID); !errors.Is(err, store.ErrCorrupt) {
