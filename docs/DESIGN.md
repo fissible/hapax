@@ -2070,6 +2070,15 @@ A **malformed stored reference is not in that vocabulary** — it is `ErrCorrupt
 draft listed `reference-corrupt` as an ordinary state, which contradicted the rule below: a
 user editing their own file is ordinary, a store that wrote a reference it cannot parse is not.
 
+The line between the two runs through `span-invalid`, which is narrower than it looks. A
+negative offset or length, a path or hash outside its grammar, or a node whose document and
+snapshot disagree with where it was found, are all damage the store itself wrote: `ErrCorrupt`.
+`span-invalid` is reserved for a **structurally valid range that cannot be sliced from the
+bytes just read** — the user's edit shortened the file. And `content-changed` and
+`span-invalid` both mean the file *was* read, so neither marks the document unavailable;
+`unavailable_at` answers "could this be read at all", which only `missing` and `unreadable`
+can make false.
+
 **The schema's shape is part of the allowlist.** Column names alone would pass a schema whose
 `content_hash` was an unconstrained `TEXT`, so declared types, `NOT NULL`, foreign keys with
 `ON DELETE CASCADE`, uniqueness and `CHECK` constraints are all asserted, and there are no
@@ -2096,11 +2105,27 @@ therefore the artifacts a user still has, not the ones they are built on:
 
 - **roots**: exactly the profile IDs `Prune` is *given*, plus every `eval_result` and every
   `rewrite_attempt`
-- `profile` → its `snapshot`, its `reference`, its `threshold`s, its `exemplar_selection`s
-- `snapshot` → its `document`s → their `node`s → their `feature_vector`s
-- `exemplar_selection` → the `node`s it names
+- `profile` → its `snapshot`, its `reference`, its `threshold`s, its `exemplar_selection`s,
+  its `profile_stat`s and its `profile_head`
+- `snapshot` → its `document`s → their `node`s → their `feature_vector`s → their `feature_value`s
+- `node` → **its `document`, and that document's `snapshot`**
+- `reference` → its `reference_value`s
+- `exemplar_selection` → its `exemplar_member`s and the `node`s it names
 - `eval_result` → its `profile` and `reference`
-- `rewrite_attempt` → its `profile` and its span's `node`
+- `rewrite_attempt` → its `profile`, its span's `node`, and its `rewrite_attempt_identifier`s
+
+The `node → document → snapshot` edge is stated **on the node**, so it holds however the node
+was reached, and it is what stops `Prune` destroying the evidence the rule below promises to
+keep. `rewrite_attempt.node_id` cascades on delete, and a rewrite operates on *draft* nodes
+that need not belong to the profile's own snapshot — so without this edge a snapshot reachable
+from no root would be deleted, the cascade would take its documents and nodes, and the cascade
+would then take the `rewrite_attempt` itself. It is redundant for a node reached through its
+own profile's snapshot, which is the right way round: a graph that is complete on its own beats
+one that is correct only if an invariant declared in another section holds.
+
+Its cost is deliberate. `Prune` cannot reclaim a snapshot that a retained audit record points
+into. Those rows are metadata — no prose, no vectors of consequence — and they are what makes
+the audit record mean anything.
 
 **`Prune` takes its roots as arguments**, so its result is a function of what it was told and
 nothing else. "The current profile" is a policy question — which register, which of several
