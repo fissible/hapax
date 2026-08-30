@@ -9,6 +9,7 @@ import (
 	"io"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/fissible/hapax/internal/mode"
 	"github.com/fissible/hapax/internal/tells"
@@ -80,12 +81,13 @@ type TellsResult struct {
 
 // Document is the shared output envelope for completed commands.
 type Document struct {
-	Schema  string      `json:"schema"`
-	Command string      `json:"command"`
-	Status  Status      `json:"status"`
-	Reason  Reason      `json:"reason"`
-	Profile *string     `json:"profile"`
-	Result  TellsResult `json:"result"`
+	Schema  string  `json:"schema"`
+	Command string  `json:"command"`
+	Status  Status  `json:"status"`
+	Reason  Reason  `json:"reason"`
+	Profile *string `json:"profile"`
+	// Result widens when a second command lands.
+	Result TellsResult `json:"result"`
 }
 
 // Render validates and writes this document in the requested representation.
@@ -119,8 +121,14 @@ func (d Document) Render(w io.Writer, asJSON bool) error {
 }
 
 func (d Document) valid() error {
-	if d.Schema != Schema || !contains(Commands(), d.Command) || !contains(Statuses(), d.Status) {
-		return errors.New("incoherent document")
+	if d.Schema != Schema {
+		return errors.New("incoherent document schema")
+	}
+	if !contains(Commands(), d.Command) {
+		return errors.New("incoherent document command")
+	}
+	if !contains(Statuses(), d.Status) {
+		return errors.New("incoherent document status")
 	}
 	if (d.Status == StatusRefused) != (d.Reason != "") {
 		return errors.New("incoherent document reason")
@@ -132,8 +140,14 @@ func (d Document) valid() error {
 }
 
 func validTellsResult(result TellsResult) error {
-	if !contains(tells.Screenings(), tells.Screening(result.Screening)) || result.Count != len(result.Findings) || result.Suppressed < 0 {
-		return errors.New("incoherent tells result")
+	if !contains(tells.Screenings(), tells.Screening(result.Screening)) {
+		return errors.New("incoherent tells result screening")
+	}
+	if result.Count != len(result.Findings) {
+		return errors.New("incoherent tells result count")
+	}
+	if result.Suppressed < 0 {
+		return errors.New("incoherent tells result suppressed")
 	}
 	for _, finding := range result.Findings {
 		if finding.Offset < 0 || finding.Length <= 0 ||
@@ -160,15 +174,17 @@ type Deps struct {
 	Stdout   io.Writer
 	Stderr   io.Writer
 	Env      func(string) (string, bool)
-	Now      any
+	Now      func() time.Time
 	ReadFile func(string) ([]byte, error)
 }
 
 // Run executes one command and returns its process exit code.
 func Run(ctx context.Context, args []string, deps Deps) int {
+	// A1 has no cancellable work; retain ctx so later commands need not change Run.
 	_ = ctx
 	parsed, parseErr := parse(args)
 	modeValue, modeErr := mode.Resolve(parsed.localOnly, deps.Env)
+	// A1 has no provider to configure from the resolved mode.
 	_ = modeValue
 	if modeErr != nil {
 		diagnostic(deps.Stderr, "invalid HAPAX_LOCAL_ONLY")
