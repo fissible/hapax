@@ -24,16 +24,26 @@ import (
 // eval or rewrite would be refused by the database with nothing to say why.
 func declaredVocabularies() map[string][]string {
 	return map[string][]string{
-		"document.split":                 stringsOf(corpus.Splits()),
-		"document.admission":             stringsOf(corpus.Admissions()),
-		"node.kind":                      stringsOf(text.Kinds()),
-		"node.role":                      stringsOf(text.Roles()),
-		"node.exclusion":                 stringsOf(text.ExclusionReasons()),
-		"profile.unit":                   stringsOf(profile.Units()),
-		"profile.variance_convention":    stringsOf(profile.VarianceConventions()),
-		"reference.split":                stringsOf(corpus.Splits()),
-		"threshold.verdict":              stringsOf(eval.ThresholdVerdicts()),
-		"eval_result.reason":             stringsOf(eval.ReleaseReasons()),
+		"document.split":                        stringsOf(corpus.Splits()),
+		"document.admission":                    stringsOf(corpus.Admissions()),
+		"node.kind":                             stringsOf(text.Kinds()),
+		"node.role":                             stringsOf(text.Roles()),
+		"node.exclusion":                        stringsOf(text.ExclusionReasons()),
+		"profile.unit":                          stringsOf(profile.Units()),
+		"profile.variance_convention":           stringsOf(profile.VarianceConventions()),
+		"reference.split":                       stringsOf(corpus.Splits()),
+		"threshold.verdict":                     stringsOf(eval.ThresholdVerdicts()),
+		"eval_result.reason":                    stringsOf(eval.ReleaseReasons()),
+		"eval_result.discrimination_split":      stringsOf(corpus.Splits()),
+		"eval_result.discrimination_clustering": stringsOf(eval.Clusterings()),
+		"eval_result.discrimination_reason":     stringsOf(eval.DiscriminationReasons()),
+		"eval_result.calibration_split":         stringsOf(corpus.Splits()),
+		"eval_result.calibration_reason":        stringsOf(eval.CalibrationReasons()),
+		// A band report is always ONE of the three; the empty band belongs to
+		// an attempt that was never scored, not to a report.
+		"calibration_band.band":          labelledBands(),
+		"calibration_band.claims":        claimingClasses(),
+		"calibration_band.reason":        stringsOf(eval.BandReportReasons()),
 		"rewrite_attempt.provider_id":    stringsOf(llm.Providers()),
 		"rewrite_attempt.current_band":   stringsOf(eval.Bands()),
 		"rewrite_attempt.candidate_band": stringsOf(eval.Bands()),
@@ -215,11 +225,18 @@ var textualColumnGrammars = map[string]string{
 // versioned vocabulary. Their membership cases are in
 // TestDamageTheSchemaCannotPreventIsCorruptNotSmaller.
 var grammarProbes = map[string][]string{
-	"hex":       {"", "not-a-hash", "abc123", strings.ToUpper(hashA), hashA[:63], hashA + "a"},
-	"rel":       {"", "/absolute.md", "../outside.md", `sub\essay.md`, "a//b.md", ".."},
-	"register":  {"", "Diary", "my essays", "-leading", "essays/2026", strings.Repeat("a", 33)},
-	"language":  {"", "English, mostly", "EN", "en_GB"},
-	"time":      {"", "yesterday", "2026/01/01", "2026-01-01 00:00:00"},
+	"hex":      {"", "not-a-hash", "abc123", strings.ToUpper(hashA), hashA[:63], hashA + "a"},
+	"rel":      {"", "/absolute.md", "../outside.md", `sub\essay.md`, "a//b.md", ".."},
+	"register": {"", "Diary", "my essays", "-leading", "essays/2026", strings.Repeat("a", 33)},
+	"language": {"", "English, mostly", "EN", "en_GB"},
+	"time":     {"", "yesterday", "2026/01/01", "2026-01-01 00:00:00"},
+	// A versioned contract identifier: lower case, digits, hyphens, ending in a
+	// version. Not free text, and not an enum either — these are owned by the
+	// components that declare them and change when their contracts do.
+	"algorithm": {"", "Uniform V1", "uniform v1", "uniform_v1"},
+	// A sorted, duplicate-free list of feature tiers. Upper case, so it cannot
+	// borrow the container grammar.
+	"tier-list": {"a", "A,A", "A B", "Z"},
 	"feature":   {"", "Has Space", "UPPER"},
 	"enum-list": {"prose, with punctuation", "Document", "document document"},
 	"preserve-identifier": {
@@ -511,4 +528,26 @@ func attempt(t *testing.T, db *sql.DB, statement string, arguments ...any) error
 	defer tx.Rollback()
 	_, err = tx.ExecContext(context.Background(), statement, arguments...)
 	return err
+}
+
+// labelledBands is eval's band vocabulary without the empty member. A band
+// report always names one of the three; the empty band is what a rewrite
+// attempt carries when it was never scored.
+func labelledBands() []string {
+	var out []string
+	for _, band := range stringsOf(eval.Bands()) {
+		if band != "" {
+			out = append(out, band)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// claimingClasses is eval's class vocabulary plus the empty one, which is what
+// the drifting report carries: it claims nothing.
+func claimingClasses() []string {
+	out := append([]string{""}, stringsOf(eval.Classes())...)
+	sort.Strings(out)
+	return out
 }

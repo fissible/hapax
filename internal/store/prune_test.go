@@ -90,7 +90,7 @@ func newPruneFixture(t *testing.T, s *store.Store) pruneFixture {
 	}
 
 	f.EvalResult = evalResultFixture(f.AuditedProfile.ID, auditedRef.ID)
-	if err := s.PutEvalResult(ctx(), f.EvalResult); err != nil {
+	if err := s.PutEvalResult(ctx(), f.EvalResult, store.LeaveHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
 	}
 	f.Attempt = attemptFixture(f.KeptProfile.ID, f.Drafted.Documents[0].Nodes[0].ID)

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
+	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
@@ -110,23 +111,73 @@ func thresholdFixture(profileID, referenceID string) store.Threshold {
 	}
 }
 
-func evalResultFixture(profileID, referenceID string) store.EvalResult {
-	return store.EvalResult{
-		ID:                 fakeID("eval", profileID, referenceID),
-		ProfileID:          profileID,
-		ReferenceID:        referenceID,
-		AUC:                0.82,
-		LowerBound:         0.71,
-		Cap:                2.5,
-		AuthorSegments:     120,
-		DistractorSegments: 140,
-		AuthorClusters:     12,
-		DistractorClusters: 14,
-		Discriminates:      true,
-		Calibrated:         true,
-		Shippable:          true,
-		Reason:             eval.ReleaseReasonNone,
+// bindingFixture is the runtime binding both gates must carry, and must agree
+// on: Calibration.Band rejects a distance that contradicts any of it.
+func bindingFixture() store.Binding {
+	return store.Binding{
+		ManifestDigest:    features.ManifestDigest(),
+		WeightScheme:      deviation.WeightSchemeUniform,
+		DistanceAlgorithm: deviation.DistanceAlgorithm,
+		ScoredTiers:       []features.Tier{features.TierA},
 	}
+}
+
+// bandReports are the three eval always produces, in the order it produces
+// them. drifting is the special one: always emitted, no claiming class, no
+// error gate, because it is what a distance falls into when neither claim holds.
+func bandReports() []store.BandReport {
+	return []store.BandReport{
+		{
+			Band: eval.BandInRange, Claims: eval.ClassDistractor,
+			Target: 0.10, ErrorRate: 0.04, ErrorBound: 0.08,
+			ClassSegments: 140, ClassClusters: 14, MinClassClusters: 30,
+			AuthorSegments: 90, DistractorSegments: 20, Emitted: true,
+		},
+		{Band: eval.BandDrifting, Emitted: true, AuthorSegments: 20, DistractorSegments: 40},
+		{
+			Band: eval.BandNotYou, Claims: eval.ClassAuthor,
+			Target: 0.05, ErrorRate: 0.02, ErrorBound: 0.04,
+			ClassSegments: 120, ClassClusters: 12, MinClassClusters: 60,
+			AuthorSegments: 10, DistractorSegments: 80, Emitted: true,
+		},
+	}
+}
+
+func evalResultFixture(profileID, referenceID string) store.EvalResult {
+	population := fakeID("population", profileID)
+	discrimination := store.Discrimination{
+		ID: fakeID("discrimination", profileID), PopulationID: population,
+		Binding: bindingFixture(), Split: corpus.Test,
+		Algorithm: eval.DiscriminationAlgorithm, Clustering: eval.ClusterByDocument,
+		Floor: 0.65, Confidence: 0.95, Resamples: 2000, Seed: 7,
+		AUC: 0.82, LowerBound: 0.71, Cap: 2.5,
+		AuthorSegments: 120, DistractorSegments: 140,
+		AuthorClusters: 12, DistractorClusters: 14, MinClusters: 10,
+		Discriminates: true,
+	}
+	calibration := store.Calibration{
+		ID: fakeID("calibration", profileID), ThresholdsID: thresholdFixture(profileID, referenceID).ID,
+		PopulationID: population, Binding: bindingFixture(), Split: corpus.Test,
+		Algorithm: eval.BandCalibrationAlgorithm,
+		Low:       0.4, High: 0.9, Confidence: 0.95, Resamples: 2000, Seed: 11,
+		Bands:     bandReports(), Calibrated: true,
+	}
+	return store.EvalResult{
+		ID:          releaseID(calibration.ID, discrimination.ID),
+		ProfileID:   profileID,
+		ReferenceID: referenceID,
+		Discrimination: discrimination,
+		Calibration:    calibration,
+		Shippable:      true,
+	}
+}
+
+// releaseID is what eval.NewRelease computes, so the fixture cannot hand the
+// store an identity unrelated to the gates it carries.
+func releaseID(calibrationID, discriminationID string) string {
+	return identity.HashInputs(map[string]string{
+		"calibration-id": calibrationID, "discrimination-id": discriminationID,
+	})
 }
 
 func selectionFixture(profileID string, members ...string) store.ExemplarSelection {
@@ -237,7 +288,7 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 		t.Fatalf("PutThreshold: %v", err)
 	}
 	result := evalResultFixture(prof.ID, ref.ID)
-	if err := s.PutEvalResult(ctx(), result); err != nil {
+	if err := s.PutEvalResult(ctx(), result, store.AdvanceHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
 	}
 	selection := selectionFixture(prof.ID,
