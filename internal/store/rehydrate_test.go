@@ -370,3 +370,69 @@ func TestUnavailableForAnUnknownSnapshotIsNotFound(t *testing.T) {
 		t.Errorf("error = %v, want ErrNotFound", err)
 	}
 }
+
+// A mark records that the document could not be READ. A later read that
+// succeeds but finds different content answers a different question, so it must
+// not clear the mark — an implementation that cleared on any successful OS read
+// would pass every other case here.
+func TestAMarkSurvivesAReadThatFindsDifferentContent(t *testing.T) {
+	for _, c := range []struct{ name, replacement string }{
+		{"different prose", "Entirely different prose of a different length.\n"},
+		{"bytes that no longer admit", "Prose interrupted by \xff\xfe invalid bytes.\n"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			root, snapshot := corpusStore(t, s)
+			nodeID := snapshot.Documents[0].Nodes[0].ID
+
+			removeFile(t, root, "essays/a.md")
+			if _, err := s.Rehydrate(ctx(), root, []string{nodeID}); err != nil {
+				t.Fatalf("Rehydrate: %v", err)
+			}
+			rewriteFile(t, root, "essays/a.md", c.replacement)
+			results, err := s.Rehydrate(ctx(), root, []string{nodeID})
+			if err != nil {
+				t.Fatalf("Rehydrate: %v", err)
+			}
+			if results[0].Outcome != store.OutcomeContentChanged {
+				t.Fatalf("outcome = %q, want content-changed", results[0].Outcome)
+			}
+
+			unavailable, err := s.Unavailable(ctx(), snapshot.ID)
+			if err != nil {
+				t.Fatalf("Unavailable: %v", err)
+			}
+			if _, marked := unavailable["essays/a.md"]; !marked {
+				t.Error("the mark was cleared by a read that found different content")
+			}
+		})
+	}
+}
+
+// The narrowed rule made executable: a stored span the store itself cannot
+// account for is damage, not one of the four ordinary states.
+func TestAStoredSpanTheStoreCannotAccountForIsCorrupt(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		damage string
+	}{
+		{"a node whose ordinal no longer derives its key",
+			"UPDATE node SET ordinal = 7 WHERE ordinal = 0"},
+		{"a span running past the document it came from",
+			"UPDATE node SET length = 100000 WHERE ordinal = 0"},
+		{"a span starting past the document it came from",
+			"UPDATE node SET offset = 100000 WHERE ordinal = 0"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			root, snapshot := corpusStore(t, s)
+			nodeID := snapshot.Documents[0].Nodes[0].ID
+			if _, err := openRaw(t, s).Exec(c.damage); err != nil {
+				t.Fatalf("damaging: %v", err)
+			}
+			if _, err := s.Rehydrate(ctx(), root, []string{nodeID}); !errors.Is(err, store.ErrCorrupt) {
+				t.Errorf("error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}

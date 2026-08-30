@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -350,19 +351,39 @@ type rowFaults struct {
 	mu        sync.Mutex
 	remaining int
 	armed     bool
+	onExec    bool
 }
 
 func (f *rowFaults) arm(after int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed = after, true
+	f.remaining, f.armed, f.onExec = after, true, false
 }
 
-// shouldFail counts down across every row stream once armed.
-func (f *rowFaults) shouldFail() bool {
+// armExec fails the Nth statement EXECUTION rather than the Nth row, which is
+// how a fault is placed inside a write the caller has already begun.
+func (f *rowFaults) armExec(after int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if !f.armed {
+	f.remaining, f.armed, f.onExec = after, true, true
+}
+
+func (f *rowFaults) disarm() {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.armed = false
+}
+
+// shouldFail counts down across every row read once armed for rows.
+func (f *rowFaults) shouldFail() bool { return f.countDown(false) }
+
+// shouldFailExec counts down across every execution once armed for execs.
+func (f *rowFaults) shouldFailExec() bool { return f.countDown(true) }
+
+func (f *rowFaults) countDown(exec bool) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.armed || f.onExec != exec {
 		return false
 	}
 	if f.remaining > 0 {
@@ -414,6 +435,9 @@ type faultStmt struct {
 func (s faultStmt) Close() error  { return s.inner.Close() }
 func (s faultStmt) NumInput() int { return s.inner.NumInput() }
 func (s faultStmt) Exec(args []driver.Value) (driver.Result, error) {
+	if s.faults.shouldFailExec() {
+		return nil, errInjectedRowFault
+	}
 	return s.inner.Exec(args)
 }
 func (s faultStmt) Query(args []driver.Value) (driver.Rows, error) {
@@ -553,4 +577,44 @@ func seamIdentifiers() []string {
 		{Class: preserve.ClassURL, Direction: preserve.DirectionInvented, Item: "example.com"},
 	}}
 	return result.Identifiers()
+}
+
+// Marking and deletion commit in ONE write transaction, so a prune that fails
+// after it has already removed something must leave the graph as it found it.
+// Cancelling before the call proves nothing about that; the fault is armed to
+// fire on a write Prune has already begun making.
+func TestAPruneThatFailsPartWayThroughRemovesNothing(t *testing.T) {
+	faults := &rowFaults{}
+	name := registerFaultDriver(t, faults)
+	s, ids := seededSeamStore(t, name)
+	before := graphCensus(t, s)
+
+	faults.armExec(2)
+	if _, err := s.Prune(context.Background(), []string{ids.Profile}); err == nil {
+		t.Fatal("a prune whose write failed reported success")
+	}
+	faults.disarm()
+
+	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
+		t.Errorf("a failed prune left the graph as\n%v\nwant\n%v", after, before)
+	}
+}
+
+// graphCensus counts every table, so a partial commit anywhere is visible.
+func graphCensus(t *testing.T, s *Store) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for _, table := range []string{
+		"snapshot", "document", "node", "feature_vector", "feature_value",
+		"profile", "profile_stat", "profile_head", "reference", "reference_value",
+		"threshold", "eval_result", "exemplar_selection", "exemplar_member",
+		"rewrite_attempt", "rewrite_attempt_identifier",
+	} {
+		var count int
+		if err := s.db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
+			t.Fatalf("counting %s: %v", table, err)
+		}
+		out[table] = count
+	}
+	return out
 }

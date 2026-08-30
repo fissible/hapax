@@ -3,8 +3,10 @@ package store_test
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
+	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/store"
 	"github.com/fissible/hapax/internal/text"
@@ -37,7 +39,15 @@ func newPruneFixture(t *testing.T, s *store.Store) pruneFixture {
 		mustPutSnapshot(t, s, write)
 		return withDerivedIDs(write)
 	}
-	f.Kept = snapshotOf("kept/a.md", bodyA, text.Span{Offset: 0, Length: 48}, text.Span{Offset: 50, Length: 60})
+	// The kept snapshot carries a feature vector, so a prune that quietly
+	// dropped the children of what it kept would be visible.
+	keptWrite := snapshotWrite(corpusDocument(t, root, "kept/a.md", bodyA,
+		text.Span{Offset: 0, Length: 48}, text.Span{Offset: 50, Length: 60}))
+	keptWrite.Documents[0].Nodes[0].Vector = &features.Vector{
+		SetVersion: features.SetVersion, Tokens: 9, LexicalTokens: 7, Values: vectorValues(),
+	}
+	mustPutSnapshot(t, s, keptWrite)
+	f.Kept = withDerivedIDs(keptWrite)
 	f.Audited = snapshotOf("audited/a.md", bodyB, text.Span{Offset: 0, Length: 20})
 	f.Drafted = snapshotOf("drafted/a.md", bodyB, text.Span{Offset: 2, Length: 20})
 	f.Orphan = snapshotOf("orphan/a.md", bodyA, text.Span{Offset: 0, Length: 48}, text.Span{Offset: 50, Length: 60})
@@ -309,4 +319,68 @@ func TestAPruneThatCannotFinishRemovesNothing(t *testing.T) {
 	if _, err := s.Snapshot(ctx(), f.Orphan.ID); err != nil {
 		t.Errorf("the orphan snapshot was removed anyway: %v", err)
 	}
+}
+
+// Keeping a profile means keeping its whole graph, not merely its own row. An
+// implementation that retained profiles, snapshots and audit records while
+// deleting their children would pass every test above.
+func TestPruneKeepsTheChildrenOfWhatItKeeps(t *testing.T) {
+	s := newStore(t)
+	f := newPruneFixture(t, s)
+	before := loadKeptGraph(t, s, f)
+
+	mustPrune(t, s, f.KeptProfile.ID)
+
+	if after := loadKeptGraph(t, s, f); !reflect.DeepEqual(after, before) {
+		t.Errorf("the kept graph changed:\n%+v\nwant\n%+v", after, before)
+	}
+	raw := openRaw(t, s)
+	for table, want := range map[string]int{
+		"profile_stat":    len(f.KeptProfile.Stats) * 2, // the kept and the audited profile
+		"reference_value": rowsIn(t, raw, "reference_value"),
+	} {
+		if got := rowsIn(t, raw, table); got < want {
+			t.Errorf("%s has %d rows, want at least %d", table, got, want)
+		}
+	}
+	if rowsIn(t, raw, "exemplar_member") == 0 {
+		t.Error("the kept selection lost its members")
+	}
+	if rowsIn(t, raw, "feature_vector") == 0 || rowsIn(t, raw, "feature_value") == 0 {
+		t.Error("the kept snapshot lost its feature vectors")
+	}
+	if rowsIn(t, raw, "rewrite_attempt_identifier") == 0 {
+		t.Error("the retained audit record lost its identifiers")
+	}
+}
+
+// loadKeptGraph is everything that must be byte-identical across a prune that
+// was told to keep it.
+func loadKeptGraph(t *testing.T, s *store.Store, f pruneFixture) []any {
+	t.Helper()
+	prof, err := s.LoadProfile(ctx(), f.KeptProfile.ID)
+	if err != nil {
+		t.Fatalf("LoadProfile: %v", err)
+	}
+	ref, err := s.LoadReference(ctx(), referenceFixture(f.KeptProfile.ID).ID)
+	if err != nil {
+		t.Fatalf("LoadReference: %v", err)
+	}
+	threshold, err := s.LoadThreshold(ctx(), thresholdFixture(f.KeptProfile.ID, ref.ID).ID)
+	if err != nil {
+		t.Fatalf("LoadThreshold: %v", err)
+	}
+	selection, err := s.LoadExemplarSelection(ctx(), selectionFixture(f.KeptProfile.ID).ID)
+	if err != nil {
+		t.Fatalf("LoadExemplarSelection: %v", err)
+	}
+	snapshot, err := s.Snapshot(ctx(), f.Kept.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	attempt, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.Index)
+	if err != nil {
+		t.Fatalf("LoadRewriteAttempt: %v", err)
+	}
+	return []any{prof, ref, threshold, selection, snapshot, attempt}
 }
