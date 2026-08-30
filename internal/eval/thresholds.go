@@ -29,6 +29,31 @@ const (
 	BandNotYou Band = "not-you"
 )
 
+func Bands() []Band { return []Band{"", BandInRange, BandDrifting, BandNotYou} }
+
+type ThresholdVerdict string
+
+const (
+	VerdictSeparated        ThresholdVerdict = "separated"
+	VerdictPairIncompatible ThresholdVerdict = "pair-incompatible"
+)
+
+func ThresholdVerdicts() []ThresholdVerdict {
+	return []ThresholdVerdict{VerdictSeparated, VerdictPairIncompatible}
+}
+
+type ReleaseReason string
+
+const (
+	ReleaseReasonNone                 ReleaseReason = ""
+	ReleaseReasonDiscriminationFailed ReleaseReason = "discrimination-failed"
+	ReleaseReasonUncalibrated         ReleaseReason = "uncalibrated"
+)
+
+func ReleaseReasons() []ReleaseReason {
+	return []ReleaseReason{ReleaseReasonNone, ReleaseReasonDiscriminationFailed, ReleaseReasonUncalibrated}
+}
+
 // Targets declares the tolerated author and distractor error rates.
 type Targets struct {
 	Author, Distractor float64

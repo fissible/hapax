@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
@@ -73,7 +74,8 @@ func Open(path string) (*Store, error) {
 	} else if err != nil {
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=busy_timeout(10)")
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=foreign_keys(1)&_pragma=busy_timeout(10)"}).String()
+	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
 	}
@@ -596,7 +598,15 @@ func validPath(x string) bool {
 	return x != "" && !strings.HasPrefix(x, "/") && !strings.Contains(x, "\\") && !strings.Contains(x, "//") && !strings.Contains(x, "../") && x != ".."
 }
 func validRegister(x string) bool {
-	return x == "essays" || x == "email"
+	if len(x) == 0 || len(x) > 32 {
+		return false
+	}
+	for i, r := range x {
+		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || (i > 0 && r == '-')) {
+			return false
+		}
+	}
+	return true
 }
 func validSplit(x corpus.Split) bool {
 	return x == corpus.Train || x == corpus.Calibrate || x == corpus.Test || x == corpus.Draft

@@ -25,6 +25,8 @@ const (
 	DefaultEndpoint  = "http://127.0.0.1:11434"
 )
 
+func Providers() []ProviderID { return []ProviderID{ProviderOllama, ProviderAnthropic} }
+
 type ProviderID string
 
 const (

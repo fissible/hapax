@@ -24,6 +24,11 @@ const (
 	splitAlgorithmVersion  = "content-sha256-v1"
 )
 
+// Admissions returns the closed admission vocabulary.
+func Admissions() []Admission {
+	return []Admission{Eligible, RejectedTooShort, RejectedNotUTF8, RejectedDuplicate}
+}
+
 // OverlapAlgorithm identifies the exact-hash overlap screen and its version.
 const OverlapAlgorithm = "overlap-exact-hash-v1"
 
@@ -34,6 +39,9 @@ const (
 	RoleAuthor     Role = "author"
 	RoleDistractor Role = "distractor"
 )
+
+// Splits returns the closed split vocabulary.
+func Splits() []Split { return []Split{Train, Calibrate, Test, Draft} }
 
 // CheckState records whether an optional qualification check has run.
 type CheckState string

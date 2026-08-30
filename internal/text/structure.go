@@ -39,6 +39,8 @@ const (
 	KindLeaf      Kind = "leaf"
 )
 
+func Kinds() []Kind { return []Kind{KindContainer, KindLeaf} }
+
 // ContainerKind identifies Markdown structure that can enclose a text run.
 type ContainerKind string
 
@@ -70,6 +72,10 @@ const (
 	RoleDefinitionDescription Role = "definition-description"
 )
 
+func Roles() []Role {
+	return []Role{RoleParagraph, RoleHeading, RoleCodeBlock, RoleFrontMatter, RoleTableCell, RoleFootnote, RoleCaption, RoleImage, RoleHTMLBlock, RoleDefinitionTerm, RoleDefinitionDescription}
+}
+
 // ExclusionReason records why a leaf is outside the feature population.
 type ExclusionReason string
 
@@ -79,6 +85,10 @@ const (
 	ExcludedNotSentential      ExclusionReason = "excluded-not-sentential"
 	ExcludedByBlockQuotePolicy ExclusionReason = "excluded-by-block-quote-policy"
 )
+
+func ExclusionReasons() []ExclusionReason {
+	return []ExclusionReason{NotExcluded, ExcludedByRole, ExcludedNotSentential, ExcludedByBlockQuotePolicy}
+}
 
 // Node is either a structural container or one source text run.
 type Node struct {
