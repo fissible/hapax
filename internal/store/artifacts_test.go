@@ -1066,7 +1066,7 @@ func TestEveryTypeAPersistenceStructReachesIsPermitted(t *testing.T) {
 		"profile.Unit":         true, "profile.VarianceConvention": true,
 		"eval.Band": true, "eval.Interval": true, "eval.Class": true,
 		"eval.Clustering": true, "eval.ThresholdVerdict": true, "eval.ReleaseReason": true,
-		"features.Tier": true,
+		"features.Tier":  true,
 		"llm.ProviderID": true, "rewrite.RejectionCode": true,
 		"store.Profile": true, "store.ProfileStat": true, "store.Reference": true,
 		"store.Threshold": true, "store.EvalResult": true, "store.ExemplarSelection": true,

@@ -477,6 +477,39 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
 			return err
 		},
+		// Every column of the release reaches the reader through one loader.
+		"eval_result.discrimination_split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.discrimination_clustering": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.discrimination_reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.calibration_split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.calibration_reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.band": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.claims": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
 	}
 
 	for qualified := range declaredVocabularies() {

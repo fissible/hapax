@@ -127,17 +127,21 @@ func bindingFixture() store.Binding {
 // error gate, because it is what a distance falls into when neither claim holds.
 func bandReports() []store.BandReport {
 	return []store.BandReport{
+		// The cluster counts are not decorative: eval floors the bound at
+		// 3/ClassClusters, so 14 clusters could never produce a bound of 0.08
+		// and the first draft of this fixture described a release eval cannot
+		// emit. 40 clusters floor it at 0.075, 80 at 0.0375.
 		{
 			Band: eval.BandInRange, Claims: eval.ClassDistractor,
 			Target: 0.10, ErrorRate: 0.04, ErrorBound: 0.08,
-			ClassSegments: 140, ClassClusters: 14, MinClassClusters: 30,
+			ClassSegments: 400, ClassClusters: 40, MinClassClusters: 30,
 			AuthorSegments: 90, DistractorSegments: 20, Emitted: true,
 		},
 		{Band: eval.BandDrifting, Emitted: true, AuthorSegments: 20, DistractorSegments: 40},
 		{
 			Band: eval.BandNotYou, Claims: eval.ClassAuthor,
 			Target: 0.05, ErrorRate: 0.02, ErrorBound: 0.04,
-			ClassSegments: 120, ClassClusters: 12, MinClassClusters: 60,
+			ClassSegments: 800, ClassClusters: 80, MinClassClusters: 60,
 			AuthorSegments: 10, DistractorSegments: 80, Emitted: true,
 		},
 	}
@@ -160,12 +164,12 @@ func evalResultFixture(profileID, referenceID string) store.EvalResult {
 		PopulationID: population, Binding: bindingFixture(), Split: corpus.Test,
 		Algorithm: eval.BandCalibrationAlgorithm,
 		Low:       0.4, High: 0.9, Confidence: 0.95, Resamples: 2000, Seed: 11,
-		Bands:     bandReports(), Calibrated: true,
+		Bands: bandReports(), Calibrated: true,
 	}
 	return store.EvalResult{
-		ID:          releaseID(calibration.ID, discrimination.ID),
-		ProfileID:   profileID,
-		ReferenceID: referenceID,
+		ID:             releaseID(calibration.ID, discrimination.ID),
+		ProfileID:      profileID,
+		ReferenceID:    referenceID,
 		Discrimination: discrimination,
 		Calibration:    calibration,
 		Shippable:      true,

@@ -9,6 +9,7 @@ import (
 	"sort"
 	"testing"
 
+	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
@@ -164,6 +165,95 @@ func TestAClaimingReportsEmissionIsItsErrorBound(t *testing.T) {
 				t.Errorf("refused: %v", err)
 			}
 			if !c.acceptable && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// The bound has a floor of 3/ClassClusters, so a report claiming a tighter one
+// than its own cluster count allows describes a measurement eval cannot make.
+func TestAReportsBoundRespectsItsClusterCount(t *testing.T) {
+	s := newStore(t)
+	release := releaseFor(t, s)
+	report := &release.Calibration.Bands[0]
+	report.ErrorBound = 3/float64(report.ClassClusters) - 0.001
+	if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+		t.Error("accepted")
+	}
+}
+
+// An empty error class is the one case with no clusters, and eval returns a
+// bound of exactly 1 there rather than dividing by zero.
+func TestAnEmptyErrorClassBoundsAtOne(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		clusters   int
+		bound      float64
+		acceptable bool
+	}{
+		{"no clusters, bound of one", 0, 1, true},
+		{"no clusters, a tighter bound", 0, 0.5, false},
+		{"clusters, a bound of one", 40, 1, true},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			report := &release.Calibration.Bands[0]
+			report.ClassClusters, report.ErrorBound = c.clusters, c.bound
+			if c.clusters == 0 {
+				report.ClassSegments, report.ErrorRate = 0, 0
+				report.Reason = "empty-error-class"
+			} else {
+				report.Reason = "error-bound-exceeds-target"
+			}
+			report.Emitted = false
+			release.Calibration.Calibrated = release.Calibration.Bands[2].Emitted
+			err := s.PutEvalResult(ctx(), release, store.LeaveHead)
+			if c.acceptable && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.acceptable && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// Non-finite and out-of-range figures are not measurements.
+func TestAReportsFiguresMustBeMeasurements(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		alter func(*store.BandReport)
+	}{
+		{"a target that is not a number", func(r *store.BandReport) { r.Target = math.NaN() }},
+		{"an infinite bound", func(r *store.BandReport) { r.ErrorBound = math.Inf(1) }},
+		{"a negative rate", func(r *store.BandReport) { r.ErrorRate = -0.1 }},
+		{"a rate above one", func(r *store.BandReport) { r.ErrorRate = 1.5 }},
+		{"a bound above one", func(r *store.BandReport) { r.ErrorBound = 1.5 }},
+		{"a negative segment count", func(r *store.BandReport) { r.ClassSegments = -1 }},
+		{"a negative cluster count", func(r *store.BandReport) { r.ClassClusters = -1 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			c.alter(&release.Calibration.Bands[0])
+			if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// Both gates measure the held-out Test split, unconditionally, in eval itself.
+func TestBothGatesMeasureTheHeldOutSplit(t *testing.T) {
+	for _, split := range []corpus.Split{corpus.Train, corpus.Calibrate, corpus.Draft} {
+		t.Run(string(split), func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			release.Discrimination.Split = split
+			release.Calibration.Split = split
+			if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
 				t.Error("accepted")
 			}
 		})
@@ -331,6 +421,9 @@ func TestScoredTiersAreCanonical(t *testing.T) {
 		{"a duplicate", []features.Tier{features.TierA, features.TierA}},
 		{"an undeclared tier", []features.Tier{"Z"}},
 		{"empty", nil},
+		// Sortedness is implemented and cannot be exercised: features declares
+		// one tier, so every list of declared tiers is trivially sorted. Named
+		// rather than covered by a case that would prove nothing.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStore(t)
@@ -584,8 +677,50 @@ func TestMigrationOneRemovesReleasesThatPredateTheContract(t *testing.T) {
 		t.Fatalf("Open: %v", err)
 	}
 	defer s.Close()
-	if got := rowsIn(t, openRaw(t, s), "eval_result"); got != 0 {
+
+	version, err := s.SchemaVersion(ctx())
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if want := len(migrations) - 1; version != want {
+		t.Errorf("schema version = %d, want %d", version, want)
+	}
+	raw := openRaw(t, s)
+	var checksum string
+	if err := raw.QueryRow("SELECT checksum FROM migration WHERE version = 1").Scan(&checksum); err != nil {
+		t.Fatalf("migration 1 has no ledger row: %v", err)
+	}
+	if want := identity.HashBytes([]byte(migrations[1])); checksum != want {
+		t.Errorf("ledger checksum = %q, want %q", checksum, want)
+	}
+	if got := rowsIn(t, raw, "eval_result"); got != 0 {
 		t.Errorf("%d legacy releases survived the migration", got)
+	}
+	if got := rowsIn(t, raw, "calibration_band"); got != 0 {
+		t.Errorf("calibration_band was not created by migration 1")
+	}
+}
+
+// And a release written under THIS contract survives being reopened. Deleting
+// eval_result on every open would satisfy the test above.
+func TestReopeningDoesNotRemoveACurrentRelease(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hapax.db")
+	first, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	_, _, release := seededRelease(t, first)
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+	if _, err := second.LoadEvalResult(ctx(), release.ID); err != nil {
+		t.Errorf("a current release did not survive a reopen: %v", err)
 	}
 }
 
@@ -635,5 +770,158 @@ func TestTheReleaseVocabulariesAreEvalsOwn(t *testing.T) {
 				t.Errorf("%s declares %q twice", name, sorted[i])
 			}
 		}
+	}
+}
+
+// A threshold belongs to the calibration's own profile and reference. An FK
+// proves the threshold exists, not that it is this calibration's.
+func TestACalibrationsThresholdIsItsOwnProfilesAndReferences(t *testing.T) {
+	setUp := func(t *testing.T) (*store.Store, store.Profile, store.Reference, store.Threshold) {
+		t.Helper()
+		s := newStore(t)
+		snapshot, prof := seededProfile(t, s)
+		ref := referenceFixture(prof.ID)
+		mustPutReference(t, s, ref)
+		if err := s.PutThreshold(ctx(), thresholdFixture(prof.ID, ref.ID)); err != nil {
+			t.Fatalf("PutThreshold: %v", err)
+		}
+		other := profileFixture(snapshot.ID)
+		other.ID, other.Register = fakeID("profile", "other"), "letters"
+		mustPutProfile(t, s, other)
+		otherRef := referenceFixture(other.ID)
+		mustPutReference(t, s, otherRef)
+		foreign := thresholdFixture(other.ID, otherRef.ID)
+		if err := s.PutThreshold(ctx(), foreign); err != nil {
+			t.Fatalf("PutThreshold: %v", err)
+		}
+		return s, prof, ref, foreign
+	}
+
+	t.Run("another profile's threshold", func(t *testing.T) {
+		s, prof, ref, foreign := setUp(t)
+		release := evalResultFixture(prof.ID, ref.ID)
+		release.Calibration.ThresholdsID = foreign.ID
+		release.ID = releaseID(release.Calibration.ID, release.Discrimination.ID)
+		if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+			t.Error("accepted")
+		}
+	})
+	t.Run("and a stored one that already does is corrupt", func(t *testing.T) {
+		s, prof, ref, foreign := setUp(t)
+		release := evalResultFixture(prof.ID, ref.ID)
+		if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err != nil {
+			t.Fatalf("PutEvalResult: %v", err)
+		}
+		if _, err := openRaw(t, s).Exec("UPDATE eval_result SET calibration_thresholds_id = ?", foreign.ID); err != nil {
+			t.Fatalf("damaging: %v", err)
+		}
+		if _, err := s.LoadEvalResult(ctx(), release.ID); !errors.Is(err, store.ErrCorrupt) {
+			t.Errorf("error = %v, want ErrCorrupt", err)
+		}
+	})
+}
+
+// Damage the schema cannot express, on the way out. Each of these is something
+// Calibration.Band consults, so a reader that trusted the row would classify a
+// draft against a release the calibration never made.
+func TestDerivedReleaseStateIsCheckedOnRead(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		damage string
+	}{
+		{"a calibration claiming to be calibrated with nothing emitted",
+			"UPDATE calibration_band SET emitted = 0, reason = 'error-bound-exceeds-target' WHERE band <> 'drifting'"},
+		{"a band report removed", "DELETE FROM calibration_band WHERE band = 'not-you'"},
+		{"a report emitted over its target", "UPDATE calibration_band SET error_bound = 0.9 WHERE band = 'in-range'"},
+		{"a minimum cluster count that is not derived",
+			"UPDATE calibration_band SET min_class_clusters = 1 WHERE band = 'in-range'"},
+		{"the gates measuring different populations",
+			"UPDATE eval_result SET calibration_population_id = discrimination_id"},
+		{"the gates carrying different bindings",
+			"UPDATE eval_result SET calibration_weight_scheme = 'weighted-v1'"},
+		{"a calibration bound that is not its threshold's",
+			"UPDATE eval_result SET calibration_low = 0.41"},
+		{"a shippability that is not the conjunction",
+			"UPDATE eval_result SET discriminates = 0"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			_, _, release := seededRelease(t, s)
+			result, err := openRaw(t, s).Exec(c.damage)
+			if err != nil {
+				t.Fatalf("damaging: %v", err)
+			}
+			if affected, _ := result.RowsAffected(); affected == 0 {
+				t.Fatalf("the damage changed no row; the case would be vacuous")
+			}
+			if _, err := s.LoadEvalResult(ctx(), release.ID); !errors.Is(err, store.ErrCorrupt) {
+				t.Errorf("error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+// Advancing the profile head does not carry the old release with it: the new
+// profile has no release until it is evaluated, which is what lets cli refuse
+// with uncalibrated rather than scoring against the previous profile's bands.
+func TestAdvancingTheProfileHeadLeavesTheNewProfileUnevaluated(t *testing.T) {
+	s := newStore(t)
+	snapshot, first := seededProfile(t, s)
+	firstRef := referenceFixture(first.ID)
+	mustPutReference(t, s, firstRef)
+	if err := s.PutThreshold(ctx(), thresholdFixture(first.ID, firstRef.ID)); err != nil {
+		t.Fatalf("PutThreshold: %v", err)
+	}
+	if err := s.PutProfile(ctx(), first, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	if err := s.PutEvalResult(ctx(), evalResultFixture(first.ID, firstRef.ID), store.AdvanceHead); err != nil {
+		t.Fatalf("PutEvalResult: %v", err)
+	}
+
+	second := profileFixture(snapshot.ID)
+	second.ID = fakeID("profile", "second")
+	second.MinParagraphLexicalTokens = 55
+	if err := s.PutProfile(ctx(), second, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+
+	bundle, err := s.LoadProfileBundle(ctx(), second.Register)
+	if err != nil {
+		t.Fatalf("LoadProfileBundle: %v", err)
+	}
+	if bundle.Profile.ID != second.ID {
+		t.Errorf("bundle profile = %q, want the advanced head %q", bundle.Profile.ID, second.ID)
+	}
+	if bundle.Evaluated {
+		t.Error("the new profile inherited the old profile's release")
+	}
+	// And the old release is still there, reachable by its own profile.
+	if _, err := s.ReleaseHead(ctx(), first.ID); err != nil {
+		t.Errorf("the previous profile lost its release head: %v", err)
+	}
+}
+
+// A refused release leaves the head where it was, rather than clearing or
+// advancing it: the write and the head move together or not at all.
+func TestARefusedReleaseLeavesTheExistingHeadAlone(t *testing.T) {
+	s := newStore(t)
+	prof, ref, first := seededRelease(t, s)
+
+	broken := evalResultFixture(prof.ID, ref.ID)
+	broken.Calibration.ID = fakeID("calibration", "second")
+	broken.ID = releaseID(broken.Calibration.ID, broken.Discrimination.ID)
+	broken.Calibration.Bands[0].Emitted = true
+	broken.Calibration.Bands[0].ErrorBound = 0.9
+	if err := s.PutEvalResult(ctx(), broken, store.AdvanceHead); err == nil {
+		t.Fatal("accepted a report emitted over its target")
+	}
+
+	head, err := s.ReleaseHead(ctx(), prof.ID)
+	if err != nil {
+		t.Fatalf("ReleaseHead: %v", err)
+	}
+	if head != first.ID {
+		t.Errorf("head = %q, want the release that was already there, %q", head, first.ID)
 	}
 }
