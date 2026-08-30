@@ -222,7 +222,13 @@ type seededIDs struct {
 // seedEveryArtifact writes one valid instance of each artifact this slice owns.
 func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	t.Helper()
-	snapshot, prof := seededProfile(t, s)
+	snapshot := storedGraph(t, s)
+	prof := profileFixture(snapshot.ID)
+	// AdvanceHead, because profile_head is one of the artifacts and a table with
+	// no row in it makes any probe against that table vacuous.
+	if err := s.PutProfile(ctx(), prof, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
 
