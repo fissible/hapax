@@ -1521,8 +1521,10 @@ paragraph reporting insufficient evidence*, which is a legitimate verdict and wo
 been read as one. The distributions are now part of the artifact.
 
 That is the same defect the band calibration slice found in its own artifact, in a package
-that had already been reviewed and merged. **Every artifact here is content-addressed so it
-can be stored and reused, and that property has to be tested, not assumed** — a round trip
+that had already been reviewed and merged. **Every artifact with a content-addressed identity must survive
+its own encoding, and that property has to be tested, not assumed** — not every artifact has
+one, since `document`, `node`, `feature_vector` and `rewrite_attempt` are keyed within a
+parent instead — a round trip
 through the encoding, with behaviour compared before and after.
 
 **The report has one shape, not two.** ADR 0005 says an uncalibrated profile still emits the
@@ -1970,6 +1972,201 @@ Corpus-text scanning is retained as one **regression control**, not as proof. Th
 controls are the prohibition itself, an explicit allowlist of what may be persisted, and
 review of anything added to it.
 
+### `store`, and the eight questions a schema has to answer
+
+**A codec per artifact, never a marshalled owner struct.** Persisting
+`json.Marshal(profile)` would mean every field a future slice adds to `profile.Profile` is
+persisted the moment it exists, including a prose-bearing one. Each artifact instead has an
+explicit persistence struct in `store` with named columns, and a test asserts its field set is
+exactly the declared allowlist. The allowlist becomes something a reviewer must widen on
+purpose rather than something a struct literal widens by accident.
+
+**Two kinds of identity, because not everything is content-addressed.** Most artifacts carry
+an ID their owning component already computed — `store` never invents one. But `document`,
+`node`, `feature_vector` and `rewrite_attempt` are identified by a composite key within a
+parent, and "invocation plus attempt index" is an idempotency key rather than a digest. So the
+rule is stated: writing a key that already exists **succeeds if the content is identical** and
+returns `ErrConflict` if it is not. A retried write is safe; a changed one is corruption.
+
+**Aggregates become visible at once.** A snapshot, its documents, their nodes and those nodes'
+vectors are written in one transaction. There is no moment at which a reader sees half a
+document tree, because a partial graph is indistinguishable from a small corpus.
+
+**One writer, and locks that answer to the caller.** WAL mode, `BEGIN IMMEDIATE` for writes so
+lock acquisition fails early rather than mid-transaction, a busy timeout bounded by the
+caller's context rather than a constant, and a unique constraint on every identity so two
+writers cannot silently overwrite one another.
+
+**Migration is a transaction, not a version integer.** Each migration runs inside one
+transaction that also writes its own row — version, a checksum of the migration itself, and
+when it was applied — so the version transition is atomic and an interrupted migration leaves
+no half-migrated schema. Opening refuses on three conditions: a recorded version newer than
+the binary, a recorded checksum that disagrees with the migration of that version, and a
+version with no recorded row. "Refuse" rather than "repair": a database is the user's evidence.
+
+**Span references are structured, and rehydration opens the file once.** A reference carries
+the snapshot ID, the document ID, the expected content hash and a raw byte range — not an
+opaque string. Rehydration reads the whole file, hashes what it read, compares, and only then
+slices. Stat-then-read or hash-then-reopen both leave a window in which the file is replaced
+between the check and the use.
+
+**Rehydration has a closed vocabulary**, because "it did not work" is not something a caller
+can act on: `ok`, `missing`, `unreadable`, `content-changed`, `span-invalid`. All but the
+first are ordinary states rather than errors — a user may edit, move or delete their own
+writing at any time — and none of them permits substitution or silent reduction. A malformed
+stored reference is deliberately **not** in this list; it is `ErrCorrupt`, for the reason
+given below.
+
+**Absence is not deletion.** The earlier rule, that reindexing evicts artifacts whose
+documents are gone, is unsafe as written: an unmounted drive or a changed permission would
+erase evidence. A document that cannot be read is marked **unavailable, with a timestamp**,
+and nothing is removed. Removal is a separate, explicit, transactional `Prune` whose roots are
+declared — the current snapshot of each profile, every `eval_result`, and every
+`rewrite_attempt` — which removes only what is unreachable from them.
+
+**Audit attempts outlive their spans.** A `rewrite_attempt` is retained even when the span it
+references can no longer be rehydrated. An audit record whose evidence has disappeared is
+precisely the case where it is worth having.
+
+**"Identical content" is one definition, not one per caller.** Idempotent writes and
+content-addressed identities both depend on it, so it is the codec's column values compared as
+typed values after four normalisations: paths are corpus-root-relative with forward slashes,
+floats use the `numberID` convention that normalises `-0`, timestamps are RFC 3339 in UTC to
+the second, and an absent list is the empty list. Two implementations that disagree on any of
+those disagree on whether a retry is safe.
+
+**Aggregate integrity is a read rule as well as a write rule.** Foreign keys are enforced, and
+a read of a snapshot's tree happens in one transaction, because a child that is missing,
+duplicated or orphaned would otherwise present as a smaller valid corpus. The same closure
+applies to the profile, exemplar, threshold and eval-result graphs, not only to ingestion.
+
+**A concurrent idempotent write is decided by rereading, not by the collision.** The loser of
+a unique-constraint race has not yet compared anything, so it rereads the winning row inside
+its own transaction and succeeds only if the content is identical. Returning `ErrConflict` on
+the collision itself would fail a safe retry.
+
+**Four refusals, not one.** A database this binary cannot account for fails in one of four
+distinguishable ways, because "schema mismatch" tells an operator nothing about what to do:
+`ErrSchemaAhead` (a version newer than this binary), `ErrSchemaChecksum` (a version whose
+recorded checksum differs from the migration this binary carries), `ErrSchemaIncomplete` (a
+gap, or a ledger missing a version this binary has), and `ErrSchemaForeign` (a database with
+tables but no ledger at all). Every one of them leaves the file and its sidecars byte-identical.
+
+**The migration ledger is the only authority on version.** Versions are contiguous from zero;
+the checksum is over the exact migration bytes the binary carries; and the ledger, not the
+schema, answers "what version is this". Three disagreements are distinguished rather than
+merged: a version newer than the binary knows, a checksum that differs from the binary's
+migration of that version, and a schema with no ledger at all — the last being a
+pre-ledger or externally-created database, which is refused rather than adopted.
+
+**Rehydration is given a root.** Snapshot identity is deliberately location-independent, so
+the reference cannot name a directory; the caller passes the corpus root it wants read. The
+outcome vocabulary maps to causes explicitly: a path that does not resolve is `missing`; an OS
+error opening or reading it is `unreadable`; bytes that hash differently are `content-changed`;
+a range outside those bytes is `span-invalid`. `unavailable_at` is set when a document first
+yields `missing` or `unreadable` and cleared the first time it reads back `ok`.
+
+A **malformed stored reference is not in that vocabulary** — it is `ErrCorrupt`. The earlier
+draft listed `reference-corrupt` as an ordinary state, which contradicted the rule below: a
+user editing their own file is ordinary, a store that wrote a reference it cannot parse is not.
+
+**The schema's shape is part of the allowlist.** Column names alone would pass a schema whose
+`content_hash` was an unconstrained `TEXT`, so declared types, `NOT NULL`, foreign keys with
+`ON DELETE CASCADE`, uniqueness and `CHECK` constraints are all asserted, and there are no
+virtual tables. Enforcement is a property of the connection rather than of the schema, and this slice exposes
+no operation that could violate a foreign key — `PutSnapshot` validates before it inserts — so
+what is asserted here is that the constraints are *declared*. Enforcement gets its observable
+consequence with the cascade `Prune` relies on, and is tested there.
+The migration payload is exported so a test can hash it independently — a checksum that is
+merely *consistent* between two databases would be satisfied by a constant. Even then this is a **tripwire, not a proof**: the honest controls are the
+column allowlist, the codec field-set tests, and review of anything added. A DDL substring
+scan cannot rule out every reversible derivative and is not claimed to.
+
+**The allowlist is columns, not prose.** "Holds" in the artifact table cannot drive a test, so
+each artifact's columns are declared, and every textual column has a grammar: an identity or
+digest is hex or a declared identifier form, a path is corpus-root-relative, an enum is one of
+a closed set, and there is no free-text column anywhere. `rewrite_attempt` is the one to read
+twice, since it is the record that already held prose once.
+
+**`Prune` has a declared graph, and it is directed away from its roots.** An earlier draft
+rooted it at the current snapshot while pointing the edge `profile → snapshot`, so nothing
+reachable from a root included the profile, its reference, its thresholds or its exemplar
+selections — a traversal that would have deleted the entire live profile graph. The roots are
+therefore the artifacts a user still has, not the ones they are built on:
+
+- **roots**: exactly the profile IDs `Prune` is *given*, plus every `eval_result` and every
+  `rewrite_attempt`
+- `profile` → its `snapshot`, its `reference`, its `threshold`s, its `exemplar_selection`s
+- `snapshot` → its `document`s → their `node`s → their `feature_vector`s
+- `exemplar_selection` → the `node`s it names
+- `eval_result` → its `profile` and `reference`
+- `rewrite_attempt` → its `profile` and its span's `node`
+
+**`Prune` takes its roots as arguments**, so its result is a function of what it was told and
+nothing else. "The current profile" is a policy question — which register, which of several
+profiles, whether an older one is still wanted — and `store` should not be the thing deciding
+it. `cli` passes the heads it wants kept.
+
+The head itself is still a stored fact, because *something* has to answer "which profile does
+`hapax score` use". `profile_head` maps a register to one profile ID and is updated in the same
+transaction that writes the profile it points at, so there is no window in which a head names
+a profile that does not exist. It is not itself a `Prune` root: a head that nobody passed is a
+head `cli` chose not to keep.
+
+A document marked unavailable keeps its whole artifact graph — that is the point of marking
+rather than deleting. Marking and deletion are computed and committed in one write
+transaction, so a concurrent reader never sees a half-pruned graph.
+
+**The columns themselves.** `hex` is lower-case hexadecimal of a declared length, `rel` is a
+corpus-root-relative forward-slash path, `enum` is one of a closed set named by the owning
+package, and `num` is a float under the `numberID` convention. There is no free-text column
+in this schema, which is the property the allowlist test asserts.
+
+| artifact | key | columns |
+|---|---|---|
+| `snapshot` | `id` hex | `policy_digest` hex, `created_at` time |
+| `document` | `document_id` = `HashInputs{snapshot, path}` | `snapshot_id` hex, `path` rel, `content_hash` hex, `register` enum, `split` enum, `admission` enum, `language` enum, `unavailable_at` time or null |
+| `node` | `node_id` = `HashInputs{document, ordinal}` | `document_id` hex, `ordinal` int, `kind` enum, `role` enum, `containers` enum list, `offset` int, `length` int, `included` bool, `exclusion` enum |
+| `feature_vector` | `node_id` + `manifest_digest` hex | `set_version` int, `tokens` int, `lexical_tokens` int, and per feature `value` num, `defined` bool, `sampling_variance` num, `sampling_variance_defined` bool |
+| `profile` | `id` hex | `snapshot_id` hex, `register` enum, `unit` enum, `variance_convention` enum, `manifest_digest` hex, `min_paragraph_lexical_tokens` int, and per feature `n` int, `mean` num, `variance` num, `defined` bool, `variance_defined` bool, `min_observations` int |
+| `profile_head` | `register` enum | `profile_id` hex, `updated_at` time |
+| `reference` | `id` hex | `profile_id` hex, `split` enum, `min_segments` int, and per feature an ordered `num` distribution |
+| `exemplar_selection` | `id` hex | `profile_id` hex, `n` int, `certificate_id` hex, and ordered member `node_id`s |
+| `threshold` | `id` hex | `profile_id` hex, `reference_id` hex, `population_id` hex, `t_low` num, `t_high` num, achieved rates num, interval bounds num, `verdict` enum |
+| `eval_result` | `id` hex | `profile_id` hex, `reference_id` hex, `auc` num, `lower_bound` num, `cap` num, cluster and segment counts int, `discriminates` bool, `calibrated` bool, `shippable` bool, `reason` enum |
+| `rewrite_attempt` | `invocation_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `node_id`, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
+
+The `snapshot` identity is **verified, not trusted**. `corpus` computes it, but `store` has to
+be able to recompute it or the read-integrity rule is unenforceable for the one artifact
+everything else hangs from: it is
+`HashInputs{"policy": policyDigest, "documents": Frame(sorted "path=contentHash")}`, and a
+snapshot whose membership does not hash to its stored ID is `ErrCorrupt`.
+
+`document_id` and `node_id` are **derived**, not surrogate, and the preimages are named so a
+test can compute them: `document_id` is `HashInputs{"snapshot": snapshotID, "path": path}` and
+`node_id` is `HashInputs{"document": documentID, "ordinal": decimal ordinal}`. A foreign
+reference is then a single stable column and two implementations produce the same value. An autoincrement key would be local to one database
+and would make a span reference meaningless outside it.
+
+Two columns of `corpus.Document` are deliberately **absent**. `rejection_detail` holds an
+error message — today always `invalid UTF-8 at byte offset N`, which carries nothing, but a
+string whose contents are whatever a future error type formats is not a column this schema
+should own. `rejection_offset` is the persistable form of the same fact. And `register` is a
+user-supplied label, so it is not free text either: it matches `[a-z0-9][a-z0-9-]{0,31}` and is
+validated on write, which is what keeps the no-free-text claim true rather than nearly true.
+
+Two of those are worth saying out loud. `provider_id` is an enum over the declared providers
+rather than a label a caller chooses, and `invocation_id` is a digest rather than anything a
+user names — both are strings that would otherwise be free text by another name.
+`preserve_identifiers` is validated against `preserve.ValidIdentifier` on the way in, because
+that column is the one that already held prose once.
+
+**Every read is validated.** Unknown enum values, non-finite floats and rows whose `(kind, id)`
+disagrees with where they were found are all `ErrCorrupt` — and for content-addressed
+artifacts, so is a decoded content that no longer hashes to its stored ID. Corruption must
+never be able to present itself as *insufficient evidence*, which is a legitimate verdict this
+system emits and would therefore be believed.
+
 ### Dangling spans, and exactly how many exemplars is enough
 
 A span references a file the user may edit, move or delete, so rehydration failure is an
@@ -1984,7 +2181,9 @@ of the identity of the result.
 - A `rewrite` that cannot rehydrate its required set **refuses**, naming what is stale
 - Reindexing produces a **new** profile identity and may yield a different result — which is
   legitimate, but it must never be presented as the same result under the old identity
-- Reindexing evicts artifacts whose documents are gone, per issue #3's deletion-phantom rule
+- Reindexing marks artifacts whose documents cannot be read as **unavailable** and removes
+  nothing. This line previously said it evicts them, which would let an unmounted drive erase
+  evidence; removal is `Prune`'s job and `Prune` is explicit
 
 ### Schema migration
 
