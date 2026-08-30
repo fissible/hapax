@@ -31,8 +31,8 @@ model, then review.
 | 9 | `llm` | **built** | PR #41. Ollama + Anthropic, dial seam, AST egress guard |
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
-| 12 | `store` | **partial** | PR #45: schema entire, snapshot aggregate only. Slice 2 below |
-| 13 | `cli` | not started | design settled (exit codes, mode resolution); needs `store` slice 2 |
+| 12 | `store` | **partial** | PR #45 schema and snapshots; slice 2a the artifact codecs. Slice 2b below |
+| 13 | `cli` | not started | design settled (exit codes, mode resolution); needs `store` slice 2b |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -50,7 +50,7 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | needs a real corpus (#2) |
 | [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | needs `cli` and a real corpus |
 | [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | needs a real corpus (#2) |
-| [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | nothing — next |
+| [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | slice 2a done; 2b (rehydration, unavailability, `Prune`) is next |
 
 **Why #17 and #18 exist separately.** Issue #2 was rescoped so its timebox could
 govern it. Two of its acceptance criteria could not be evaluated until
@@ -134,6 +134,36 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-08-30 (store slice 2a)
+
+Seven `duet` review rounds before the tests were frozen, then two defects codex
+found while implementing against them. Worth carrying forward:
+
+- **Two DESIGN claims could not be satisfied as written.** The threshold row
+  declared two interval columns for four bootstrap bounds — losing exactly the
+  quantity `Actionable = interval_low.upper < interval_high.lower` is computed
+  from — and named the achieved rates `achieved_low`/`achieved_high`, inviting
+  the author/distractor mix-up Section 2 spends a page warning against. Both are
+  corrected in the schema and in DESIGN.
+- **"Every content-addressed artifact's decoded content must hash to its stored
+  ID" was impossible.** A profile ID hashes the outlier algorithm and four build
+  floors; an exemplar certificate ID hashes the density, medoid and tie records.
+  Storing those preimages so the ID could be rechecked would mean storing the
+  working records the artifact table exists to exclude. The rule is now scoped
+  to the identities whose preimage IS stored, and a test fails if a profile ever
+  becomes reconstructible.
+- **Read-side enum validation is testable after all.** The schema's own CHECKs
+  refuse a bad value, which made the rule look unassertable. `PRAGMA
+  writable_schema` strips the closed set from the live schema, and since the
+  ledger and not the schema answers "what version is this", the tampered
+  database still opens — which is the real threat model, not a contrived one.
+- **`store.validRegister` allowed only `essays` and `email`.** Registers are
+  user-named in both Section 1 and Section 2; the closed set of two was the
+  store's own invention and would have refused `--profile fiction`.
+- **Known gap:** nothing in the suite exercises `rows.Err()`. Codex fixed four
+  loaders that ignored it because the argument was right, not because a test
+  forced it. Fault injection on the row stream is the obvious slice-2b addition.
+
 ### 2026-08-30 (preserve, assemble, select, llm, the audit fix, store slice 1)
 
 **Merged since the last note:** `preserve` (#34), `assemble` (#37), `select`
@@ -142,11 +172,15 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 **Next, in order:**
 
-1. **`store` slice 2** (issue #44) — the remaining artifact operations
-   (profile, reference, threshold, eval_result, exemplar_selection,
-   rewrite_attempt, profile_head), plus rehydration and `Prune`. The schema and
-   every constraint already exist from #45, so this is codecs and traversal
-   against tables that are already there. `Prune`'s tests were drafted during
+1. **`store` slice 2b** (issue #44) — rehydration, the unavailability
+   marking, and `Prune`. Slice 2a shipped the artifact codecs, so every table
+   now has typed operations and the graph they hang from is closed. What
+   remains is the part that touches the user's files: open once, hash what was
+   read, then slice; the closed outcome vocabulary `ok` / `missing` /
+   `unreadable` / `content-changed` / `span-invalid`, with a malformed *stored*
+   reference being `ErrCorrupt` rather than an outcome; `unavailable_at` set on
+   the first `missing` or `unreadable` and cleared on the first `ok`; and
+   `Prune` over the roots DESIGN declares. `Prune`'s tests were drafted during
    slice 1 and deliberately **not** kept: the API moved underneath them, and
    the six design rounds behind `Prune` are recorded in DESIGN, which is the
    part worth having. Write them fresh from the declared roots and edges.
