@@ -160,13 +160,20 @@ func TestAFeatureVectorRoundTripsWithItsUndefinedValues(t *testing.T) {
 // Corruption must never be able to present as insufficient evidence, which is a
 // verdict this system emits and would therefore be believed.
 func TestCorruptionIsNotInsufficientEvidence(t *testing.T) {
+	// Every mutation here must be one the SCHEMA CANNOT PREVENT — otherwise the
+	// write-side CHECK rejects it and the read-side rule is untestable. An
+	// earlier version used role = 'sonnet' and document_id = 'ffff', both of
+	// which the constraints refuse, so the two suites contradicted each other.
+	// What a CHECK cannot express is a cross-column derivation: an ID that no
+	// longer matches its own preimage, or a well-formed reference to something
+	// that is not there.
 	for _, c := range []struct {
 		name    string
 		corrupt string
 	}{
-		{"an unknown enum", "UPDATE node SET role = 'sonnet'"},
 		{"a non-finite float", "UPDATE feature_value SET value = 'NaN'"},
-		{"a row under a parent that does not exist", "UPDATE node SET document_id = 'ffff'"},
+		{"a well-formed reference to a document that does not exist",
+			"UPDATE node SET document_id = '" + identity.HashBytes([]byte("no such document")) + "'"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStore(t)
