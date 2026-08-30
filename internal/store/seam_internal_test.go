@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -240,19 +241,19 @@ func openSeamed(t *testing.T, d deps) *Store {
 func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		// stream names the cursor to fault, by a fragment of its SQL. Every case
-		// aims: an unaimed fault is absorbed by whichever nested cursor a loader
-		// happens to open first, which for a snapshot is a node's feature
-		// values, not the documents the case claims to be about.
-		stream string
+		// table names the collection to truncate. Every case aims: an unaimed
+		// fault is absorbed by whichever nested cursor a loader happens to open
+		// first, which for a snapshot is a node's feature values, not the
+		// documents the case claims to be about.
+		table string
 		// load reports whether what came back is complete, alongside its error.
 		load func(s *Store, ids seamIDs) (bool, error)
 	}{
-		{"profile stats", "FROM profile_stat", func(s *Store, ids seamIDs) (bool, error) {
+		{"profile stats", "profile_stat", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadProfile(context.Background(), ids.Profile)
 			return len(got.Stats) == len(features.Definitions()), err
 		}},
-		{"reference values", "FROM reference_value", func(s *Store, ids seamIDs) (bool, error) {
+		{"reference values", "reference_value", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadReference(context.Background(), ids.Reference)
 			total := 0
 			for _, values := range got.Values {
@@ -260,23 +261,23 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			}
 			return total == 3*len(features.Definitions()), err
 		}},
-		{"exemplar members", "FROM exemplar_member", func(s *Store, ids seamIDs) (bool, error) {
+		{"exemplar members", "exemplar_member", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadExemplarSelection(context.Background(), ids.Selection)
 			return len(got.Members) == 3, err
 		}},
-		{"preserve identifiers", "FROM rewrite_attempt_identifier", func(s *Store, ids seamIDs) (bool, error) {
+		{"preserve identifiers", "rewrite_attempt_identifier", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
 			return len(got.PreserveIdentifiers) == 3, err
 		}},
-		{"a snapshot's documents", "FROM document WHERE snapshot_id", func(s *Store, ids seamIDs) (bool, error) {
+		{"a snapshot's documents", "document", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
 			return wholeSnapshot(got), err
 		}},
-		{"a document's nodes", "FROM node WHERE document_id", func(s *Store, ids seamIDs) (bool, error) {
+		{"a document's nodes", "node", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
 			return wholeSnapshot(got), err
 		}},
-		{"a node's feature values", "FROM feature_value", func(s *Store, ids seamIDs) (bool, error) {
+		{"a node's feature values", "feature_value", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
 			return wholeSnapshot(got), err
 		}},
@@ -286,19 +287,31 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
-			faults.armRowsMatching(c.stream, 2)
+			faults.armRowsIn(c.table, 2)
 			complete, err := c.load(s, ids)
+			opened, fired := faults.observed()
 			faults.disarm()
 
 			switch {
-			case errors.Is(err, errInjectedRowFault):
-				// Streamed, lost rows, and said so. Correct.
-			case errors.Is(err, ErrCorrupt):
-				t.Errorf("an interrupted read was reported as corruption: %v", err)
-			case err != nil:
-				t.Errorf("unexpected error: %v", err)
-			case !complete:
-				t.Error("a truncated stream came back as a smaller valid artifact")
+			case fired:
+				// The stream really was truncated, so it must be reported.
+				if errors.Is(err, ErrCorrupt) {
+					t.Errorf("an interrupted read was reported as corruption: %v", err)
+				} else if !errors.Is(err, errInjectedRowFault) {
+					t.Errorf("error = %v, want the injected fault", err)
+				}
+			case opened:
+				// A cursor over that table ran but never reached a second row.
+				t.Errorf("a cursor over %s ran without delivering two rows; "+
+					"the fixture stores at least three", c.table)
+			default:
+				// It does not stream that collection at all, which is a correct
+				// way to load it — provided nothing was lost.
+				if err != nil {
+					t.Errorf("unexpected error: %v", err)
+				} else if !complete {
+					t.Error("a truncated stream came back as a smaller valid artifact")
+				}
 			}
 		})
 	}
@@ -383,17 +396,43 @@ type rowFaults struct {
 	remaining int
 	armed     bool
 	onCommit  bool
-	inQuery   string // when set, only streams whose SQL contains it are faulted
+	// inTable, when set, aims the fault at cursors that read one table. It is
+	// matched on the table NAME with word boundaries rather than on a fragment
+	// of SQL: a loader is free to spell, quote or join its query differently,
+	// but it cannot read profile_stat without naming profile_stat. Matching a
+	// fragment let a renamed query dodge the fault and pass.
+	inTable *regexp.Regexp
+	opened  bool // a cursor over that table was run
+	fired   bool // and the fault actually landed in one
 }
 
 // armRowsMatching aims the fault at ONE stream, named by a fragment of its SQL.
 // Without it the outermost stream a loader opens always absorbs the fault, and
 // the nested ones — a document's nodes, a node's feature values — are never
 // reached.
-func (f *rowFaults) armRowsMatching(fragment string, n int) {
+func (f *rowFaults) armRowsIn(table string, n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onCommit, f.inQuery = n-1, true, false, fragment
+	f.remaining, f.armed, f.onCommit = n-1, true, false
+	f.inTable = regexp.MustCompile(`\b` + regexp.QuoteMeta(table) + `\b`)
+	f.opened, f.fired = false, false
+}
+
+// observed reports whether a cursor over the aimed table ran, and whether the
+// fault landed in one. Without this a loader that never opened such a cursor is
+// indistinguishable from one whose query the aim failed to match.
+func (f *rowFaults) observed() (opened, fired bool) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.opened, f.fired
+}
+
+func (f *rowFaults) noteOpened(query string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.armed && f.inTable != nil && f.inTable.MatchString(query) {
+		f.opened = true
+	}
 }
 
 // armCommit fails the transaction COMMIT. That is the one position every
@@ -429,7 +468,11 @@ func (f *rowFaults) failsRowAt(nth int, query string) bool {
 	if !f.armed || f.onCommit || nth != f.remaining+1 {
 		return false
 	}
-	return f.inQuery == "" || strings.Contains(query, f.inQuery)
+	if f.inTable != nil && !f.inTable.MatchString(query) {
+		return false
+	}
+	f.fired = true
+	return true
 }
 
 type faultDriver struct {
@@ -509,6 +552,7 @@ func (s faultStmt) Exec(args []driver.Value) (driver.Result, error) {
 	return s.inner.Exec(args)
 }
 func (s faultStmt) Query(args []driver.Value) (driver.Rows, error) {
+	s.faults.noteOpened(s.query)
 	rows, err := s.inner.Query(args)
 	if err != nil {
 		return nil, err
