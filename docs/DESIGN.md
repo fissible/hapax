@@ -2006,16 +2006,30 @@ version with no recorded row. "Refuse" rather than "repair": a database is the u
 
 **Span references are structured, and rehydration opens the file once.** A reference carries
 the snapshot ID, the document ID, the expected content hash and a raw byte range — not an
-opaque string. Rehydration reads the whole file, hashes what it read, compares, and only then
-slices. Stat-then-read or hash-then-reopen both leave a window in which the file is replaced
-between the check and the use.
+opaque string. Rehydration reads the whole file once, **admits it**, hashes the admitted
+bytes, compares, and only then slices. Stat-then-read or hash-then-reopen both leave a window
+in which the file is replaced between the check and the use.
+
+**Admitted, not raw** — this said "hashes what it read" and was wrong. `corpus` stores
+`identity.HashBytes(text.Admit(raw).Raw())`, and `text.Admit` strips a leading UTF-8 BOM, so
+for any BOM-carrying file the stored hash covers three fewer bytes than the file and every
+stored offset is shifted by three. Hashing the file as read would report `content-changed` for
+a document nobody touched. `snapshot.ReadVerified` already had this right; the rule did not.
+One consequence is worth having on purpose: adding or removing a leading BOM changes no
+admitted byte, so rehydration is blind to it.
 
 **Rehydration has a closed vocabulary**, because "it did not work" is not something a caller
-can act on: `ok`, `missing`, `unreadable`, `content-changed`, `span-invalid`. All but the
-first are ordinary states rather than errors — a user may edit, move or delete their own
-writing at any time — and none of them permits substitution or silent reduction. A malformed
-stored reference is deliberately **not** in this list; it is `ErrCorrupt`, for the reason
-given below.
+can act on: `ok`, `missing`, `unreadable`, `content-changed`. All but the first are ordinary
+states rather than errors — a user may edit, move or delete their own writing at any time —
+and none of them permits substitution or silent reduction. A malformed stored reference is
+deliberately **not** in this list; it is `ErrCorrupt`, for the reason given below.
+
+There were five. `span-invalid` is **unreachable** as an ordinary state and has been removed:
+a matching admitted-byte hash means the buffer is byte-for-byte the one that was indexed, so a
+stored range that fitted the document it came from still fits. No user edit produces a matching
+hash and a range that does not fit. The only way to reach it is a stored span inconsistent with
+its own document, which is damage the store wrote — `ErrCorrupt`. Keeping it would have meant a
+test that reached it by corrupting the database while documenting it as ordinary.
 
 **Absence is not deletion.** The earlier rule, that reindexing evicts artifacts whose
 documents are gone, is unsafe as written: an unmounted drive or a changed permission would
@@ -2062,13 +2076,21 @@ pre-ledger or externally-created database, which is refused rather than adopted.
 **Rehydration is given a root.** Snapshot identity is deliberately location-independent, so
 the reference cannot name a directory; the caller passes the corpus root it wants read. The
 outcome vocabulary maps to causes explicitly: a path that does not resolve is `missing`; an OS
-error opening or reading it is `unreadable`; bytes that hash differently are `content-changed`;
-a range outside those bytes is `span-invalid`. `unavailable_at` is set when a document first
-yields `missing` or `unreadable` and cleared the first time it reads back `ok`.
+error opening or reading it is `unreadable`; admitted bytes that hash differently are
+`content-changed`; and so is a file that **no longer admits at all**, because the OS read
+succeeded and the content is demonstrably not what was indexed. `unavailable_at` is set when a
+document first yields `missing` or `unreadable` and cleared the first time it reads back `ok`.
 
 A **malformed stored reference is not in that vocabulary** — it is `ErrCorrupt`. The earlier
 draft listed `reference-corrupt` as an ordinary state, which contradicted the rule below: a
 user editing their own file is ordinary, a store that wrote a reference it cannot parse is not.
+
+A negative offset or length, a path or hash outside its grammar, a node whose document and
+snapshot disagree with where it was found, and a structurally valid range that will not slice
+bytes whose hash *matched*, are all damage the store itself wrote: `ErrCorrupt`. And
+`content-changed` means the file *was* read, so it does not mark the document unavailable;
+`unavailable_at` answers "could this be read at all", which only `missing` and `unreadable`
+can make false.
 
 **The schema's shape is part of the allowlist.** Column names alone would pass a schema whose
 `content_hash` was an unconstrained `TEXT`, so declared types, `NOT NULL`, foreign keys with
@@ -2096,11 +2118,27 @@ therefore the artifacts a user still has, not the ones they are built on:
 
 - **roots**: exactly the profile IDs `Prune` is *given*, plus every `eval_result` and every
   `rewrite_attempt`
-- `profile` → its `snapshot`, its `reference`, its `threshold`s, its `exemplar_selection`s
-- `snapshot` → its `document`s → their `node`s → their `feature_vector`s
-- `exemplar_selection` → the `node`s it names
+- `profile` → its `snapshot`, its `reference`, its `threshold`s, its `exemplar_selection`s,
+  its `profile_stat`s and its `profile_head`
+- `snapshot` → its `document`s → their `node`s → their `feature_vector`s → their `feature_value`s
+- `node` → **its `document`, and that document's `snapshot`**
+- `reference` → its `reference_value`s
+- `exemplar_selection` → its `exemplar_member`s and the `node`s it names
 - `eval_result` → its `profile` and `reference`
-- `rewrite_attempt` → its `profile` and its span's `node`
+- `rewrite_attempt` → its `profile`, its span's `node`, and its `rewrite_attempt_identifier`s
+
+The `node → document → snapshot` edge is stated **on the node**, so it holds however the node
+was reached, and it is what stops `Prune` destroying the evidence the rule below promises to
+keep. `rewrite_attempt.node_id` cascades on delete, and a rewrite operates on *draft* nodes
+that need not belong to the profile's own snapshot — so without this edge a snapshot reachable
+from no root would be deleted, the cascade would take its documents and nodes, and the cascade
+would then take the `rewrite_attempt` itself. It is redundant for a node reached through its
+own profile's snapshot, which is the right way round: a graph that is complete on its own beats
+one that is correct only if an invariant declared in another section holds.
+
+Its cost is deliberate. `Prune` cannot reclaim a snapshot that a retained audit record points
+into. Those rows are metadata — no prose, no vectors of consequence — and they are what makes
+the audit record mean anything.
 
 **`Prune` takes its roots as arguments**, so its result is a function of what it was told and
 nothing else. "The current profile" is a policy question — which register, which of several

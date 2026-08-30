@@ -227,7 +227,7 @@ func (s *Store) PutProfile(ctx context.Context, p Profile, h HeadPolicy) error {
 			}
 		}
 		if h {
-			_, err = c.ExecContext(ctx, "INSERT INTO profile_head (register,profile_id,updated_at) VALUES (?,?,?) ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", p.Register, p.ID, time.Now().UTC().Format(time.RFC3339))
+			_, err = c.ExecContext(ctx, "INSERT INTO profile_head (register,profile_id,updated_at) VALUES (?,?,?) ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", p.Register, p.ID, s.deps.Now().UTC().Format(time.RFC3339))
 			return err
 		}
 		return nil

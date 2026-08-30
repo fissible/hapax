@@ -31,8 +31,8 @@ model, then review.
 | 9 | `llm` | **built** | PR #41. Ollama + Anthropic, dial seam, AST egress guard |
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
-| 12 | `store` | **partial** | PR #45 schema and snapshots, PR #48 the artifact codecs. Slice 2b below |
-| 13 | `cli` | not started | design settled (exit codes, mode resolution); needs `store` slice 2b |
+| 12 | `store` | **built** | PR #45 schema and snapshots, #48 the codecs, #49 rehydration and `Prune` |
+| 13 | `cli` | not started | design settled (exit codes, mode resolution); nothing blocks it |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -43,13 +43,12 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | # | Title | Blocked on |
 |---|---|---|
 | [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
-| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` slice 2b: this is what `Prune` and the unavailable-marking rule are for |
+| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` is complete; needs `cli` to drive reindexing |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
 | [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | needs `cli` and a user-supplied distractor set |
 | [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | the source is chosen (ParlaMint-GB 5.0, CC BY 4.0); needs `cli` to drive it |
-| [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | slice 2a done; 2b (rehydration, unavailability, `Prune`) is next |
 
 **Why #17 and #18 exist separately.** Issue #2 is now closed — resolved on the
 fallback, four days inside its timebox: **v1 ships no bundled distractor set**,
@@ -136,35 +135,54 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
-### 2026-08-30 (store slice 2a)
+### 2026-08-30 (store slice 2b — component 12 complete)
 
-Seven `duet` review rounds before the tests were frozen, then two defects codex
-found while implementing against them. Worth carrying forward:
+Six design rounds before a test was written, then eleven on the tests. The
+design rounds paid for themselves twice over:
 
-- **Two DESIGN claims could not be satisfied as written.** The threshold row
-  declared two interval columns for four bootstrap bounds — losing exactly the
-  quantity `Actionable = interval_low.upper < interval_high.lower` is computed
-  from — and named the achieved rates `achieved_low`/`achieved_high`, inviting
-  the author/distractor mix-up Section 2 spends a page warning against. Both are
-  corrected in the schema and in DESIGN.
-- **"Every content-addressed artifact's decoded content must hash to its stored
-  ID" was impossible.** A profile ID hashes the outlier algorithm and four build
-  floors; an exemplar certificate ID hashes the density, medoid and tie records.
-  Storing those preimages so the ID could be rechecked would mean storing the
-  working records the artifact table exists to exclude. The rule is now scoped
-  to the identities whose preimage IS stored, and a test fails if a profile ever
-  becomes reconstructible.
-- **Read-side enum validation is testable after all.** The schema's own CHECKs
-  refuse a bad value, which made the rule look unassertable. `PRAGMA
-  writable_schema` strips the closed set from the live schema, and since the
-  ledger and not the schema answers "what version is this", the tampered
-  database still opens — which is the real threat model, not a contrived one.
-- **`store.validRegister` allowed only `essays` and `email`.** Registers are
-  user-named in both Section 1 and Section 2; the closed set of two was the
-  store's own invention and would have refused `--profile fiction`.
-- **Known gap:** nothing in the suite exercises `rows.Err()`. Codex fixed four
-  loaders that ignored it because the argument was right, not because a test
-  forced it. Fault injection on the row stream is the obvious slice-2b addition.
+- **Rehydration hashed the wrong bytes.** DESIGN said "hashes what it read".
+  `corpus` stores a hash of `text.Admit(raw).Raw()`, and `Admit` strips a
+  leading UTF-8 BOM — so for any BOM-carrying file the stored hash covers three
+  fewer bytes than the file and every stored offset is shifted by three. An
+  implementation following DESIGN literally would have reported
+  `content-changed` for a document nobody touched.
+- **`span-invalid` was unreachable** and is deleted. A matching admitted-byte
+  hash means the buffer is byte-for-byte the one indexed, so a range that fitted
+  then still fits. The only way to reach it was a stored span inconsistent with
+  its own document, which is `ErrCorrupt`. The vocabulary is four.
+- **`Prune`'s edge list would have destroyed audit evidence.** `rewrite_attempt`
+  cascades on its node, and a rewrite operates on draft nodes that need not
+  belong to the profile's snapshot — so a snapshot reachable from no root would
+  be deleted and the cascade would take the audit record. The edge is now stated
+  ON THE NODE so it holds however the node was reached.
+
+**The test rounds were mostly about my own cheats**, and the pattern is worth
+keeping: every structural harness got verified by mutation before it was
+frozen. The row-fault driver was proved to land mid-stream rather than at EOF;
+the commit fault was proved to roll back; the fault aim was anchored on table
+names after a fragment-of-SQL aim turned out to be dodgeable by renaming a
+query; and the whole thing rests on a checked premise — no views — rather than
+an assumed one.
+
+**Two defects in already-merged code were found by aiming at them.** `vectorFrom`
+reported an interrupted row read as `ErrCorrupt`, telling a user their evidence
+was damaged when a read was merely interrupted. And slice 2a's known
+`rows.Err()` gap is now closed under test rather than on argument.
+
+**Carried forward, none blocking:** `Prune`'s fixpoint re-scans the whole UNION
+until it adds nothing, which is the thing to revisit if it ever gets slow; the
+`Nodes`/`Documents` counters are expressed via unreachable snapshots and are
+equivalent to document-reachability only under the general closure, which a
+reader has to work out; and nothing tests WAL/journal sidecars, which this slice
+neither promises nor changes.
+
+**Next: `cli`** (component 13), and nothing blocks it. It is the composition
+root, and several obligations other components deliberately pushed outward land
+there together: reading `HAPAX_LOCAL_ONLY`, constructing the credential factory
+only on the cloud path, choosing which profile is current (since `Prune` takes
+roots as arguments and refuses to decide), and the "no LLM, no network"
+guarantee for `score` and `tells` — testable the way `llm`'s was, with a dial
+function that fails the test if called.
 
 ### 2026-08-30 (preserve, assemble, select, llm, the audit fix, store slice 1)
 
@@ -179,8 +197,9 @@ found while implementing against them. Worth carrying forward:
    now has typed operations and the graph they hang from is closed. What
    remains is the part that touches the user's files: open once, hash what was
    read, then slice; the closed outcome vocabulary `ok` / `missing` /
-   `unreadable` / `content-changed` / `span-invalid`, with a malformed *stored*
-   reference being `ErrCorrupt` rather than an outcome; `unavailable_at` set on
+   `unreadable` / `content-changed` — four, not five; `span-invalid` was
+   unreachable and is gone — with a malformed *stored* reference being
+   `ErrCorrupt` rather than an outcome; `unavailable_at` set on
    the first `missing` or `unreadable` and cleared on the first `ok`; and
    `Prune` over the roots DESIGN declares. `Prune`'s tests were drafted during
    slice 1 and deliberately **not** kept: the API moved underneath them, and
