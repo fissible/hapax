@@ -240,17 +240,19 @@ func openSeamed(t *testing.T, d deps) *Store {
 func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 	for _, c := range []struct {
 		name string
-		// stream aims the fault at one nested cursor by a fragment of its SQL.
-		// Empty means the first stream the loader opens.
+		// stream names the cursor to fault, by a fragment of its SQL. Every case
+		// aims: an unaimed fault is absorbed by whichever nested cursor a loader
+		// happens to open first, which for a snapshot is a node's feature
+		// values, not the documents the case claims to be about.
 		stream string
 		// load reports whether what came back is complete, alongside its error.
 		load func(s *Store, ids seamIDs) (bool, error)
 	}{
-		{"profile stats", "", func(s *Store, ids seamIDs) (bool, error) {
+		{"profile stats", "FROM profile_stat", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadProfile(context.Background(), ids.Profile)
 			return len(got.Stats) == len(features.Definitions()), err
 		}},
-		{"reference values", "", func(s *Store, ids seamIDs) (bool, error) {
+		{"reference values", "FROM reference_value", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadReference(context.Background(), ids.Reference)
 			total := 0
 			for _, values := range got.Values {
@@ -258,19 +260,19 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			}
 			return total == 3*len(features.Definitions()), err
 		}},
-		{"exemplar members", "", func(s *Store, ids seamIDs) (bool, error) {
+		{"exemplar members", "FROM exemplar_member", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadExemplarSelection(context.Background(), ids.Selection)
 			return len(got.Members) == 3, err
 		}},
-		{"preserve identifiers", "", func(s *Store, ids seamIDs) (bool, error) {
+		{"preserve identifiers", "FROM rewrite_attempt_identifier", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
 			return len(got.PreserveIdentifiers) == 3, err
 		}},
-		{"a snapshot's documents", "", func(s *Store, ids seamIDs) (bool, error) {
+		{"a snapshot's documents", "FROM document WHERE snapshot_id", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
 			return wholeSnapshot(got), err
 		}},
-		{"a document's nodes", "FROM node", func(s *Store, ids seamIDs) (bool, error) {
+		{"a document's nodes", "FROM node WHERE document_id", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
 			return wholeSnapshot(got), err
 		}},
@@ -284,11 +286,7 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
-			if c.stream == "" {
-				faults.arm(2)
-			} else {
-				faults.armRowsMatching(c.stream, 2)
-			}
+			faults.armRowsMatching(c.stream, 2)
 			complete, err := c.load(s, ids)
 			faults.disarm()
 
@@ -386,15 +384,6 @@ type rowFaults struct {
 	armed     bool
 	onCommit  bool
 	inQuery   string // when set, only streams whose SQL contains it are faulted
-}
-
-// arm fails the nth row read OF EVERY STREAM. One-based, so arm(2) delivers one
-// row and then fails — a stream truncated part way, which is the case a loader
-// that ignores rows.Err() reads back as a smaller valid artifact.
-func (f *rowFaults) arm(n int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onCommit, f.inQuery = n-1, true, false, ""
 }
 
 // armRowsMatching aims the fault at ONE stream, named by a fragment of its SQL.
