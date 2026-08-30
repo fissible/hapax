@@ -351,7 +351,7 @@ type rowFaults struct {
 	mu        sync.Mutex
 	remaining int
 	armed     bool
-	onExec    bool
+	onCommit  bool
 }
 
 // arm fails the nth row read OF EVERY STREAM. One-based, so arm(2) delivers one
@@ -360,22 +360,30 @@ type rowFaults struct {
 func (f *rowFaults) arm(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onExec = n-1, true, false
+	f.remaining, f.armed, f.onCommit = n-1, true, false
 }
 
-// armExec fails the nth statement EXECUTION rather than the nth row, which is
-// how a fault is placed inside a write the caller has already begun. Also
-// one-based.
-func (f *rowFaults) armExec(n int) {
+// armCommit fails the transaction COMMIT. That is the one position every
+// transactional implementation must pass through, and it is unambiguously
+// AFTER whatever the transaction did — so a graph that is unchanged afterwards
+// was restored by a rollback rather than never touched. Faulting the nth Exec
+// instead would have assumed a statement count Prune is free to choose.
+func (f *rowFaults) armCommit() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onExec = n-1, true, true
+	f.armed, f.onCommit = true, true
 }
 
 func (f *rowFaults) disarm() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.armed = false
+	f.armed, f.onCommit = false, false
+}
+
+func (f *rowFaults) failsCommit() bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.armed && f.onCommit
 }
 
 // failsRowAt reports whether the nth read OF ONE STREAM should fail. Counting
@@ -385,21 +393,7 @@ func (f *rowFaults) disarm() {
 func (f *rowFaults) failsRowAt(nth int) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.armed && !f.onExec && nth == f.remaining+1
-}
-
-// shouldFailExec counts down across every execution once armed for execs.
-func (f *rowFaults) shouldFailExec() bool {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if !f.armed || !f.onExec {
-		return false
-	}
-	if f.remaining > 0 {
-		f.remaining--
-		return false
-	}
-	return true
+	return f.armed && !f.onCommit && nth == f.remaining+1
 }
 
 type faultDriver struct {
@@ -425,26 +419,55 @@ func (c faultConn) Prepare(query string) (driver.Stmt, error) {
 	if err != nil {
 		return nil, err
 	}
-	return faultStmt{stmt, c.faults}, nil
+	return faultStmt{inner: stmt, faults: c.faults, query: query}, nil
 }
-func (c faultConn) Close() error              { return c.inner.Close() }
-func (c faultConn) Begin() (driver.Tx, error) { return c.inner.Begin() }
-func (c faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
-	if beginner, ok := c.inner.(driver.ConnBeginTx); ok {
-		return beginner.BeginTx(ctx, opts)
+func (c faultConn) Close() error { return c.inner.Close() }
+func (c faultConn) Begin() (driver.Tx, error) {
+	tx, err := c.inner.Begin()
+	if err != nil {
+		return nil, err
 	}
-	return c.inner.Begin()
+	return faultTx{tx, c.faults}, nil
 }
+func (c faultConn) BeginTx(ctx context.Context, opts driver.TxOptions) (driver.Tx, error) {
+	beginner, ok := c.inner.(driver.ConnBeginTx)
+	if !ok {
+		return c.Begin()
+	}
+	tx, err := beginner.BeginTx(ctx, opts)
+	if err != nil {
+		return nil, err
+	}
+	return faultTx{tx, c.faults}, nil
+}
+
+type faultTx struct {
+	inner  driver.Tx
+	faults *rowFaults
+}
+
+func (t faultTx) Commit() error {
+	if t.faults.failsCommit() {
+		_ = t.inner.Rollback()
+		return errInjectedRowFault
+	}
+	return t.inner.Commit()
+}
+func (t faultTx) Rollback() error { return t.inner.Rollback() }
 
 type faultStmt struct {
 	inner  driver.Stmt
 	faults *rowFaults
+	query  string
 }
 
 func (s faultStmt) Close() error  { return s.inner.Close() }
 func (s faultStmt) NumInput() int { return s.inner.NumInput() }
 func (s faultStmt) Exec(args []driver.Value) (driver.Result, error) {
-	if s.faults.shouldFailExec() {
+	// A store that commits by executing the word rather than through the
+	// driver's Tx is faulted here; one that uses Tx.Commit is faulted in faultTx.
+	if strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(s.query, ";")), "COMMIT") &&
+		s.faults.failsCommit() {
 		return nil, errInjectedRowFault
 	}
 	return s.inner.Exec(args)
@@ -512,11 +535,16 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 	t.Cleanup(func() { _ = s.Close() })
 	ctx := context.Background()
 
-	// Three spans, so every child stream this test truncates has a row after
-	// the one the fault lands on.
-	write := seamSnapshot(seamDocument(t, root, "essays/a.md",
-		text.Span{Offset: 0, Length: 31}, text.Span{Offset: 33, Length: 34},
-		text.Span{Offset: 0, Length: 10}))
+	// Three documents AND three spans in the first, so every stream this test
+	// truncates has a row after the one the fault lands on — including the
+	// snapshot's own document stream.
+	write := seamSnapshot(
+		seamDocument(t, root, "essays/a.md",
+			text.Span{Offset: 0, Length: 31}, text.Span{Offset: 33, Length: 34},
+			text.Span{Offset: 0, Length: 10}),
+		seamDocument(t, root, "essays/b.md", text.Span{Offset: 0, Length: 31}),
+		seamDocument(t, root, "essays/c.md", text.Span{Offset: 0, Length: 31}),
+	)
 	if err := s.PutSnapshot(ctx, write); err != nil {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
@@ -609,19 +637,22 @@ func seamIdentifiers() []string {
 
 // Marking and deletion commit in ONE write transaction, so a prune that fails
 // after it has already removed something must leave the graph as it found it.
-// Cancelling before the call proves nothing about that; the fault is armed to
-// fire on a write Prune has already begun making.
+// Cancelling before the call proves nothing about that. The fault is placed on
+// the COMMIT, which every transactional implementation must reach and which is
+// unambiguously after whatever the transaction did — so a graph that is
+// unchanged afterwards was ROLLED BACK, not merely never touched. The prune
+// that follows, unfaulted, proves there was something to roll back.
 func TestAPruneThatFailsPartWayThroughRemovesNothing(t *testing.T) {
 	faults := &rowFaults{}
 	name := registerFaultDriver(t, faults)
 	s, ids := seededSeamStore(t, name)
 	before := graphCensus(t, s)
 
-	faults.armExec(2)
+	faults.armCommit()
 	_, err := s.Prune(context.Background(), []string{ids.Profile})
 	faults.disarm()
 	if !errors.Is(err, errInjectedRowFault) {
-		t.Fatalf("error = %v, want the fault injected into Prune's second write", err)
+		t.Fatalf("error = %v, want the fault injected into Prune's commit", err)
 	}
 
 	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
