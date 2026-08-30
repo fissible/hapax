@@ -52,6 +52,15 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | needs a real corpus (#2) |
 | [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | nothing — next |
 
+**Why #17 and #18 exist separately.** Issue #2 was rescoped so its timebox could
+govern it. Two of its acceptance criteria could not be evaluated until
+components 5 and 10 existed, so the fallback could be adopted on day seven and
+the issue would still have stayed open — the forcing function guaranteed
+nothing. Distractor sufficiency became #17 and the rewrite-quality contamination
+caveat became #18; neither blocks the licence decision, and what remains in #2
+is exactly what seven days is meant to settle. (Both components are now built,
+so #17 and #18 are gated only on a real corpus.)
+
 ## Issue #2 — resolved on the fallback
 
 **Closed 2026-08-27**, four days inside its seven-day timebox, on evidence rather
