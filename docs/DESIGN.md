@@ -2045,6 +2045,13 @@ a unique-constraint race has not yet compared anything, so it rereads the winnin
 its own transaction and succeeds only if the content is identical. Returning `ErrConflict` on
 the collision itself would fail a safe retry.
 
+**Four refusals, not one.** A database this binary cannot account for fails in one of four
+distinguishable ways, because "schema mismatch" tells an operator nothing about what to do:
+`ErrSchemaAhead` (a version newer than this binary), `ErrSchemaChecksum` (a version whose
+recorded checksum differs from the migration this binary carries), `ErrSchemaIncomplete` (a
+gap, or a ledger missing a version this binary has), and `ErrSchemaForeign` (a database with
+tables but no ledger at all). Every one of them leaves the file and its sidecars byte-identical.
+
 **The migration ledger is the only authority on version.** Versions are contiguous from zero;
 the checksum is over the exact migration bytes the binary carries; and the ledger, not the
 schema, answers "what version is this". Three disagreements are distinguished rather than
@@ -2062,6 +2069,18 @@ yields `missing` or `unreadable` and cleared the first time it reads back `ok`.
 A **malformed stored reference is not in that vocabulary** — it is `ErrCorrupt`. The earlier
 draft listed `reference-corrupt` as an ordinary state, which contradicted the rule below: a
 user editing their own file is ordinary, a store that wrote a reference it cannot parse is not.
+
+**The schema's shape is part of the allowlist.** Column names alone would pass a schema whose
+`content_hash` was an unconstrained `TEXT`, so declared types, `NOT NULL`, foreign keys with
+`ON DELETE CASCADE`, uniqueness and `CHECK` constraints are all asserted, and there are no
+virtual tables. Enforcement is a property of the connection rather than of the schema, and this slice exposes
+no operation that could violate a foreign key — `PutSnapshot` validates before it inserts — so
+what is asserted here is that the constraints are *declared*. Enforcement gets its observable
+consequence with the cascade `Prune` relies on, and is tested there.
+The migration payload is exported so a test can hash it independently — a checksum that is
+merely *consistent* between two databases would be satisfied by a constant. Even then this is a **tripwire, not a proof**: the honest controls are the
+column allowlist, the codec field-set tests, and review of anything added. A DDL substring
+scan cannot rule out every reversible derivative and is not claimed to.
 
 **The allowlist is columns, not prose.** "Holds" in the artifact table cannot drive a test, so
 each artifact's columns are declared, and every textual column has a grammar: an identity or
@@ -2117,10 +2136,24 @@ in this schema, which is the property the allowlist test asserts.
 | `eval_result` | `id` hex | `profile_id` hex, `reference_id` hex, `auc` num, `lower_bound` num, `cap` num, cluster and segment counts int, `discriminates` bool, `calibrated` bool, `shippable` bool, `reason` enum |
 | `rewrite_attempt` | `invocation_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `node_id`, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
 
-`document_id` and `node_id` are **derived**, not surrogate: they are `identity.HashInputs`
-over the composite key, so a foreign reference is a single stable column and two
-implementations produce the same value. An autoincrement key would be local to one database
+The `snapshot` identity is **verified, not trusted**. `corpus` computes it, but `store` has to
+be able to recompute it or the read-integrity rule is unenforceable for the one artifact
+everything else hangs from: it is
+`HashInputs{"policy": policyDigest, "documents": Frame(sorted "path=contentHash")}`, and a
+snapshot whose membership does not hash to its stored ID is `ErrCorrupt`.
+
+`document_id` and `node_id` are **derived**, not surrogate, and the preimages are named so a
+test can compute them: `document_id` is `HashInputs{"snapshot": snapshotID, "path": path}` and
+`node_id` is `HashInputs{"document": documentID, "ordinal": decimal ordinal}`. A foreign
+reference is then a single stable column and two implementations produce the same value. An autoincrement key would be local to one database
 and would make a span reference meaningless outside it.
+
+Two columns of `corpus.Document` are deliberately **absent**. `rejection_detail` holds an
+error message — today always `invalid UTF-8 at byte offset N`, which carries nothing, but a
+string whose contents are whatever a future error type formats is not a column this schema
+should own. `rejection_offset` is the persistable form of the same fact. And `register` is a
+user-supplied label, so it is not free text either: it matches `[a-z0-9][a-z0-9-]{0,31}` and is
+validated on write, which is what keeps the no-free-text claim true rather than nearly true.
 
 Two of those are worth saying out loud. `provider_id` is an enum over the declared providers
 rather than a label a caller chooses, and `invocation_id` is a digest rather than anything a
