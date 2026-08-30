@@ -240,14 +240,17 @@ func openSeamed(t *testing.T, d deps) *Store {
 func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 	for _, c := range []struct {
 		name string
+		// stream aims the fault at one nested cursor by a fragment of its SQL.
+		// Empty means the first stream the loader opens.
+		stream string
 		// load reports whether what came back is complete, alongside its error.
 		load func(s *Store, ids seamIDs) (bool, error)
 	}{
-		{"profile stats", func(s *Store, ids seamIDs) (bool, error) {
+		{"profile stats", "", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadProfile(context.Background(), ids.Profile)
 			return len(got.Stats) == len(features.Definitions()), err
 		}},
-		{"reference values", func(s *Store, ids seamIDs) (bool, error) {
+		{"reference values", "", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadReference(context.Background(), ids.Reference)
 			total := 0
 			for _, values := range got.Values {
@@ -255,17 +258,25 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			}
 			return total == 3*len(features.Definitions()), err
 		}},
-		{"exemplar members", func(s *Store, ids seamIDs) (bool, error) {
+		{"exemplar members", "", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadExemplarSelection(context.Background(), ids.Selection)
 			return len(got.Members) == 3, err
 		}},
-		{"preserve identifiers", func(s *Store, ids seamIDs) (bool, error) {
+		{"preserve identifiers", "", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
 			return len(got.PreserveIdentifiers) == 3, err
 		}},
-		{"a snapshot's documents", func(s *Store, ids seamIDs) (bool, error) {
+		{"a snapshot's documents", "", func(s *Store, ids seamIDs) (bool, error) {
 			got, err := s.Snapshot(context.Background(), ids.Snapshot)
-			return len(got.Documents) == 3, err
+			return wholeSnapshot(got), err
+		}},
+		{"a document's nodes", "FROM node", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.Snapshot(context.Background(), ids.Snapshot)
+			return wholeSnapshot(got), err
+		}},
+		{"a node's feature values", "FROM feature_value", func(s *Store, ids seamIDs) (bool, error) {
+			got, err := s.Snapshot(context.Background(), ids.Snapshot)
+			return wholeSnapshot(got), err
 		}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -273,7 +284,11 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
-			faults.arm(2)
+			if c.stream == "" {
+				faults.arm(2)
+			} else {
+				faults.armRowsMatching(c.stream, 2)
+			}
 			complete, err := c.load(s, ids)
 			faults.disarm()
 
@@ -370,6 +385,7 @@ type rowFaults struct {
 	remaining int
 	armed     bool
 	onCommit  bool
+	inQuery   string // when set, only streams whose SQL contains it are faulted
 }
 
 // arm fails the nth row read OF EVERY STREAM. One-based, so arm(2) delivers one
@@ -378,7 +394,17 @@ type rowFaults struct {
 func (f *rowFaults) arm(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.remaining, f.armed, f.onCommit = n-1, true, false
+	f.remaining, f.armed, f.onCommit, f.inQuery = n-1, true, false, ""
+}
+
+// armRowsMatching aims the fault at ONE stream, named by a fragment of its SQL.
+// Without it the outermost stream a loader opens always absorbs the fault, and
+// the nested ones — a document's nodes, a node's feature values — are never
+// reached.
+func (f *rowFaults) armRowsMatching(fragment string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.remaining, f.armed, f.onCommit, f.inQuery = n-1, true, false, fragment
 }
 
 // armCommit fails the transaction COMMIT. That is the one position every
@@ -408,10 +434,13 @@ func (f *rowFaults) failsCommit() bool {
 // per stream rather than globally keeps the fault where it is aimed: a global
 // countdown lands somewhere that depends on how many rows the loader happened
 // to read first, which differs per loader and moves whenever a fixture grows.
-func (f *rowFaults) failsRowAt(nth int) bool {
+func (f *rowFaults) failsRowAt(nth int, query string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.armed && !f.onCommit && nth == f.remaining+1
+	if !f.armed || f.onCommit || nth != f.remaining+1 {
+		return false
+	}
+	return f.inQuery == "" || strings.Contains(query, f.inQuery)
 }
 
 type faultDriver struct {
@@ -495,12 +524,13 @@ func (s faultStmt) Query(args []driver.Value) (driver.Rows, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &faultRows{inner: rows, faults: s.faults}, nil
+	return &faultRows{inner: rows, faults: s.faults, query: s.query}, nil
 }
 
 type faultRows struct {
 	inner  driver.Rows
 	faults *rowFaults
+	query  string
 	seen   int
 }
 
@@ -508,7 +538,7 @@ func (r *faultRows) Columns() []string { return r.inner.Columns() }
 func (r *faultRows) Close() error      { return r.inner.Close() }
 func (r *faultRows) Next(dest []driver.Value) error {
 	r.seen++
-	if r.faults.failsRowAt(r.seen) {
+	if r.faults.failsRowAt(r.seen, r.query) {
 		return errInjectedRowFault
 	}
 	return r.inner.Next(dest)
@@ -563,6 +593,11 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 		seamDocument(t, root, "essays/b.md", text.Span{Offset: 0, Length: 31}),
 		seamDocument(t, root, "essays/c.md", text.Span{Offset: 0, Length: 31}),
 	)
+	// A vector on the first node, so the feature_value stream exists to be
+	// truncated and so wholeSnapshot has something to find missing.
+	write.Documents[0].Nodes[0].Vector = &features.Vector{
+		SetVersion: features.SetVersion, Tokens: 9, LexicalTokens: 7, Values: seamVector(),
+	}
 	if err := s.PutSnapshot(ctx, write); err != nil {
 		t.Fatalf("PutSnapshot: %v", err)
 	}
@@ -705,6 +740,33 @@ func graphCensus(t *testing.T, s *Store) map[string]int {
 			t.Fatalf("counting %s: %v", table, err)
 		}
 		out[table] = count
+	}
+	return out
+}
+
+// wholeSnapshot is the aggregate seededSeamStore stores, all the way down: a
+// count of documents alone would accept a tree whose nodes or vectors were lost.
+func wholeSnapshot(got SnapshotWrite) bool {
+	if len(got.Documents) != 3 {
+		return false
+	}
+	first := got.Documents[0] // ordered by path, so essays/a.md
+	if len(first.Nodes) != 3 {
+		return false
+	}
+	// The vector is REQUIRED, not merely checked when present: a lost one would
+	// otherwise read back as a leaf that never had features.
+	vector := first.Nodes[0].Vector
+	return vector != nil && len(vector.Values) == len(features.Definitions())
+}
+
+func seamVector() []features.FeatureValue {
+	out := make([]features.FeatureValue, 0, len(features.Definitions()))
+	for i, definition := range features.Definitions() {
+		out = append(out, features.FeatureValue{
+			ID: definition.ID, Value: float64(i) + 0.5, Defined: true,
+			SamplingVariance: 0.25, SamplingVarianceDefined: true,
+		})
 	}
 	return out
 }
