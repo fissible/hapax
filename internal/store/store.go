@@ -62,12 +62,22 @@ type SnapshotWrite struct {
 type Store struct {
 	db   *sql.DB
 	path string
+	deps deps
 }
+
+type deps struct {
+	ReadFile func(string) ([]byte, error)
+	Now      func() time.Time
+}
+
+func realDeps() deps { return deps{ReadFile: os.ReadFile, Now: time.Now} }
 
 // Migrations returns exact SQL payloads, ordered by their zero-based version.
 func Migrations() []string { return append([]string(nil), migrations...) }
 
-func Open(path string) (*Store, error) {
+func Open(path string) (*Store, error) { return open(path, "sqlite", realDeps()) }
+
+func open(path, driverName string, d deps) (*Store, error) {
 	newFile := false
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
 		newFile = true
@@ -75,11 +85,11 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=foreign_keys(1)&_pragma=busy_timeout(10)"}).String()
-	db, err := sql.Open("sqlite", dsn)
+	db, err := sql.Open(driverName, dsn)
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{db: db, path: path}
+	s := &Store{db: db, path: path, deps: d}
 	// Do only reads until we know the file belongs to us: refusing must leave it unchanged.
 	var tables int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
@@ -162,7 +172,7 @@ func (s *Store) applyMigration(ctx context.Context, version int, ddl string) err
 		return err
 	}
 	if _, err = tx.ExecContext(ctx, ddl); err == nil {
-		_, err = tx.ExecContext(ctx, "INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, ?)", version, identity.HashBytes([]byte(ddl)), time.Now().UTC().Format(time.RFC3339))
+		_, err = tx.ExecContext(ctx, "INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, ?)", version, identity.HashBytes([]byte(ddl)), s.deps.Now().UTC().Format(time.RFC3339))
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -205,7 +215,7 @@ func (s *Store) PutSnapshot(ctx context.Context, w SnapshotWrite) error {
 	if validationErr != nil {
 		return validationErr
 	}
-	if _, err = conn.ExecContext(ctx, "INSERT INTO snapshot (id,policy_digest,created_at) VALUES (?,?,?)", w.ID, w.PolicyDigest, time.Now().UTC().Format(time.RFC3339)); err != nil {
+	if _, err = conn.ExecContext(ctx, "INSERT INTO snapshot (id,policy_digest,created_at) VALUES (?,?,?)", w.ID, w.PolicyDigest, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
 		return err
 	}
 	for _, d := range w.Documents {
@@ -364,7 +374,7 @@ func vectorFrom(q queryer, ctx context.Context, nodeID string) (*features.Vector
 	var md string
 	v := new(features.Vector)
 	if err := q.QueryRowContext(ctx, "SELECT manifest_digest,set_version,tokens,lexical_tokens FROM feature_vector WHERE node_id=?", nodeID).Scan(&md, &v.SetVersion, &v.Tokens, &v.LexicalTokens); err != nil {
-		return nil, ErrCorrupt
+		return nil, err
 	}
 	if md != features.ManifestDigest() {
 		return nil, ErrCorrupt
@@ -389,7 +399,7 @@ func vectorFrom(q queryer, ctx context.Context, nodeID string) (*features.Vector
 		got[x.ID] = x
 	}
 	if rows.Err() != nil {
-		return nil, ErrCorrupt
+		return nil, rows.Err()
 	}
 	for _, def := range features.Definitions() {
 		x, ok := got[def.ID]
