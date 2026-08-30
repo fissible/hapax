@@ -43,15 +43,18 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | # | Title | Blocked on |
 |---|---|---|
 | [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
-| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` slice 2: this is what `Prune` and the unavailable-marking rule are for |
+| [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` slice 2b: this is what `Prune` and the unavailable-marking rule are for |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
-| [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | needs a real corpus (#2) |
-| [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | needs `cli` and a real corpus |
-| [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | needs a real corpus (#2) |
+| [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
+| [#18](https://github.com/fissible/hapax/issues/18) | Rewrite-quality figures with the contamination caveat | needs `cli` and a user-supplied distractor set |
+| [#22](https://github.com/fissible/hapax/issues/22) | Editorial-normalisation stress test against ParlaMint-GB | the source is chosen (ParlaMint-GB 5.0, CC BY 4.0); needs `cli` to drive it |
 | [#44](https://github.com/fissible/hapax/issues/44) | `store` slice 2 — the remaining artifacts, rehydration, `Prune` | slice 2a done; 2b (rehydration, unavailability, `Prune`) is next |
 
-**Why #17 and #18 exist separately.** Issue #2 was rescoped so its timebox could
+**Why #17 and #18 exist separately.** Issue #2 is now closed — resolved on the
+fallback, four days inside its timebox: **v1 ships no bundled distractor set**,
+`--distractors <dir>` is required, and without it `eval` reports `uncalibrated`,
+`score` withholds the band, and `rewrite` refuses. It was rescoped so its timebox could
 govern it. Two of its acceptance criteria could not be evaluated until
 components 5 and 10 existed, so the fallback could be adopted on day seven and
 the issue would still have stayed open — the forcing function guaranteed
