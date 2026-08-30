@@ -31,7 +31,7 @@ model, then review.
 | 9 | `llm` | **built** | PR #41. Ollama + Anthropic, dial seam, AST egress guard |
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
-| 12 | `store` | **partial** | PR #45 schema and snapshots; slice 2a the artifact codecs. Slice 2b below |
+| 12 | `store` | **partial** | PR #45 schema and snapshots, PR #48 the artifact codecs. Slice 2b below |
 | 13 | `cli` | not started | design settled (exit codes, mode resolution); needs `store` slice 2b |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
@@ -43,7 +43,6 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | # | Title | Blocked on |
 |---|---|---|
 | [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
-| [#2](https://github.com/fissible/hapax/issues/2) | Select and licence-verify a register-matched distractor corpus | nothing — actionable, blocks release |
 | [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` slice 2: this is what `Prune` and the unavailable-marking rule are for |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
