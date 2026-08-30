@@ -9,6 +9,7 @@ import (
 	"go/token"
 	"io/fs"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -387,9 +388,13 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				t.Fatalf("sql for %s: %v", table, err)
 			}
 			upper := strings.ToUpper(ddl)
+			// Split on the CHECK KEYWORD, not the substring: "checksum" begins
+			// with it, so splitting on "CHECK" removes that prefix from every
+			// occurrence and the column can never be found.
+			fragments := checkKeyword.Split(upper, -1)
 			for _, column := range columns {
 				var constrainedHere bool
-				for _, fragment := range strings.Split(upper, "CHECK")[1:] {
+				for _, fragment := range fragments[1:] {
 					if strings.Contains(fragment, strings.ToUpper(column)) {
 						constrainedHere = true
 						break
@@ -482,3 +487,6 @@ func TestThePackageHasNoGlobalLock(t *testing.T) {
 		t.Fatal("no non-test source was scanned; this guard is vacuous")
 	}
 }
+
+// checkKeyword matches the CHECK keyword, not the letters inside "checksum".
+var checkKeyword = regexp.MustCompile(`\bCHECK\s*\(`)
