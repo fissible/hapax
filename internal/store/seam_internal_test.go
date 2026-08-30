@@ -292,26 +292,27 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			opened, fired := faults.observed()
 			faults.disarm()
 
-			switch {
-			case fired:
-				// The stream really was truncated, so it must be reported.
+			// Two branches, because there are two correct implementations. A
+			// loader that streams the collection reaches a second row, is
+			// truncated, and must say so. One that reads it in a single row —
+			// an aggregate — never reaches a second row, is not truncated, and
+			// must simply return everything. Anchoring the aim on the table
+			// name is what makes those the only two cases: a streaming loader
+			// cannot avoid naming the table it streams, however it spells the
+			// query, so it cannot dodge the fault and pass as the second kind.
+			if fired {
 				if errors.Is(err, ErrCorrupt) {
 					t.Errorf("an interrupted read was reported as corruption: %v", err)
 				} else if !errors.Is(err, errInjectedRowFault) {
 					t.Errorf("error = %v, want the injected fault", err)
 				}
-			case opened:
-				// A cursor over that table ran but never reached a second row.
-				t.Errorf("a cursor over %s ran without delivering two rows; "+
-					"the fixture stores at least three", c.table)
-			default:
-				// It does not stream that collection at all, which is a correct
-				// way to load it — provided nothing was lost.
-				if err != nil {
-					t.Errorf("unexpected error: %v", err)
-				} else if !complete {
-					t.Error("a truncated stream came back as a smaller valid artifact")
-				}
+				return
+			}
+			if err != nil {
+				t.Errorf("a read that lost nothing returned %v", err)
+			} else if !complete {
+				t.Errorf("a cursor over %s (opened: %v) came back short without "+
+					"reporting anything", c.table, opened)
 			}
 		})
 	}
