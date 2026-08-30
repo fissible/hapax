@@ -287,6 +287,7 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			name := registerFaultDriver(t, faults)
 			s, ids := seededSeamStore(t, name)
 
+			requireNoIndirection(t, s, c.table)
 			faults.armRowsIn(c.table, 2)
 			complete, err := c.load(s, ids)
 			opened, fired := faults.observed()
@@ -300,6 +301,11 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			// name is what makes those the only two cases: a streaming loader
 			// cannot avoid naming the table it streams, however it spells the
 			// query, so it cannot dodge the fault and pass as the second kind.
+			//
+			// That premise holds only while nothing stands between the loader
+			// and the table, which requireNoIndirection above checks: a cursor
+			// over a VIEW would name the view rather than the table, stream
+			// anyway, and never be faulted.
 			if fired {
 				if errors.Is(err, ErrCorrupt) {
 					t.Errorf("an interrupted read was reported as corruption: %v", err)
@@ -803,4 +809,23 @@ func seamVector() []features.FeatureValue {
 		})
 	}
 	return out
+}
+
+// requireNoIndirection fails if anything could stand between a loader and the
+// table it reads — a view, or a virtual table — which would let a streaming
+// cursor name something other than the table the fault is aimed at.
+func requireNoIndirection(t *testing.T, s *Store, table string) {
+	t.Helper()
+	for _, catalogue := range []string{"sqlite_master", "sqlite_temp_master"} {
+		var count int
+		err := s.db.QueryRow(
+			"SELECT count(*) FROM " + catalogue + " WHERE type = 'view' OR sql LIKE '%VIRTUAL%'").Scan(&count)
+		if err != nil {
+			t.Fatalf("reading %s: %v", catalogue, err)
+		}
+		if count != 0 {
+			t.Fatalf("%s declares %d views or virtual tables; a cursor could read %s "+
+				"without naming it", catalogue, count, table)
+		}
+	}
 }
