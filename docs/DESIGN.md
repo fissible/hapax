@@ -231,9 +231,136 @@ mechanically, not aspirationally.
 ### `--local-only` is a tested guarantee
 
 Asserted by test, not by documentation: with `--local-only` (or `HAPAX_LOCAL_ONLY=1`) no
-cloud provider is constructed, no credential is read from environment or config, no
-outbound connection is attempted, and no telemetry is emitted. The test harness fails on
-any attempted dial rather than trusting the code path.
+cloud provider is constructed, no credential is read from environment or config, **no
+connection to any non-loopback address is attempted**, and no telemetry is emitted. The
+test harness fails on any dial outside loopback rather than trusting the code path.
+
+The earlier wording said "no outbound connection", which contradicted itself: the default
+provider is Ollama over HTTP to localhost, so local mode makes connections by design. The
+guarantee is about *destination*, not about silence.
+
+### `llm`, and how the guarantee is made mechanical
+
+**`llm` owns the only way out, and a test says so about the source itself.** A runtime
+harness cannot see a path it never exercises, so a test parses the package's own non-test
+files and enforces the shape structurally: an import allowlist, so nothing can dial on the
+package's behalf; a selector allowlist admitting only the non-dialling names from `net` and
+`crypto/tls`, which is why `tls.Dial` needs no enumerating; exactly one `http.Client` and one
+`http.Transport` literal, each with its policy fields checked by *value* rather than presence;
+no assignment to a policy field after construction; no type derived from either; and no
+`os.Getenv`, since the mode is resolved at the composition root and no library package reads
+the environment.
+
+It is a structural backstop and not a proof — it cannot see through arbitrary indirection,
+and the enforcing dialer remains the primary assertion.
+
+It is handed a dial function and builds its own
+`http.Client` from it, with redirects refused and proxy discovery off. A caller cannot pass
+a pre-built client whose redirect or proxy policy would route elsewhere, and there is no
+path to a socket the test did not supply. `New` refuses a nil dialer rather than falling
+back to `http.DefaultTransport`.
+
+**The local endpoint must be a literal loopback address**, `127.0.0.0/8` or `[::1]`, with no
+userinfo and no query. Hostnames are rejected, `localhost` included — resolving a name before
+checking it leaves a rebinding gap, and requiring a literal removes DNS from the local path
+entirely. This rule is scoped to the *local* provider: the cloud provider necessarily speaks
+to a remote host, and its own endpoint rule is the opposite one — `https` only, a pinned host,
+and never reachable at all in local mode, which is enforced at construction rather than by
+parsing.
+
+**The mode is resolved once, at the composition root, and is immutable here.** Today that
+root is `cli`, which reads `HAPAX_LOCAL_ONLY` and the flag, with `--local-only` winning and a
+malformed environment value failing closed. Stated generally because `cli` will not stay the
+only entry point: *every* composition root resolves the mode once and passes the decision
+inward, and no library package reads the environment.
+`rewrite.RewriteRequest` also carries `LocalOnly`, which is a per-call boolean and therefore
+cannot be the security boundary — a provider refuses any request whose flag disagrees with
+the mode it was built in, rather than honouring the field.
+
+**The cloud credential source is a factory, not an instance.** Passing a constructed
+credential source into local mode would already have read the environment before anyone
+checked the mode. The local branch never calls the factory, and the test asserts zero calls.
+
+**What is sent is a declared schema, not a filtered string.** "The body must not contain the
+profile ID" is unfalsifiable, because an identifier can legitimately occur in the author's
+prose. Instead each provider's request body has a fixed key set, and the test decodes the body
+and asserts exactly that set — no more, no less, so "the provider's own framing" cannot be a
+licence for arbitrary extra fields. Identity fields are absent by construction, not by search.
+
+| | local (Ollama) | cloud (Anthropic) |
+|---|---|---|
+| method and URL | `POST {endpoint}/api/generate` | `POST https://api.anthropic.com/v1/messages` |
+| headers | `content-type: application/json` | plus `x-api-key`, `anthropic-version: 2023-06-01` |
+| body keys, exactly | `model`, `prompt`, `stream` (false) | `model`, `max_tokens`, `messages` |
+| token budget | — | `MaxTokens`, default 4096, non-positive refused |
+| where the prompt goes | `prompt` | `messages[0].content`, with `role: "user"` |
+| reply read from | `response` | `content[0].text`, requiring `type: "text"` |
+
+The cloud host is pinned to that literal — a different host is a construction error, not a
+configuration option — so the test asserts a URL rather than a property.
+
+**Telemetry is defined so it can be refused**: no request other than the single provider
+call per `Rewrite`, no proxy, no redirect, and no *application-owned* background work. In
+local mode there is no DNS either, which follows from requiring a literal loopback address
+rather than being a separate promise — the cloud path necessarily resolves its pinned host,
+so "no DNS" is a property of local mode and is scoped to it. Not "no goroutines" — `http.Transport` runs its own while servicing a request, so that
+would be false as stated. One HTTP exchange per `Provider.Rewrite`, not per loop attempt,
+since the loop deliberately makes several.
+
+**A cloud provider carries no local endpoint.** Configuring both is a construction error,
+which makes a silent downgrade unconstructible rather than merely unused — a stronger
+statement than spying on a factory, and one a test can make without a spy at all.
+
+**The outbound header set is declared too**, not just the body: `content-type` and a fixed
+`user-agent` of `hapax` for both, plus `x-api-key` and `anthropic-version` for the cloud. The
+user agent is fixed because Go's default announces its version, and a declared set is what
+stops an identity-bearing header being added under a name no value-scanning test would think
+to look at.
+
+**No retries in v1, and made mechanical rather than promised.** `http.Transport` will
+transparently retry a request whose *reused* connection fails, so "we do not retry" is not a
+property of our code alone. Keep-alives are disabled, which removes connection reuse and with
+it that path — and gives a second useful property: one dial per request, so the exchange count
+is observable at the dial seam rather than only at the client. A cloud failure is returned as
+it is, with no downgrade to the local provider — which needs no spy, because a cloud provider
+carrying a local endpoint is a construction error and the fallback is therefore
+unconstructible.
+
+**One more injected seam, declared rather than smuggled**: the trust roots, as an
+`*x509.CertPool` and not a whole `*tls.Config`. Production leaves it nil and gets the system
+roots; a test supplies a pool holding a certificate minted for the pinned host, so the cloud
+path is exercised end to end with real verification. A `*tls.Config` would have been too much
+authority to hand over — it can also disable verification, override the server name, or add
+client certificates — so only the roots are injectable, and the pinned name is still verified.
+
+**Construction does no I/O.** The credential factory and the provider factories are
+side-effect-free until called; anything that must read a file or a socket takes the same
+injected seam and is tested through it. Otherwise a dependency could read the environment
+before anyone checked the mode, which is the hole the factory shape exists to close.
+
+**Endpoint parsing is closed, not merely checked.** For the local provider: scheme `http` or
+`https`, host lexically `127.0.0.0/8` or exactly `::1`, an explicit port, and userinfo, query
+and fragment all rejected. Hostile spellings are part of the contract, not an afterthought.
+
+**The limits are configuration, with declared defaults.** `MaxRequestBytes` defaults to
+256 KiB and `MaxResponseBytes` to 1 MiB, both immutable once the provider is constructed, and
+a non-positive value is refused rather than treated as unlimited — the failure mode of a zero
+meaning "no limit" is exactly the one worth designing out. The defaults are generous against a
+real request, which is one paragraph and three exemplars.
+
+**Both request and response are size-bounded.** The request limit is on the final serialized
+body in bytes, checked before the credential lookup and before the dial, so an oversized
+prompt costs nothing. The response is bounded too — an oversized `Content-Length` is refused
+outright, and a chunked body is read to at most `limit + 1` bytes and then closed, so the
+bound holds without a declared length. The limit counts **wire bytes**, and compression is
+disabled on the transport so that wire and decoded bytes are the same number: otherwise a
+`Content-Length` under the limit could still decompress past it, which is a bound in name
+only. ADR 0007 asks only for the request limit; an unbounded
+read from a remote host is the same problem pointed the other way.
+
+**The claim is "no identity fields", not "no identifier values".** A fixed outbound key set
+proves the former. It cannot prove the latter, because the author's own prose may contain a
+string equal to a profile ID, and no filter should be pretending otherwise.
 
 ### Commands
 
@@ -1024,9 +1151,12 @@ against it could not receive exemplars at all, and the exemplar path is not an o
 but the mechanism by which the rewrite is anchored to the author rather than to the model's
 prior.
 
-**A provider is given a request, not a string.** `RewriteRequest` carries the current segment,
-the exemplars `Selector` chose, the profile and invocation identity the result is attributed
-to, and the provider settings including `--local-only`. That shape exists so ADR 0007's
+**A provider is given a request, not a string.** `RewriteRequest` carries the **assembled
+prompt**, the profile and invocation identity the result is attributed to, and the
+`--local-only` setting. An earlier draft of this paragraph said it carried the current segment
+and the chosen exemplars separately; that contradicts the rule two paragraphs below, which is
+the one that shipped — handing a provider the raw pieces would let it assemble a different
+outbound prompt. That shape exists so ADR 0007's
 boundary is expressible: **only the draft passage and a handful of exemplars are ever sent,
 never the corpus.** A provider that received only a string could not honour that rule, because
 it would have nothing to send but the passage — and a later change adding exemplars would have
@@ -1081,7 +1211,7 @@ worse. The loop requires the requested count and refuses otherwise rather than p
 a weaker prompt nobody chose.
 
 `--local-only` is asserted by test, per ADR 0007: no cloud provider constructed, no credential
-read, no dial attempted, no telemetry. That assertion belongs to the `llm` component, where a
+read, no dial outside loopback, no telemetry. That assertion belongs to the `llm` component, where a
 provider exists to construct; this component's obligation is to carry the setting into every
 request so a provider can honour it.
 
