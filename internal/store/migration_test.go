@@ -79,13 +79,13 @@ func TestOpeningRefusesADatabaseThisBinaryCannotAccountFor(t *testing.T) {
 		want    error
 	}{
 		{"a version newer than this binary", func(t *testing.T, db *sql.DB) {
-			if _, err := db.Exec("INSERT INTO migration (version, checksum, applied_at) VALUES (9999, 'ff', '2026-01-01T00:00:00Z')"); err != nil {
+			if _, err := db.Exec("INSERT INTO migration (version, checksum, applied_at) VALUES (9999, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', '2026-01-01T00:00:00Z')"); err != nil {
 				t.Fatalf("insert: %v", err)
 			}
 		}, store.ErrSchemaAhead},
 
 		{"a checksum that disagrees", func(t *testing.T, db *sql.DB) {
-			if _, err := db.Exec("UPDATE migration SET checksum = 'deadbeef' WHERE version = 0"); err != nil {
+			if _, err := db.Exec("UPDATE migration SET checksum = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' WHERE version = 0"); err != nil {
 				t.Fatalf("update: %v", err)
 			}
 		}, store.ErrSchemaChecksum},
@@ -282,10 +282,10 @@ func TestARefusedOpenChangesNothing(t *testing.T) {
 			_ = db.Close()
 		}},
 		{"version ahead", func(t *testing.T, path string) {
-			seed(t, path, "INSERT INTO migration (version, checksum, applied_at) VALUES (9999, 'ff', '2026-01-01T00:00:00Z')")
+			seed(t, path, "INSERT INTO migration (version, checksum, applied_at) VALUES (9999, 'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff', '2026-01-01T00:00:00Z')")
 		}},
 		{"checksum differs", func(t *testing.T, path string) {
-			seed(t, path, "UPDATE migration SET checksum = 'deadbeef' WHERE version = 0")
+			seed(t, path, "UPDATE migration SET checksum = 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef' WHERE version = 0")
 		}},
 		{"gap", func(t *testing.T, path string) {
 			seed(t, path, "DELETE FROM migration WHERE version = 0")
