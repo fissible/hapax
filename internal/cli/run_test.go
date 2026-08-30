@@ -91,9 +91,7 @@ func TestTellsExitsZeroWhenNothingIsFlagged(t *testing.T) {
 	if code := h.run("tells", draft(t, clean)); code != 0 {
 		t.Fatalf("exit = %d, want 0; stderr %q", code, h.Stderr.String())
 	}
-	if got := h.document(t)["status"]; got != "ok" {
-		t.Errorf("status = %v, want ok", got)
-	}
+	requireSuccessfulHumanOutput(t, h.Stdout.String(), h.Stderr.String(), "ok")
 }
 
 func TestTellsExitsOneWhenSomethingIsFlagged(t *testing.T) {
@@ -101,13 +99,7 @@ func TestTellsExitsOneWhenSomethingIsFlagged(t *testing.T) {
 	if code := h.run("tells", draft(t, adverse)); code != 1 {
 		t.Fatalf("exit = %d, want 1; stderr %q", code, h.Stderr.String())
 	}
-	document := h.document(t)
-	if got := document["status"]; got != "adverse" {
-		t.Errorf("status = %v, want adverse", got)
-	}
-	if got := document["command"]; got != "tells" {
-		t.Errorf("command = %v, want tells", got)
-	}
+	requireSuccessfulHumanOutput(t, h.Stdout.String(), h.Stderr.String(), "adverse")
 }
 
 // The document Run emits is the CONVERTED report, field for field. Without
@@ -121,24 +113,7 @@ func TestRunEmitsTheConvertedReport(t *testing.T) {
 		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
 
-	var got struct {
-		Result cli.TellsResult
-	}
-	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
-		t.Fatalf("unmarshal %q: %v", h.Stdout.String(), err)
-	}
-	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "adverse")
-	// Measured against tells directly: the double-space rule matches at byte 16.
-	want := cli.TellsResult{
-		Path: path, Screening: "indeterminate", Count: 1,
-		Findings: []cli.TellsFinding{{
-			Rule: "double-space", Category: "formatting", Provenance: "unvalidated",
-			Severity: "warn", Offset: 16, Length: 2,
-		}},
-	}
-	if !reflect.DeepEqual(got.Result, want) {
-		t.Errorf("result =\n%+v\nwant\n%+v", got.Result, want)
-	}
+	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "adverse", adverseResult(path))
 }
 
 // And a clean draft emits a complete document with an EMPTY findings list, not
@@ -149,17 +124,7 @@ func TestRunEmitsACompleteDocumentForACleanDraft(t *testing.T) {
 	if code := h.run("tells", "--json", path); code != 0 {
 		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
-	var got struct {
-		Result cli.TellsResult
-	}
-	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "ok")
-	want := cli.TellsResult{Path: path, Screening: "indeterminate", Count: 0, Findings: []cli.TellsFinding{}}
-	if !reflect.DeepEqual(got.Result, want) {
-		t.Errorf("result =\n%+v\nwant\n%+v", got.Result, want)
-	}
+	requireSuccessfulDocument(t, h.Stdout.String(), h.Stderr.String(), "ok", cleanResult(path))
 	if !strings.Contains(h.Stdout.String(), `"findings":[]`) {
 		t.Errorf("findings is not an empty list: %s", h.Stdout.String())
 	}
@@ -404,7 +369,7 @@ func requireOneDiagnostic(t *testing.T, diagnostic string) {
 // fails: the environment path has to reach the same place the flag does.
 func TestTheEnvironmentSelectsLocalOnlyOnASuccessfulRun(t *testing.T) {
 	h := newHarness(t, map[string]string{"HAPAX_LOCAL_ONLY": "1"})
-	if code := h.run("tells", draft(t, clean)); code != 0 {
+	if code := h.run("tells", "--json", draft(t, clean)); code != 0 {
 		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
 	if got := h.document(t)["status"]; got != "ok" {
@@ -427,7 +392,7 @@ func requireNoDocument(t *testing.T, h *harness) {
 // cannot be held to different standards: the exact six fields, correct values
 // and types for every one of them, one newline-terminated line on stdout, and
 // nothing at all on stderr.
-func requireSuccessfulDocument(t *testing.T, stdout, stderr, wantStatus string) {
+func requireSuccessfulDocument(t *testing.T, stdout, stderr, wantStatus string, wantResult cli.TellsResult) {
 	t.Helper()
 	if stderr != "" {
 		t.Errorf("a successful run wrote to stderr: %q", stderr)
@@ -461,7 +426,35 @@ func requireSuccessfulDocument(t *testing.T, stdout, stderr, wantStatus string) 
 		t.Errorf("profile = %#v, want null", decoded["profile"])
 	}
 	if _, ok := decoded["result"].(map[string]any); !ok {
-		t.Errorf("result = %#v, want an object", decoded["result"])
+		t.Fatalf("result = %#v, want an object", decoded["result"])
+	}
+	var envelope struct{ Result cli.TellsResult }
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+		t.Fatalf("unmarshal result: %v", err)
+	}
+	if !reflect.DeepEqual(envelope.Result, wantResult) {
+		t.Errorf("result =\n%+v\nwant\n%+v", envelope.Result, wantResult)
+	}
+}
+
+// The DEFAULT rendering is human, not JSON. Its contract is weaker by nature —
+// it is for a person — but it is still a contract: silent stderr, something on
+// stdout, the status and command legible, and not JSON pretending to be prose.
+func requireSuccessfulHumanOutput(t *testing.T, stdout, stderr, wantStatus string) {
+	t.Helper()
+	if stderr != "" {
+		t.Errorf("a successful run wrote to stderr: %q", stderr)
+	}
+	if stdout == "" {
+		t.Fatal("a successful run wrote nothing to stdout")
+	}
+	if json.Valid([]byte(stdout)) {
+		t.Errorf("the default rendering is JSON; --json is what asks for that:\n%s", stdout)
+	}
+	for _, fragment := range []string{wantStatus, "tells"} {
+		if !strings.Contains(stdout, fragment) {
+			t.Errorf("the human rendering omits %q:\n%s", fragment, stdout)
+		}
 	}
 }
 
@@ -486,5 +479,23 @@ func TestAnEmptyFindingReasonIsAStringAndNotNull(t *testing.T) {
 	if reason, ok := decoded.Result.Findings[0]["reason"].(string); !ok || reason != "" {
 		t.Errorf("finding reason = %#v, want the empty string and not null",
 			decoded.Result.Findings[0]["reason"])
+	}
+}
+
+// The two documents the fixtures must produce, measured against tells: the
+// double-space rule matches at byte 16 with length 2.
+func adverseResult(path string) cli.TellsResult {
+	return cli.TellsResult{
+		Path: path, Screening: "indeterminate", Count: 1,
+		Findings: []cli.TellsFinding{{
+			Rule: "double-space", Category: "formatting", Provenance: "unvalidated",
+			Severity: "warn", Offset: 16, Length: 2,
+		}},
+	}
+}
+
+func cleanResult(path string) cli.TellsResult {
+	return cli.TellsResult{
+		Path: path, Screening: "indeterminate", Count: 0, Findings: []cli.TellsFinding{},
 	}
 }

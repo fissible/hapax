@@ -89,3 +89,54 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 		})
 	}
 }
+
+// A1 constructs no provider and no credential, and the binary is where that
+// could quietly stop being true: the Run harness fails the test if its injected
+// Credentials or Dial seam is called, but the binary runs against the real
+// process and the guard above must let it read the real environment.
+//
+// So the check is on the wiring itself. main builds one cli.Deps literal, and
+// in A1 it may not populate Credentials or Dial at all — there is nothing in
+// this slice for either to serve, and a main that filled them in would be
+// carrying a cloud path no test exercises.
+func TestTheBinaryWiresNoProviderAndNoCredential(t *testing.T) {
+	set := token.NewFileSet()
+	packages, err := parser.ParseDir(set, "../../cmd/hapax", func(info fs.FileInfo) bool {
+		return !strings.HasSuffix(info.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parsing cmd/hapax: %v", err)
+	}
+	forbidden := map[string]bool{"Credentials": true, "Dial": true, "OpenStore": true}
+	literals := 0
+	for _, pkg := range packages {
+		for name, file := range pkg.Files {
+			ast.Inspect(file, func(n ast.Node) bool {
+				literal, ok := n.(*ast.CompositeLit)
+				if !ok {
+					return true
+				}
+				selector, ok := literal.Type.(*ast.SelectorExpr)
+				if !ok || selector.Sel.Name != "Deps" {
+					return true
+				}
+				literals++
+				for _, element := range literal.Elts {
+					pair, ok := element.(*ast.KeyValueExpr)
+					if !ok {
+						t.Errorf("%s builds Deps positionally; every field must be named", name)
+						continue
+					}
+					key, ok := pair.Key.(*ast.Ident)
+					if ok && forbidden[key.Name] {
+						t.Errorf("%s wires %s, which no A1 command may reach", name, key.Name)
+					}
+				}
+				return true
+			})
+		}
+	}
+	if literals == 0 {
+		t.Fatal("no cli.Deps literal was found in cmd/hapax; this guard is vacuous")
+	}
+}
