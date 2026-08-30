@@ -3,6 +3,7 @@ package store_test
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"regexp"
 	"sort"
 	"strings"
@@ -380,6 +381,15 @@ func relaxEnum(t *testing.T, s *store.Store, table, column string) {
 	}
 	if _, err := db.Exec("UPDATE sqlite_master SET sql = ? WHERE name = ?", relaxed, table); err != nil {
 		t.Fatalf("relaxing %s: %v", table, err)
+	}
+	// Editing sqlite_master does not advance the schema cookie by itself, so a
+	// connection that has already parsed the schema would keep the old CHECK.
+	var cookie int
+	if err := db.QueryRow("PRAGMA schema_version").Scan(&cookie); err != nil {
+		t.Fatalf("schema_version: %v", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA schema_version = %d", cookie+1)); err != nil {
+		t.Fatalf("advancing schema_version: %v", err)
 	}
 	if _, err := db.Exec("PRAGMA writable_schema=OFF"); err != nil {
 		t.Fatalf("writable_schema off: %v", err)
