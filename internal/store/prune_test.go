@@ -67,6 +67,7 @@ func newPruneFixture(t *testing.T, s *store.Store) pruneFixture {
 	referenceOn := func(prof store.Profile) store.Reference {
 		ref := referenceFixture(prof.ID)
 		mustPutReference(t, s, ref)
+		mustPutThreshold(t, s, prof.ID, ref.ID)
 		return ref
 	}
 	keptRef := referenceOn(f.KeptProfile)

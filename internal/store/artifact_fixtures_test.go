@@ -248,6 +248,16 @@ func mustPutProfile(t *testing.T, s *store.Store, p store.Profile) {
 	}
 }
 
+// mustPutThreshold writes the threshold a release over this reference will
+// name. A calibration's bounds must equal a STORED threshold's, so a release
+// fixture is not writable until one exists.
+func mustPutThreshold(t *testing.T, s *store.Store, profileID, referenceID string) {
+	t.Helper()
+	if err := s.PutThreshold(ctx(), thresholdFixture(profileID, referenceID)); err != nil {
+		t.Fatalf("PutThreshold: %v", err)
+	}
+}
+
 func mustPutReference(t *testing.T, s *store.Store, r store.Reference) {
 	t.Helper()
 	if err := s.PutReference(ctx(), r); err != nil {
@@ -286,6 +296,7 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	}
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 
 	threshold := thresholdFixture(prof.ID, ref.ID)
 	if err := s.PutThreshold(ctx(), threshold); err != nil {

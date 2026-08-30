@@ -112,6 +112,7 @@ func TestReferenceValuesKeepTheirOrder(t *testing.T) {
 	feature := features.Definitions()[0].ID
 	ref.Values[feature] = []float64{3, 1, 2, -4, 0}
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 
 	got, err := s.LoadReference(ctx(), ref.ID)
 	if err != nil {
@@ -171,6 +172,7 @@ func TestAThresholdRoundTrips(t *testing.T) {
 	_, prof := seededProfile(t, s)
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 	want := thresholdFixture(prof.ID, ref.ID)
 	if err := s.PutThreshold(ctx(), want); err != nil {
 		t.Fatalf("PutThreshold: %v", err)
@@ -193,6 +195,7 @@ func TestAThresholdKeepsBothBoundsOfBothIntervals(t *testing.T) {
 	_, prof := seededProfile(t, s)
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 	want := thresholdFixture(prof.ID, ref.ID)
 	want.IntervalLow = eval.Interval{Lower: 0.11, Upper: 0.22}
 	want.IntervalHigh = eval.Interval{Lower: 0.33, Upper: 0.44}
@@ -215,6 +218,7 @@ func TestAnEvalResultRoundTrips(t *testing.T) {
 	_, prof := seededProfile(t, s)
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 	want := evalResultFixture(prof.ID, ref.ID)
 	if err := s.PutEvalResult(ctx(), want, store.LeaveHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
@@ -248,6 +252,7 @@ func TestAnEvalResultsReasonAgreesWithItsShippability(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Shippable, result.Reason = c.shippable, c.reason
 			if !c.shippable {
@@ -640,6 +645,7 @@ func TestRewritingAnIdenticalArtifactSucceedsAndADifferentOneConflicts(t *testin
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			if change {
 				ref.Values[features.Definitions()[0].ID] = []float64{9}
 			}
@@ -649,6 +655,7 @@ func TestRewritingAnIdenticalArtifactSucceedsAndADifferentOneConflicts(t *testin
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			threshold := thresholdFixture(prof.ID, ref.ID)
 			if err := s.PutThreshold(ctx(), threshold); err != nil {
 				t.Fatalf("PutThreshold: %v", err)
@@ -662,6 +669,7 @@ func TestRewritingAnIdenticalArtifactSucceedsAndADifferentOneConflicts(t *testin
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			if err := s.PutEvalResult(ctx(), result, store.LeaveHead); err != nil {
 				t.Fatalf("PutEvalResult: %v", err)
@@ -811,6 +819,7 @@ func TestNonFiniteFloatsAreRefused(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			threshold := thresholdFixture(prof.ID, ref.ID)
 			threshold.IntervalHigh.Upper = inf
 			return s.PutThreshold(ctx(), threshold)
@@ -819,6 +828,7 @@ func TestNonFiniteFloatsAreRefused(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Discrimination.Cap = inf
 			return s.PutEvalResult(ctx(), result, store.LeaveHead)
@@ -1237,6 +1247,7 @@ func TestConcurrentIdenticalArtifactWritersBothSucceed(t *testing.T) {
 			}},
 		{"eval result", func() { mustPutProfile(t, s, prof); mustPutReference(t, s, referenceFixture(prof.ID)) },
 			func() error {
+				mustPutThreshold(t, s, prof.ID, referenceFixture(prof.ID).ID)
 				return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, referenceFixture(prof.ID).ID), store.LeaveHead)
 			}},
 	} {
@@ -1310,6 +1321,7 @@ func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Discrimination.Discriminates = c.discriminates
 			result.Calibration.Calibrated = c.calibrated
@@ -1350,6 +1362,7 @@ func TestTheThresholdVerdictIsItsOrdering(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			threshold := thresholdFixture(prof.ID, ref.ID)
 			threshold.Verdict, threshold.Low, threshold.High = c.verdict, c.low, c.high
 			threshold.IntervalLow = eval.Interval{Lower: c.low - 0.05, Upper: c.low + 0.05}
@@ -1498,6 +1511,7 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 		s, prof, foreign := setUp(t)
 		own := referenceFixture(prof.ID)
 		mustPutReference(t, s, own)
+		mustPutThreshold(t, s, prof.ID, own.ID)
 		threshold := thresholdFixture(prof.ID, own.ID)
 		if err := s.PutThreshold(ctx(), threshold); err != nil {
 			t.Fatalf("PutThreshold: %v", err)
@@ -1513,6 +1527,7 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 		s, prof, foreign := setUp(t)
 		own := referenceFixture(prof.ID)
 		mustPutReference(t, s, own)
+		mustPutThreshold(t, s, prof.ID, own.ID)
 		result := evalResultFixture(prof.ID, own.ID)
 		if err := s.PutEvalResult(ctx(), result, store.LeaveHead); err != nil {
 			t.Fatalf("PutEvalResult: %v", err)
