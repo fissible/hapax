@@ -987,40 +987,44 @@ func TestTheDatabaseItselfRefusesTheContradictionsItCanExpress(t *testing.T) {
 // persistence struct is declared here, so a field added to one is a decision a
 // reviewer must make rather than something a struct literal absorbs.
 func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
-	declared := map[any][]string{
-		store.Profile{}: {
+	declared := []struct {
+		value any
+		want  []string
+	}{
+		// A slice, not a map: these structs hold slices, so they cannot be keys.
+		{store.Profile{}, []string{
 			"ID", "SnapshotID", "Register", "Unit", "VarianceConvention",
 			"ManifestDigest", "FeatureSetVersion", "MinParagraphLexicalTokens", "Stats",
-		},
-		store.ProfileStat{}: {
+		}},
+		{store.ProfileStat{}, []string{
 			"Feature", "N", "Mean", "Variance", "Defined", "VarianceDefined", "MinObservations",
-		},
-		store.Reference{}: {"ID", "ProfileID", "Split", "MinSegments", "ManifestDigest", "Values"},
-		store.Threshold{}: {
+		}},
+		{store.Reference{}, []string{"ID", "ProfileID", "Split", "MinSegments", "ManifestDigest", "Values"}},
+		{store.Threshold{}, []string{
 			"ID", "ProfileID", "ReferenceID", "PopulationID", "Low", "High",
 			"AchievedAuthor", "AchievedDistractor", "IntervalLow", "IntervalHigh", "Verdict",
-		},
-		store.EvalResult{}: {
+		}},
+		{store.EvalResult{}, []string{
 			"ID", "ProfileID", "ReferenceID", "AUC", "LowerBound", "Cap",
 			"AuthorSegments", "DistractorSegments", "AuthorClusters", "DistractorClusters",
 			"Discriminates", "Calibrated", "Shippable", "Reason",
-		},
-		store.ExemplarSelection{}: {"ID", "ProfileID", "N", "CertificateID", "Members"},
-		store.RewriteAttempt{}: {
+		}},
+		{store.ExemplarSelection{}, []string{"ID", "ProfileID", "N", "CertificateID", "Members"}},
+		{store.RewriteAttempt{}, []string{
 			"InvocationID", "Index", "ProfileID", "ProviderID", "NodeID",
 			"CurrentHash", "CandidateHash", "CurrentDistance", "CandidateDistance",
 			"CurrentBand", "CandidateBand", "Preserved", "PreserveIdentifiers",
 			"TellsComparison", "TellsComparable", "Accepted", "Rejection",
-		},
+		}},
 	}
-	for value, want := range declared {
-		declaredType := reflect.TypeOf(value)
+	for _, c := range declared {
+		declaredType := reflect.TypeOf(c.value)
 		var got []string
 		for i := 0; i < declaredType.NumField(); i++ {
 			got = append(got, declaredType.Field(i).Name)
 		}
-		if !reflect.DeepEqual(got, want) {
-			t.Errorf("%s fields =\n%v\nwant\n%v", declaredType.Name(), got, want)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s fields =\n%v\nwant\n%v", declaredType.Name(), got, c.want)
 		}
 	}
 }
