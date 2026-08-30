@@ -13,6 +13,7 @@ import (
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/llm"
+	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/store"
 )
@@ -1201,6 +1202,14 @@ func TestConcurrentIdenticalArtifactWritersBothSucceed(t *testing.T) {
 			func() error { return s.PutExemplarSelection(ctx(), selectionFixture(prof.ID, nodes...)) }},
 		{"rewrite attempt", func() { mustPutProfile(t, s, prof) },
 			func() error { return s.PutRewriteAttempt(ctx(), attemptFixture(prof.ID, nodes[0])) }},
+		{"threshold", func() { mustPutProfile(t, s, prof); mustPutReference(t, s, referenceFixture(prof.ID)) },
+			func() error {
+				return s.PutThreshold(ctx(), thresholdFixture(prof.ID, referenceFixture(prof.ID).ID))
+			}},
+		{"eval result", func() { mustPutProfile(t, s, prof); mustPutReference(t, s, referenceFixture(prof.ID)) },
+			func() error {
+				return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, referenceFixture(prof.ID).ID))
+			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			c.setUp()
@@ -1421,6 +1430,74 @@ func TestARefusedIdentifierIsNotEchoedBackInTheError(t *testing.T) {
 	for _, fragment := range []string{secret, "1979", "Warsaw"} {
 		if strings.Contains(err.Error(), fragment) {
 			t.Errorf("the error repeats %q: %v", fragment, err)
+		}
+	}
+}
+
+// Read integrity closes over the profile graph, not only over ingestion. A
+// threshold or eval result that combines one profile with another profile's
+// reference measures a population it was never fitted against — and would
+// present as an ordinary, smaller-evidence result rather than as damage.
+func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.T) {
+	setUp := func(t *testing.T) (*store.Store, store.Profile, store.Reference) {
+		t.Helper()
+		s := newStore(t)
+		snapshot, first := seededProfile(t, s)
+		second := profileFixture(snapshot.ID)
+		second.ID, second.Register = fakeID("profile", "second"), "letters"
+		mustPutProfile(t, s, second)
+		foreign := referenceFixture(second.ID)
+		mustPutReference(t, s, foreign)
+		return s, first, foreign
+	}
+
+	t.Run("a threshold", func(t *testing.T) {
+		s, prof, foreign := setUp(t)
+		if err := s.PutThreshold(ctx(), thresholdFixture(prof.ID, foreign.ID)); err == nil {
+			t.Error("accepted")
+		}
+	})
+	t.Run("an eval result", func(t *testing.T) {
+		s, prof, foreign := setUp(t)
+		if err := s.PutEvalResult(ctx(), evalResultFixture(prof.ID, foreign.ID)); err == nil {
+			t.Error("accepted")
+		}
+	})
+	t.Run("and a stored one that already does is corrupt", func(t *testing.T) {
+		s, prof, foreign := setUp(t)
+		own := referenceFixture(prof.ID)
+		mustPutReference(t, s, own)
+		threshold := thresholdFixture(prof.ID, own.ID)
+		if err := s.PutThreshold(ctx(), threshold); err != nil {
+			t.Fatalf("PutThreshold: %v", err)
+		}
+		if _, err := openRaw(t, s).Exec("UPDATE threshold SET reference_id = ?", foreign.ID); err != nil {
+			t.Fatalf("damaging: %v", err)
+		}
+		if _, err := s.LoadThreshold(ctx(), threshold.ID); !errors.Is(err, store.ErrCorrupt) {
+			t.Errorf("error = %v, want ErrCorrupt", err)
+		}
+	})
+}
+
+// Store carries identities; it does not recompute them. Only the snapshot's
+// preimage is fully persisted (DESIGN: "verified, not trusted"), so the check
+// that remains for the rest is the digest form itself, which is asserted in
+// TestIdentitiesMustBeTheDeclaredDigestForm. A profile ID, for one, hashes the
+// outlier algorithm and four build floors this schema deliberately does not
+// hold, and an exemplar certificate ID hashes the density and medoid records.
+func TestNoArtifactIdentityIsRecomputableFromWhatIsStored(t *testing.T) {
+	notStored := map[string][]string{
+		"profile": {
+			"outlier-algorithm", "outlier-mads", "min-documents", "min-paragraphs",
+			"min-observations-per-feature", "profile-schema-version", "split",
+		},
+	}
+	prof := &profile.Profile{}
+	inputs := prof.IdentityInputs()
+	for _, key := range notStored["profile"] {
+		if _, present := inputs[key]; !present {
+			t.Errorf("profile identity no longer hashes %q; if every input is now stored, the ID should be verified rather than carried", key)
 		}
 	}
 }

@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"database/sql"
+	"regexp"
 	"sort"
 	"strings"
 	"testing"
@@ -96,10 +97,11 @@ func TestEveryDeclaredEnumValueIsAcceptedByTheSchema(t *testing.T) {
 	}
 }
 
-// And nothing else is storable. The probes are every value of every OTHER
-// vocabulary in the schema plus generic junk, which is what catches a set that
-// has grown stale in the other direction — still listing a value its owning
-// package has dropped.
+// And the values of every OTHER vocabulary in the schema, plus generic junk,
+// are all refused. This is selected behavioural probing, NOT a closure proof: a
+// set still listing a value its owning package has retired, and that no other
+// column uses, would pass here. TestNoTableNamesAValueNoVocabularyDeclares is
+// what looks for that.
 func TestTheSchemaRefusesEveryForeignEnumValue(t *testing.T) {
 	declared := declaredVocabularies()
 	for qualified := range declared {
@@ -270,7 +272,12 @@ func TestEveryDeclaredGrammarIsEnforcedByTheDatabase(t *testing.T) {
 				if rowsIn(t, raw, table) == 0 {
 					t.Fatalf("%s has no row to damage; the probe would be vacuous", table)
 				}
-				if _, err := raw.Exec("UPDATE "+table+" SET "+column+" = ?", probe); err == nil {
+				// Exactly one row, chosen deterministically: updating every row
+				// of a keyed column collides on the primary key, which would
+				// pass the case for a reason that is not the grammar.
+				_, err := raw.Exec(
+					"UPDATE "+table+" SET "+column+" = ? WHERE rowid = (SELECT min(rowid) FROM "+table+")", probe)
+				if err == nil {
 					t.Errorf("accepted %q", probe)
 				}
 			})
@@ -302,3 +309,44 @@ func TestEveryGrammarNameIsOneTheProbesCover(t *testing.T) {
 		}
 	}
 }
+
+// A stale value — one a schema still admits after its owning package dropped it
+// — cannot be found by probing, because nothing knows to probe for it. So the
+// DDL's own string literals are read back and each one must belong to a
+// vocabulary that table declares.
+//
+// A TRIPWIRE, and scoped like one: only literals shaped like a vocabulary value
+// are considered, since GLOB patterns and the empty string appear in the same
+// DDL for unrelated reasons. It catches the retired value; it does not prove
+// closure any more than the probes above do.
+var vocabularyShaped = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+func TestNoTableNamesAValueNoVocabularyDeclares(t *testing.T) {
+	db := openRaw(t, newStore(t))
+	declared := declaredVocabularies()
+	for table := range declaredSchema {
+		known := map[string]bool{}
+		for qualified, values := range declared {
+			if owner, _, _ := strings.Cut(qualified, "."); owner == table {
+				for _, value := range values {
+					known[value] = true
+				}
+			}
+		}
+		var ddl string
+		if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE name = ?", table).Scan(&ddl); err != nil {
+			t.Fatalf("sql for %s: %v", table, err)
+		}
+		for _, match := range sqlLiteral.FindAllStringSubmatch(ddl, -1) {
+			literal := match[1]
+			if !vocabularyShaped.MatchString(literal) {
+				continue
+			}
+			if !known[literal] {
+				t.Errorf("%s admits %q, which no vocabulary it declares contains", table, literal)
+			}
+		}
+	}
+}
+
+var sqlLiteral = regexp.MustCompile(`'([^']*)'`)
