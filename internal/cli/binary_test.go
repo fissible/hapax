@@ -29,17 +29,25 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 		args   []string
 		want   int
 		status string
+		asJSON bool
 	}{
-		{"a clean draft", clean, nil, 0, "ok"},
-		{"a draft with a finding", adverse, nil, 1, "adverse"},
-		{"an unknown command", clean, []string{"score"}, 2, ""},
+		{"a clean draft", clean, nil, 0, "ok", true},
+		{"a draft with a finding", adverse, nil, 1, "adverse", true},
+		// Without --json the binary must render for a person, not force the
+		// machine form: a main that always emitted JSON would pass above.
+		{"a clean draft, rendered for a person", clean, nil, 0, "ok", false},
+		{"a finding, rendered for a person", adverse, nil, 1, "adverse", false},
+		{"an unknown command", clean, []string{"score"}, 2, "", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "draft.md")
 			if err := os.WriteFile(path, []byte(c.body), 0o644); err != nil {
 				t.Fatalf("write: %v", err)
 			}
-			args := append(append([]string(nil), c.args...), "tells", "--json", path)
+			args := []string{"tells", path}
+			if c.asJSON {
+				args = []string{"tells", "--json", path}
+			}
 			if c.args != nil {
 				args = c.args
 			}

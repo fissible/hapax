@@ -95,11 +95,11 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 // Credentials or Dial seam is called, but the binary runs against the real
 // process and the guard above must let it read the real environment.
 //
-// So the check is on the wiring itself. main builds one cli.Deps literal, and
-// in A1 it may not populate Credentials or Dial at all — there is nothing in
-// this slice for either to serve, and a main that filled them in would be
-// carrying a cloud path no test exercises.
-func TestTheBinaryWiresNoProviderAndNoCredential(t *testing.T) {
+// So the check is on the NAMES. Checking one cli.Deps literal was not enough —
+// a main could build an empty literal to satisfy it and assign the fields
+// afterwards. If Credentials, Dial and OpenStore do not appear in cmd/hapax at
+// all, in any form, they cannot be populated by any route.
+func TestTheBinaryNeverNamesAProviderCredentialOrStore(t *testing.T) {
 	set := token.NewFileSet()
 	packages, err := parser.ParseDir(set, "../../cmd/hapax", func(info fs.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
@@ -108,35 +108,21 @@ func TestTheBinaryWiresNoProviderAndNoCredential(t *testing.T) {
 		t.Fatalf("parsing cmd/hapax: %v", err)
 	}
 	forbidden := map[string]bool{"Credentials": true, "Dial": true, "OpenStore": true}
-	literals := 0
+	scanned := 0
 	for _, pkg := range packages {
 		for name, file := range pkg.Files {
+			scanned++
 			ast.Inspect(file, func(n ast.Node) bool {
-				literal, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				selector, ok := literal.Type.(*ast.SelectorExpr)
-				if !ok || selector.Sel.Name != "Deps" {
-					return true
-				}
-				literals++
-				for _, element := range literal.Elts {
-					pair, ok := element.(*ast.KeyValueExpr)
-					if !ok {
-						t.Errorf("%s builds Deps positionally; every field must be named", name)
-						continue
-					}
-					key, ok := pair.Key.(*ast.Ident)
-					if ok && forbidden[key.Name] {
-						t.Errorf("%s wires %s, which no A1 command may reach", name, key.Name)
-					}
+				ident, ok := n.(*ast.Ident)
+				if ok && forbidden[ident.Name] {
+					t.Errorf("%s names %s; no A1 command is served by one, so the binary "+
+						"must not be able to populate it by any route", name, ident.Name)
 				}
 				return true
 			})
 		}
 	}
-	if literals == 0 {
-		t.Fatal("no cli.Deps literal was found in cmd/hapax; this guard is vacuous")
+	if scanned == 0 {
+		t.Fatal("no non-test source was scanned in cmd/hapax; this guard is vacuous")
 	}
 }
