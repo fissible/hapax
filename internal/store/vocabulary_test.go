@@ -1,6 +1,7 @@
 package store_test
 
 import (
+	"context"
 	"database/sql"
 	"errors"
 	"fmt"
@@ -88,15 +89,16 @@ func enumUpdate(table, column, value string) string {
 func TestEveryDeclaredEnumValueIsAcceptedByTheSchema(t *testing.T) {
 	for qualified, values := range declaredVocabularies() {
 		table, column, _ := strings.Cut(qualified, ".")
-		for _, value := range values {
-			t.Run(qualified+"="+value, func(t *testing.T) {
-				s := newStore(t)
-				seedEveryArtifact(t, s)
-				if _, err := openRaw(t, s).Exec(enumUpdate(table, column, value)); err != nil {
-					t.Errorf("refused a declared value: %v", err)
-				}
-			})
-		}
+		t.Run(qualified, func(t *testing.T) {
+			raw := seededRaw(t)
+			for _, value := range values {
+				t.Run(value, func(t *testing.T) {
+					if err := attempt(t, raw, enumUpdate(table, column, value)); err != nil {
+						t.Errorf("refused a declared value: %v", err)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -124,15 +126,16 @@ func TestTheSchemaRefusesEveryForeignEnumValue(t *testing.T) {
 				}
 			}
 		}
-		for _, probe := range probes {
-			t.Run(qualified+"="+probe, func(t *testing.T) {
-				s := newStore(t)
-				seedEveryArtifact(t, s)
-				if _, err := openRaw(t, s).Exec(enumUpdate(table, column, probe)); err == nil {
-					t.Errorf("accepted %q", probe)
-				}
-			})
-		}
+		t.Run(qualified, func(t *testing.T) {
+			raw := seededRaw(t)
+			for _, probe := range probes {
+				t.Run(probe, func(t *testing.T) {
+					if attempt(t, raw, enumUpdate(table, column, probe)) == nil {
+						t.Errorf("accepted %q", probe)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -267,24 +270,24 @@ func TestEveryDeclaredGrammarIsEnforcedByTheDatabase(t *testing.T) {
 			continue
 		}
 		table, column, _ := strings.Cut(qualified, ".")
-		for _, probe := range probes {
-			t.Run(qualified+"/"+probe, func(t *testing.T) {
-				s := newStore(t)
-				seedEveryArtifact(t, s)
-				raw := openRaw(t, s)
-				if rowsIn(t, raw, table) == 0 {
-					t.Fatalf("%s has no row to damage; the probe would be vacuous", table)
-				}
-				// Exactly one row, chosen deterministically: updating every row
-				// of a keyed column collides on the primary key, which would
-				// pass the case for a reason that is not the grammar.
-				_, err := raw.Exec(
-					"UPDATE "+table+" SET "+column+" = ? WHERE rowid = (SELECT min(rowid) FROM "+table+")", probe)
-				if err == nil {
-					t.Errorf("accepted %q", probe)
-				}
-			})
-		}
+		t.Run(qualified, func(t *testing.T) {
+			raw := seededRaw(t)
+			if rowsIn(t, raw, table) == 0 {
+				t.Fatalf("%s has no row to damage; every probe would be vacuous", table)
+			}
+			for _, probe := range probes {
+				t.Run(probe, func(t *testing.T) {
+					// Exactly one row, chosen deterministically: updating every
+					// row of a keyed column collides on the primary key, which
+					// would pass the case for a reason that is not the grammar.
+					if attempt(t, raw,
+						"UPDATE "+table+" SET "+column+" = ? WHERE rowid = (SELECT min(rowid) FROM "+table+")",
+						probe) == nil {
+						t.Errorf("accepted %q", probe)
+					}
+				})
+			}
+		})
 	}
 }
 
@@ -484,4 +487,28 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			}
 		})
 	}
+}
+
+// seededRaw is one seeded database, opened raw, shared by every probe in a
+// case. Building one per probe meant 714 migrations and 714 seeds for the
+// vocabulary tests alone, which took the -race suite past four minutes on CI.
+func seededRaw(t *testing.T) *sql.DB {
+	t.Helper()
+	s := newStore(t)
+	seedEveryArtifact(t, s)
+	return openRaw(t, s)
+}
+
+// attempt runs one damaging statement inside a transaction that is ALWAYS
+// rolled back, so sharing a database between probes cannot let one probe's
+// write — including one that wrongly succeeded — reach the next.
+func attempt(t *testing.T, db *sql.DB, statement string, arguments ...any) error {
+	t.Helper()
+	tx, err := db.BeginTx(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("begin: %v", err)
+	}
+	defer tx.Rollback()
+	_, err = tx.ExecContext(context.Background(), statement, arguments...)
+	return err
 }
