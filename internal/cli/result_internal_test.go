@@ -2,7 +2,6 @@ package cli
 
 import (
 	"reflect"
-	"sort"
 	"testing"
 
 	"github.com/fissible/hapax/internal/tells"
@@ -14,17 +13,20 @@ import (
 // ordering at this layer would differ from the library exactly in the
 // shared-offset unequal-length case — the one place anyone would notice.
 func TestFindingsKeepTheOrderTellsProduced(t *testing.T) {
+	// Deliberately NOT in the order tells would produce. A converter that
+	// re-sorted into the same ordering would be indistinguishable from one that
+	// passes through, if the input were already canonical.
 	report := tells.Report{Findings: []tells.Finding{
-		{RuleID: "zzz-short", Span: text.Span{Offset: 4, Length: 2},
+		{RuleID: "mmm-later", Span: text.Span{Offset: 20, Length: 2},
 			Severity: "warn", Provenance: "unvalidated", Category: "formatting"},
 		{RuleID: "aaa-long", Span: text.Span{Offset: 4, Length: 9},
 			Severity: "warn", Provenance: "unvalidated", Category: "formatting"},
-		{RuleID: "mmm-later", Span: text.Span{Offset: 20, Length: 2},
+		{RuleID: "zzz-short", Span: text.Span{Offset: 4, Length: 2},
 			Severity: "warn", Provenance: "unvalidated", Category: "formatting"},
 	}}
 
 	got := tellsResultFrom("draft.md", report)
-	want := []string{"zzz-short", "aaa-long", "mmm-later"}
+	want := []string{"mmm-later", "aaa-long", "zzz-short"}
 	rules := make([]string, len(got.Findings))
 	for i, finding := range got.Findings {
 		rules[i] = finding.Rule
@@ -70,73 +72,38 @@ func TestNoFindingsIsAnEmptyList(t *testing.T) {
 	}
 }
 
-// Every vocabulary field on EVERY finding comes from the owning package's
-// declared set, checked per finding rather than in aggregate, so one stray
-// value cannot hide behind the others.
-func TestEveryFindingCarriesDeclaredVocabulary(t *testing.T) {
+// Every field is carried across, not merely a plausible value produced. A
+// converter that hard-coded "warn" would satisfy a membership check.
+func TestEveryFieldOfAFindingIsCarriedAcross(t *testing.T) {
 	report := tells.Report{
 		Screening: tells.ScreeningFlagged,
+		Truncated: true,
 		Findings: []tells.Finding{
-			{RuleID: "one", Span: text.Span{Offset: 0, Length: 2},
-				Severity: "warn", Provenance: "unvalidated", Category: "formatting"},
+			{RuleID: "double-space", Span: text.Span{Offset: 17, Length: 5},
+				Severity: "error", Provenance: "validated", Category: "lexis",
+				Reason: "a rule-authored explanation"},
+		},
+		Suppressed: []tells.Finding{
+			{RuleID: "other", Span: text.Span{Offset: 1, Length: 1}},
 		},
 	}
+
 	got := tellsResultFrom("draft.md", report)
-
-	if !inSet(got.Screening, stringsOfScreenings()) {
-		t.Errorf("screening %q is not a declared value", got.Screening)
+	if got.Screening != string(tells.ScreeningFlagged) {
+		t.Errorf("screening = %q, want %q", got.Screening, tells.ScreeningFlagged)
 	}
-	for i, finding := range got.Findings {
-		if !inSet(finding.Severity, stringsOf(tells.Severities())) {
-			t.Errorf("finding %d severity %q is not declared", i, finding.Severity)
-		}
-		if !inSet(finding.Provenance, stringsOf(tells.Provenances())) {
-			t.Errorf("finding %d provenance %q is not declared", i, finding.Provenance)
-		}
-		if !inSet(finding.Category, stringsOf(tells.Categories())) {
-			t.Errorf("finding %d category %q is not declared", i, finding.Category)
-		}
+	if !got.Truncated {
+		t.Error("truncated was not carried across")
 	}
-}
-
-// And the vocabularies cli accepts are exactly the ones tells declares, so the
-// two cannot drift apart without this failing.
-func TestTheAcceptedVocabulariesAreTellsOwn(t *testing.T) {
-	for name, pair := range map[string][2][]string{
-		"screening":  {acceptedScreenings(), stringsOfScreenings()},
-		"severity":   {acceptedSeverities(), stringsOf(tells.Severities())},
-		"provenance": {acceptedProvenances(), stringsOf(tells.Provenances())},
-		"category":   {acceptedCategories(), stringsOf(tells.Categories())},
-	} {
-		if !reflect.DeepEqual(sorted(pair[0]), sorted(pair[1])) {
-			t.Errorf("%s: cli accepts %v, tells declares %v", name, sorted(pair[0]), sorted(pair[1]))
-		}
+	if got.Suppressed != len(report.Suppressed) {
+		t.Errorf("suppressed = %d, want %d", got.Suppressed, len(report.Suppressed))
 	}
-}
-
-// ---------------------------------------------------------------------------
-
-func stringsOf[T ~string](values []T) []string {
-	out := make([]string, len(values))
-	for i, value := range values {
-		out[i] = string(value)
+	want := TellsFinding{
+		Rule: "double-space", Category: "lexis", Provenance: "validated",
+		Severity: "error", Reason: "a rule-authored explanation",
+		Offset: 17, Length: 5,
 	}
-	return out
-}
-
-func stringsOfScreenings() []string { return stringsOf(tells.Screenings()) }
-
-func inSet(value string, set []string) bool {
-	for _, member := range set {
-		if value == member {
-			return true
-		}
+	if len(got.Findings) != 1 || got.Findings[0] != want {
+		t.Errorf("finding =\n%+v\nwant\n%+v", got.Findings, want)
 	}
-	return false
-}
-
-func sorted(values []string) []string {
-	out := append([]string(nil), values...)
-	sort.Strings(out)
-	return out
 }

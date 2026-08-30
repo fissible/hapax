@@ -16,7 +16,7 @@ func essays() *string { s := "essays"; return &s }
 func okDocument() cli.Document {
 	return cli.Document{
 		Schema: cli.Schema, Command: "tells", Status: cli.StatusOK,
-		Result: cli.TellsResult{Path: "draft.md", Screening: "not-run", Findings: []cli.TellsFinding{}},
+		Result: cli.TellsResult{Path: "draft.md", Screening: "indeterminate", Findings: []cli.TellsFinding{}},
 	}
 }
 
@@ -177,5 +177,43 @@ func TestJSONIsOneNewlineTerminatedLine(t *testing.T) {
 	rendered := render(t, okDocument(), true)
 	if strings.Count(rendered, "\n") != 1 || !strings.HasSuffix(rendered, "\n") {
 		t.Errorf("rendered %q, want exactly one trailing newline", rendered)
+	}
+}
+
+// The vocabularies a result may carry are the OWNING package's. Render checks
+// them, so cli cannot hold a second copy that drifts — there is nothing to
+// compare, which is better than a test that compares two lists.
+func TestRenderRefusesAResultOutsideTellsVocabularies(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		alter func(*cli.TellsResult)
+	}{
+		{"an undeclared screening", func(r *cli.TellsResult) { r.Screening = "half-run" }},
+		{"an undeclared severity", func(r *cli.TellsResult) { r.Findings[0].Severity = "catastrophic" }},
+		{"an undeclared provenance", func(r *cli.TellsResult) { r.Findings[0].Provenance = "hearsay" }},
+		{"an undeclared category", func(r *cli.TellsResult) { r.Findings[0].Category = "vibes" }},
+		{"a count that is not the findings", func(r *cli.TellsResult) { r.Count = 7 }},
+		{"a negative suppressed count", func(r *cli.TellsResult) { r.Suppressed = -1 }},
+		{"a negative offset", func(r *cli.TellsResult) { r.Findings[0].Offset = -1 }},
+		{"a zero length", func(r *cli.TellsResult) { r.Findings[0].Length = 0 }},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			result := cli.TellsResult{
+				Path: "draft.md", Screening: "indeterminate", Count: 1,
+				Findings: []cli.TellsFinding{{
+					Rule: "double-space", Category: "formatting", Provenance: "unvalidated",
+					Severity: "warn", Offset: 4, Length: 2,
+				}},
+			}
+			c.alter(&result)
+			doc := okDocument()
+			doc.Result = result
+			for _, asJSON := range []bool{true, false} {
+				var out bytes.Buffer
+				if err := doc.Render(&out, asJSON); err == nil {
+					t.Errorf("json=%v: rendered %q", asJSON, out.String())
+				}
+			}
+		})
 	}
 }

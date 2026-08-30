@@ -6,6 +6,8 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -107,17 +109,63 @@ func TestTellsExitsOneWhenSomethingIsFlagged(t *testing.T) {
 	}
 }
 
-// A finding is what makes it adverse. tells is a linter, and a linter that
-// found nothing has nothing adverse to say.
-func TestAdversityIsExactlyHavingAFinding(t *testing.T) {
+// The document Run emits is the CONVERTED report, field for field. Without
+// this, a skeletal {"status":"adverse","result":{"count":1}} satisfies every
+// other integration test here while path, screening, spans and vocabularies
+// are all broken.
+func TestRunEmitsTheConvertedReport(t *testing.T) {
+	path := draft(t, adverse)
 	h := newHarness(t, nil)
-	h.run("tells", draft(t, adverse))
-	result, ok := h.document(t)["result"].(map[string]any)
-	if !ok {
-		t.Fatal("no result object")
+	if code := h.run("tells", "--json", path); code != 1 {
+		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
 	}
-	if count, ok := result["count"].(float64); !ok || count < 1 {
-		t.Errorf("count = %v, want at least one finding", result["count"])
+
+	var got struct {
+		Schema, Command, Status, Reason string
+		Profile                         *string
+		Result                          cli.TellsResult
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
+		t.Fatalf("unmarshal %q: %v", h.Stdout.String(), err)
+	}
+	if got.Schema != cli.Schema || got.Command != "tells" || got.Status != "adverse" ||
+		got.Reason != "" || got.Profile != nil {
+		t.Errorf("envelope = %+v", got)
+	}
+	// Measured against tells directly: the double-space rule matches at byte 16.
+	want := cli.TellsResult{
+		Path: path, Screening: "indeterminate", Count: 1,
+		Findings: []cli.TellsFinding{{
+			Rule: "double-space", Category: "formatting", Provenance: "unvalidated",
+			Severity: "warn", Offset: 16, Length: 2,
+		}},
+	}
+	if !reflect.DeepEqual(got.Result, want) {
+		t.Errorf("result =\n%+v\nwant\n%+v", got.Result, want)
+	}
+}
+
+// And a clean draft emits a complete document with an EMPTY findings list, not
+// a null one and not an absent result.
+func TestRunEmitsACompleteDocumentForACleanDraft(t *testing.T) {
+	path := draft(t, clean)
+	h := newHarness(t, nil)
+	if code := h.run("tells", "--json", path); code != 0 {
+		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
+	}
+	var got struct {
+		Status string
+		Result cli.TellsResult
+	}
+	if err := json.Unmarshal([]byte(h.Stdout.String()), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	want := cli.TellsResult{Path: path, Screening: "indeterminate", Count: 0, Findings: []cli.TellsFinding{}}
+	if got.Status != "ok" || !reflect.DeepEqual(got.Result, want) {
+		t.Errorf("status %q result\n%+v\nwant ok and\n%+v", got.Status, got.Result, want)
+	}
+	if !strings.Contains(h.Stdout.String(), `"findings":[]`) {
+		t.Errorf("findings is not an empty list: %s", h.Stdout.String())
 	}
 }
 
@@ -136,6 +184,8 @@ func TestInvalidInvocationsExitTwo(t *testing.T) {
 		{"two operands", []string{"tells", "a.md", "b.md"}},
 		{"a stdin dash", []string{"tells", "-"}},
 		{"nothing after the delimiter", []string{"tells", "--"}},
+		{"an equals form on local-only", []string{"tells", "--local-only=1", "draft.md"}},
+		{"an equals form with no value", []string{"tells", "--json=", "draft.md"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, nil)
@@ -145,9 +195,7 @@ func TestInvalidInvocationsExitTwo(t *testing.T) {
 			if h.Stdout.Len() != 0 {
 				t.Errorf("stdout = %q, want nothing", h.Stdout.String())
 			}
-			if h.Stderr.Len() == 0 {
-				t.Error("no diagnostic on stderr")
-			}
+			requireOneDiagnostic(t, h.Stderr.String())
 		})
 	}
 }
@@ -160,6 +208,7 @@ func TestAnUnreadableDraftExitsThree(t *testing.T) {
 	if h.Stdout.Len() != 0 {
 		t.Errorf("stdout = %q, want nothing", h.Stdout.String())
 	}
+	requireOneDiagnostic(t, h.Stderr.String())
 }
 
 // The file was read; it simply is not a document. Not an invalid invocation,
@@ -170,7 +219,9 @@ func TestADraftThatWillNotAdmitExitsThree(t *testing.T) {
 	if code := h.run("tells", draft(t, "Prose interrupted by \xff\xfe invalid bytes.\n")); code != 3 {
 		t.Errorf("exit = %d, want 3", code)
 	}
-	if !strings.Contains(h.Stderr.String(), "21") {
+	requireOneDiagnostic(t, h.Stderr.String())
+	// A bare "21" would be satisfied by 121, a path, or unrelated prose.
+	if !strings.Contains(h.Stderr.String(), "byte offset 21") {
 		t.Errorf("the diagnostic does not name the byte offset: %q", h.Stderr.String())
 	}
 }
@@ -205,6 +256,7 @@ func TestFlagsMayAppearAnywhereBeforeTheDelimiter(t *testing.T) {
 		{"tells", path, "--json"},
 		{"--json", "--local-only", "tells", path},
 		{"tells", "--json", "--json", path},
+		{"tells", "--local-only", "--local-only", "--json", path},
 	} {
 		h := newHarness(t, nil)
 		if code := h.run(args...); code != 0 {
@@ -229,7 +281,7 @@ func TestTheDelimiterEndsFlagsAndNothingElse(t *testing.T) {
 			t.Errorf("exit = %d, want 0; stderr %q", code, h.Stderr.String())
 		}
 	})
-	for _, operand := range []string{"--json", "-j", "--local-only"} {
+	for _, operand := range []string{"--json", "-j", "--local-only", "-"} {
 		t.Run("a file named "+operand, func(t *testing.T) {
 			// It is one operand, and it does not exist, so this reaches exit 3
 			// rather than being parsed as a flag and reaching exit 2.
@@ -300,19 +352,18 @@ func TestTheOfflineCommandTouchesNothingItDoesNotNeed(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // One line, always. A filename is caller-controlled, so a name carrying a
-// newline must not become two diagnostics, and a quote must not end the
-// quoting early.
-func TestADiagnosticIsOneLineWhateverTheFilenameContains(t *testing.T) {
+// newline must not become two diagnostics, and every dynamic value is rendered
+// with %q so the exact quoted form is what reaches the stream.
+func TestADiagnosticIsOneEscapedLineWhateverTheFilenameContains(t *testing.T) {
 	for _, name := range []string{"two\nlines.md", `quo"te.md`, "tab\there.md"} {
-		t.Run(strings.ReplaceAll(name, "\n", "\\n"), func(t *testing.T) {
+		t.Run(strconv.Quote(name), func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), name)
 			h := newHarness(t, nil)
-			h.run("tells", filepath.Join(t.TempDir(), name))
+			h.run("tells", path)
 			diagnostic := h.Stderr.String()
-			if strings.Count(strings.TrimSuffix(diagnostic, "\n"), "\n") != 0 {
-				t.Errorf("the diagnostic spans lines: %q", diagnostic)
-			}
-			if strings.Contains(diagnostic, "\n"+name) || strings.Contains(diagnostic, "\t") {
-				t.Errorf("a dynamic value was not escaped: %q", diagnostic)
+			requireOneDiagnostic(t, diagnostic)
+			if !strings.Contains(diagnostic, strconv.Quote(path)) {
+				t.Errorf("the diagnostic does not carry %s: %q", strconv.Quote(path), diagnostic)
 			}
 		})
 	}
@@ -331,5 +382,32 @@ func TestTheUnknownCommandDiagnosticPromisesNothing(t *testing.T) {
 		if strings.Contains(diagnostic, unimplemented) && unimplemented != "score" {
 			t.Errorf("the diagnostic offers %q, which is not implemented: %q", unimplemented, diagnostic)
 		}
+	}
+}
+
+// Every path that fails writes exactly one escaped line to stderr. Asserted in
+// one place so a new failure path cannot quietly write nothing, or two lines.
+func requireOneDiagnostic(t *testing.T, diagnostic string) {
+	t.Helper()
+	if diagnostic == "" {
+		t.Fatal("no diagnostic on stderr")
+	}
+	if !strings.HasSuffix(diagnostic, "\n") {
+		t.Errorf("the diagnostic is not newline-terminated: %q", diagnostic)
+	}
+	if strings.Count(diagnostic, "\n") != 1 {
+		t.Errorf("the diagnostic is %d lines, want one: %q", strings.Count(diagnostic, "\n"), diagnostic)
+	}
+}
+
+// HAPAX_LOCAL_ONLY=1 on a command that succeeds, not only the flag on one that
+// fails: the environment path has to reach the same place the flag does.
+func TestTheEnvironmentSelectsLocalOnlyOnASuccessfulRun(t *testing.T) {
+	h := newHarness(t, map[string]string{"HAPAX_LOCAL_ONLY": "1"})
+	if code := h.run("tells", draft(t, clean)); code != 0 {
+		t.Fatalf("exit = %d, stderr %q", code, h.Stderr.String())
+	}
+	if got := h.document(t)["status"]; got != "ok" {
+		t.Errorf("status = %v, want ok", got)
 	}
 }
