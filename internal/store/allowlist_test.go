@@ -41,6 +41,7 @@ var declaredSchema = map[string][]string{
 	"profile": {
 		"id", "snapshot_id", "register", "unit", "variance_convention",
 		"manifest_digest", "feature_set_version", "min_paragraph_lexical_tokens",
+		"production_ready", "not_ready_reason",
 	},
 	"profile_stat": {
 		"profile_id", "feature", "n", "mean", "variance",
@@ -398,7 +399,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"node":            {"node_id", "document_id", "kind", "role", "exclusion", "offset", "length", "ordinal"},
 			"feature_vector":  {"node_id", "manifest_digest", "set_version", "tokens", "lexical_tokens"},
 			"feature_value":   {"node_id", "manifest_digest", "feature"},
-			"profile":         {"id", "snapshot_id", "register", "unit", "variance_convention", "manifest_digest", "feature_set_version", "min_paragraph_lexical_tokens"},
+			"profile":         {"id", "snapshot_id", "register", "unit", "variance_convention", "manifest_digest", "feature_set_version", "min_paragraph_lexical_tokens", "production_ready", "not_ready_reason"},
 			"profile_stat":    {"profile_id", "feature", "n", "min_observations"},
 			"profile_head":    {"register", "profile_id"},
 			"reference":       {"id", "profile_id", "split", "manifest_digest", "min_segments"},

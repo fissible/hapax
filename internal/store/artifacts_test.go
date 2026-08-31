@@ -1000,7 +1000,8 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 		// A slice, not a map: these structs hold slices, so they cannot be keys.
 		{store.Profile{}, []string{
 			"ID", "SnapshotID", "Register", "Unit", "VarianceConvention",
-			"ManifestDigest", "FeatureSetVersion", "MinParagraphLexicalTokens", "Stats",
+			"ManifestDigest", "FeatureSetVersion", "MinParagraphLexicalTokens",
+			"ProductionReady", "NotReadyReason", "Stats",
 		}},
 		{store.ProfileStat{}, []string{
 			"Feature", "N", "Mean", "Variance", "Defined", "VarianceDefined", "MinObservations",
@@ -1066,7 +1067,7 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 func TestEveryTypeAPersistenceStructReachesIsPermitted(t *testing.T) {
 	permitted := map[string]bool{
 		"features.ID": true, "features.Vector": true, "features.FeatureValue": true,
-		"corpus.Split": true, "corpus.Admission": true,
+		"corpus.Split": true, "corpus.Admission": true, "corpus.CheckState": true,
 		"text.Kind": true, "text.Role": true, "text.ContainerKind": true,
 		"text.ExclusionReason": true,
 		"profile.Unit":         true, "profile.VarianceConvention": true,

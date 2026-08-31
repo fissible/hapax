@@ -63,7 +63,7 @@ func seamDocument(t *testing.T, root, path string, spans ...text.Span) Document 
 	return Document{
 		Path: path, ContentHash: identity.HashBytes(seamAdmitted(t, seamBody)),
 		Register: "essays", Split: corpus.Train, Admission: corpus.Eligible,
-		Language: "en", Nodes: nodes,
+		Language: corpus.CheckNotPerformed, Nodes: nodes,
 	}
 }
 

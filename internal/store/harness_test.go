@@ -77,7 +77,7 @@ func node(ordinal int, offset, length int) store.Node {
 func document(path, hash string, nodes ...store.Node) store.Document {
 	return store.Document{
 		Path: path, ContentHash: hash, Register: "essays",
-		Split: corpus.Train, Admission: corpus.Eligible, Language: "en",
+		Split: corpus.Train, Admission: corpus.Eligible, Language: corpus.CheckNotPerformed,
 		Nodes: nodes,
 	}
 }
@@ -157,7 +157,7 @@ func concurrentWrite() store.SnapshotWrite {
 	policy := identity.HashInputs(map[string]string{"policy": "concurrent"})
 	documents := []store.Document{{
 		Path: "essays/a.md", ContentHash: hashA, Register: "essays",
-		Split: corpus.Train, Admission: corpus.Eligible, Language: "en",
+		Split: corpus.Train, Admission: corpus.Eligible, Language: corpus.CheckNotPerformed,
 		Nodes: []store.Node{{
 			Ordinal: 0, Kind: text.KindLeaf, Role: text.RoleParagraph,
 			Containers: []text.ContainerKind{text.ContainerDocument},

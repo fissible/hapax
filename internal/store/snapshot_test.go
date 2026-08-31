@@ -455,7 +455,9 @@ func TestTheRemainingTextualColumnsHaveGrammars(t *testing.T) {
 	}{
 		{"a policy digest that is not hex", func(w *store.SnapshotWrite) { w.PolicyDigest = "policy" }},
 		{"an unknown admission", func(w *store.SnapshotWrite) { w.Documents[0].Admission = "maybe" }},
-		{"a language that is not a tag", func(w *store.SnapshotWrite) { w.Documents[0].Language = "English, mostly" }},
+		// A TAG is now the refused value: the column holds the verdict corpus
+		// produces, and corpus performs no language detection.
+		{"a language tag rather than a verdict", func(w *store.SnapshotWrite) { w.Documents[0].Language = "en" }},
 		{"an unknown exclusion", func(w *store.SnapshotWrite) { w.Documents[0].Nodes[0].Exclusion = "felt wrong" }},
 		{"a feature set version that is not the manifest's", func(w *store.SnapshotWrite) {
 			w.Documents[0].Nodes[0].Vector = &features.Vector{SetVersion: features.SetVersion + 1, Values: vectorValues()}
