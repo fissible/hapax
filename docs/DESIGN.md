@@ -2244,6 +2244,11 @@ ID, not a tampered component ID, and claiming otherwise would repeat the mistake
 paragraph exists to correct. Enforced on read, because each is something a tampered row could
 contradict and `Band` consults every one of them:
 
+- `Discriminates` equals `LowerBound ≥ Floor`, and the discrimination reason is empty exactly
+  when it discriminates and `lower-bound-below-floor` otherwise. This one was missing from the
+  first draft of the list and codex found it by enforcing it: it is the discrimination-side
+  mirror of the rule below, and a row claiming otherwise ships a release on evidence that
+  never reached the floor
 - `Calibrated` equals `in-range.Emitted || not-you.Emitted`, and the calibration reason is
   empty exactly when calibrated and `no-claiming-band-emitted` otherwise
 - for each claiming report, `Emitted` equals `ErrorBound ≤ Target`, with `Target` in `(0,1)` —

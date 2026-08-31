@@ -748,6 +748,70 @@ func releaseFor(t *testing.T, s *store.Store) store.EvalResult {
 	return evalResultFixture(prof.ID, ref.ID)
 }
 
+// setDiscriminates moves the discrimination gate between passing and failing,
+// keeping the bound-versus-floor relation that decides it.
+func setDiscriminates(gate *store.Discrimination, discriminates bool) {
+	gate.Discriminates = discriminates
+	if discriminates {
+		gate.LowerBound, gate.Reason = gate.Floor+0.06, ""
+	} else {
+		gate.LowerBound, gate.Reason = gate.Floor-0.05, "lower-bound-below-floor"
+	}
+}
+
+// The discrimination gate's verdict is its lower bound against its floor, the
+// same way the calibration's is its band reports. A row claiming otherwise
+// would ship a release on evidence that did not reach the floor.
+func TestDiscriminationIsItsLowerBoundAgainstItsFloor(t *testing.T) {
+	for _, c := range []struct {
+		name          string
+		bound, floor  float64
+		discriminates bool
+		reason        string
+		acceptable    bool
+	}{
+		{"above the floor", 0.71, 0.65, true, "", true},
+		{"exactly at the floor", 0.65, 0.65, true, "", true},
+		{"below the floor", 0.60, 0.65, false, "lower-bound-below-floor", true},
+		{"below the floor yet discriminating", 0.60, 0.65, true, "", false},
+		{"above the floor yet not", 0.71, 0.65, false, "lower-bound-below-floor", false},
+		{"discriminating with a reason", 0.71, 0.65, true, "lower-bound-below-floor", false},
+		{"failing with no reason", 0.60, 0.65, false, "", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			release.Discrimination.LowerBound = c.bound
+			release.Discrimination.Floor = c.floor
+			release.Discrimination.Discriminates = c.discriminates
+			release.Discrimination.Reason = c.reason
+			release.Shippable = c.discriminates && release.Calibration.Calibrated
+			if !release.Shippable {
+				release.Reason = eval.ReleaseReasonDiscriminationFailed
+			}
+			err := s.PutEvalResult(ctx(), release, store.LeaveHead)
+			if c.acceptable && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.acceptable && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// And on the way out.
+func TestAStoredDiscriminationThatContradictsItsFloorIsCorrupt(t *testing.T) {
+	s := newStore(t)
+	_, _, release := seededRelease(t, s)
+	if _, err := openRaw(t, s).Exec("UPDATE eval_result SET discrimination_floor = 0.95"); err != nil {
+		t.Fatalf("damaging: %v", err)
+	}
+	if _, err := s.LoadEvalResult(ctx(), release.ID); !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
+
 // setEmitted moves a claiming report between emitted and not, keeping the
 // bound-versus-target relation that decides it.
 func setEmitted(report *store.BandReport, emitted bool) {

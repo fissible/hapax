@@ -1317,7 +1317,10 @@ func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
 			mustPutReference(t, s, ref)
 			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
-			result.Discrimination.Discriminates = c.discriminates
+			// Discrimination is DERIVED too — LowerBound against the floor —
+			// so its bound and reason move with the flag for the same reason
+			// the band reports move with Calibrated.
+			setDiscriminates(&result.Discrimination, c.discriminates)
 			// Calibration is DERIVED from whether a claiming band was emitted,
 			// so moving the flag alone would contradict the reports beside it
 			// and refuse for a reason this test is not about.
