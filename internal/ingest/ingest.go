@@ -3,8 +3,6 @@ package ingest
 
 import (
 	"fmt"
-	"os"
-	"reflect"
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
@@ -16,12 +14,11 @@ import (
 )
 
 type deps struct {
-	ReadFile  func(string) ([]byte, error)
-	Structure func(*text.Document) *text.Node
+	BuildTree func(*text.Document) *text.Node
 }
 
 func realDeps() deps {
-	return deps{ReadFile: os.ReadFile, Structure: func(d *text.Document) *text.Node { return d.Structure(text.DefaultStructureOptions()) }}
+	return deps{BuildTree: func(d *text.Document) *text.Node { return d.Structure(text.DefaultStructureOptions()) }}
 }
 
 func Snapshot(root string, snap *corpus.Snapshot) (store.SnapshotWrite, error) {
@@ -35,11 +32,11 @@ func snapshotWith(root string, snap *corpus.Snapshot, d deps) (store.SnapshotWri
 	for _, source := range snap.Documents {
 		doc := store.Document{Path: source.Path, ContentHash: source.ContentHash, Register: source.Register, Split: source.Split, Admission: source.Admission, Language: source.Language.State}
 		if source.Admission == corpus.Eligible {
-			admitted, err := readVerified(root, source, d)
+			admitted, err := readVerified(root, source)
 			if err != nil {
 				return store.SnapshotWrite{}, err
 			}
-			rootNode := structure(d, admitted)
+			rootNode := d.BuildTree(admitted)
 			leaves, _, err := profile.ParagraphLeaves(admitted, rootNode, profile.DefaultRequirements().MinParagraphLexicalTokens)
 			if err != nil {
 				return store.SnapshotWrite{}, err
@@ -66,14 +63,8 @@ func snapshotWith(root string, snap *corpus.Snapshot, d deps) (store.SnapshotWri
 	w.ID = identity.HashInputs(map[string]string{"policy": w.PolicyDigest, "documents": string(identity.Frame(members...))})
 	return w, nil
 }
-func readVerified(root string, document corpus.Document, d deps) (*text.Document, error) {
-	// Read through snapshot first so a caller cannot persist a graph for bytes
-	// different from the snapshot. The seam read is deliberately retained for tests.
-	_ = d.ReadFile
+func readVerified(root string, document corpus.Document) (*text.Document, error) {
 	return snapshot.ReadVerified(root, document.Path, document.ContentHash)
-}
-func structure(d deps, doc *text.Document) *text.Node {
-	return reflect.ValueOf(d).FieldByName("Structure").Interface().(func(*text.Document) *text.Node)(doc)
 }
 
 func CalibrateStandardizations(root string, snap *corpus.Snapshot, p *profile.Profile) ([]deviation.Standardization, error) {
@@ -88,11 +79,11 @@ func calibrateStandardizationsWith(root string, snap *corpus.Snapshot, p *profil
 		if source.Split != corpus.Calibrate {
 			continue
 		}
-		admitted, err := readVerified(root, source, d)
+		admitted, err := readVerified(root, source)
 		if err != nil {
 			return nil, err
 		}
-		leaves, _, err := profile.ParagraphLeaves(admitted, structure(d, admitted), p.Requirements.MinParagraphLexicalTokens)
+		leaves, _, err := profile.ParagraphLeaves(admitted, d.BuildTree(admitted), p.Requirements.MinParagraphLexicalTokens)
 		if err != nil {
 			return nil, err
 		}
