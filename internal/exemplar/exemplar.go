@@ -101,9 +101,27 @@ type stratum struct {
 }
 
 // Select produces exactly cfg.N representative leaves or refuses the pool.
-func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selection, error) {
-	if prof == nil {
+func Select(fitted profile.Fitted, candidates []Candidate, cfg Config) (Selection, error) {
+	if fitted.ID == "" {
 		return Selection{}, fmt.Errorf("select: %w", ErrMissingInput)
+	}
+	if fitted.Unit != profile.UnitParagraph || fitted.FeatureSetVersion != features.SetVersion || fitted.FeatureManifestDigest != features.ManifestDigest() {
+		return Selection{}, fmt.Errorf("select: %w", ErrManifestMismatch)
+	}
+	stats := make(map[features.ID]bool, len(fitted.Stats))
+	for _, stat := range fitted.Stats {
+		if stats[stat.Feature] {
+			return Selection{}, fmt.Errorf("select: %w", ErrManifestMismatch)
+		}
+		stats[stat.Feature] = true
+	}
+	if len(stats) != len(features.Definitions()) {
+		return Selection{}, fmt.Errorf("select: %w", ErrManifestMismatch)
+	}
+	for _, definition := range features.Definitions() {
+		if !stats[definition.ID] {
+			return Selection{}, fmt.Errorf("select: %w", ErrManifestMismatch)
+		}
 	}
 	if cfg.N <= 0 {
 		return Selection{}, fmt.Errorf("select: %w", ErrInvalidConfig)
@@ -111,11 +129,6 @@ func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selectio
 	if len(candidates) < max(30, 10*cfg.N) {
 		return Selection{}, fmt.Errorf("select: %w: have %d need %d", ErrPopulationTooSmall, len(candidates), max(30, 10*cfg.N))
 	}
-	fitted, err := prof.Fitted()
-	if err != nil {
-		return Selection{}, fmt.Errorf("select: %w", err)
-	}
-
 	items := make([]item, len(candidates))
 	for i, candidate := range candidates {
 		if candidate.Split != corpus.Train {
@@ -328,7 +341,7 @@ func Select(prof *profile.Profile, candidates []Candidate, cfg Config) (Selectio
 	}
 	selectionID := identity.HashBytes(identity.Frame(selectedIDs...))
 	certificate := Certificate{SelectionID: selectionID, K: k, Population: population, Eligible: eligible, Density: rows, Strata: assignments, Medoids: medoids, Ties: ties, Config: cfg}
-	certificate.ID = certificateID(certificate, prof.ID)
+	certificate.ID = certificateID(certificate, fitted.ID)
 	return Selection{ID: selectionID, Exemplars: exemplars, Certificate: certificate}, nil
 }
 

@@ -99,7 +99,7 @@ var declaredSchema = map[string][]string{
 		"current_band", "candidate_band", "preserved", "tells_comparison",
 		"tells_comparable", "accepted", "rejection",
 	},
-	"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal", "identifier"},
+	"rewrite_attempt_identifier": {"invocation_id", "node_id", "attempt_index", "ordinal", "identifier"},
 	"migration":                  {"version", "checksum", "applied_at"},
 }
 
@@ -319,7 +319,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			},
 			"rewrite_attempt_identifier": {{
 				Parent:  "rewrite_attempt",
-				Columns: []column{{"invocation_id", "invocation_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",
+				Columns: []column{{"invocation_id", "invocation_id"}, {"node_id", "node_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",
 			}},
 		}
 
@@ -443,7 +443,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				"invocation_id", "profile_id", "provider_id", "node_id",
 				"current_hash", "candidate_hash", "current_band", "candidate_band", "rejection", "attempt_index",
 			},
-			"rewrite_attempt_identifier": {"invocation_id", "identifier", "attempt_index", "ordinal"},
+			"rewrite_attempt_identifier": {"invocation_id", "node_id", "identifier", "attempt_index", "ordinal"},
 			"migration":                  {"checksum", "applied_at", "version"},
 		}
 		for table, columns := range constrained {
@@ -486,8 +486,8 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"distractor_pool":        {"id"},
 			"distractor_pool_member": {"pool_id", "content_hash"},
 			"exemplar_selection":     {"id"}, "exemplar_member": {"selection_id", "ordinal"},
-			"rewrite_attempt":            {"invocation_id", "attempt_index"},
-			"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal"},
+			"rewrite_attempt":            {"invocation_id", "node_id", "attempt_index"},
+			"rewrite_attempt_identifier": {"invocation_id", "node_id", "attempt_index", "ordinal"},
 			"migration":                  {"version"},
 		}
 		for table, want := range keys {

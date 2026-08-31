@@ -185,7 +185,76 @@ func (s *Store) applyMigration(ctx context.Context, version int, ddl string) err
 }
 
 func (s *Store) applyMigrations(ctx context.Context, version int) error {
+	if version < 4 && len(migrations) > 4 {
+		if err := s.applyMigrationBatch(ctx, version, migrations[version:4]); err != nil {
+			return err
+		}
+		version = 4
+	}
+	if version == 4 && len(migrations) > 4 {
+		if err := s.applyAttemptKeyMigration(ctx, 4); err != nil {
+			return err
+		}
+		version = 5
+	}
+	if version == 5 && len(migrations) > 5 {
+		if err := s.applyNodeContainersMigration(ctx, 5); err != nil {
+			return err
+		}
+		version = 6
+	}
 	return s.applyMigrationBatch(ctx, version, migrations[version:])
+}
+
+// applyAttemptKeyMigration rebuilds the two attempt tables while foreign keys
+// are temporarily disabled. SQLite cannot widen a primary key in place, and
+// renaming the old table would rewrite the child's foreign-key clause.
+func (s *Store) applyAttemptKeyMigration(ctx context.Context, version int) error {
+	return s.applyTableRebuildMigration(ctx, version)
+}
+
+// applyNodeContainersMigration rebuilds node without disturbing its dependent
+// vectors, selections, or rewrite attempts. As with the attempt-key rebuild,
+// SQLite needs foreign keys disabled for the swap and checked before commit.
+func (s *Store) applyNodeContainersMigration(ctx context.Context, version int) error {
+	return s.applyTableRebuildMigration(ctx, version)
+}
+
+func (s *Store) applyTableRebuildMigration(ctx context.Context, version int) error {
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), "PRAGMA foreign_keys=ON")
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	if _, err = tx.ExecContext(ctx, migrations[version]); err == nil {
+		_, err = tx.ExecContext(ctx, "INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, ?)", version, identity.HashBytes([]byte(migrations[version])), s.deps.Now().UTC().Format(time.RFC3339))
+	}
+	if err == nil {
+		rows, checkErr := tx.QueryContext(ctx, "PRAGMA foreign_key_check")
+		if checkErr != nil {
+			err = checkErr
+		} else {
+			defer rows.Close()
+			if rows.Next() {
+				err = ErrSchemaForeign
+			} else {
+				err = rows.Err()
+			}
+		}
+	}
+	if err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *Store) applyMigrationBatch(ctx context.Context, version int, ddls []string) error {

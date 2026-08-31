@@ -13,6 +13,7 @@ import (
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/eval"
+	"github.com/fissible/hapax/internal/exemplar"
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/ingest"
@@ -20,6 +21,7 @@ import (
 	"github.com/fissible/hapax/internal/score"
 	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/store"
+	"github.com/fissible/hapax/internal/text"
 )
 
 type IndexMode string
@@ -152,6 +154,51 @@ type ScoreResult struct {
 	ParagraphsBelowFloor                               int
 	Segments                                           []ScoredSegment
 }
+type RewriteRequest struct{ StartDir, StorePath, CorpusRoot, Register, Path string }
+type Disposition string
+
+const (
+	DispositionTarget            Disposition = "target"
+	DispositionInRange           Disposition = "in-range"
+	DispositionUnmeasurable      Disposition = "unmeasurable"
+	DispositionContainsExcisions Disposition = "contains-excisions"
+)
+
+func Dispositions() []Disposition {
+	return []Disposition{DispositionTarget, DispositionInRange, DispositionUnmeasurable, DispositionContainsExcisions}
+}
+
+type PlanState string
+
+const (
+	StateNothingToChange PlanState = "nothing-to-change"
+	StateTargetsPlanned  PlanState = "targets-planned"
+)
+
+func PlanStates() []PlanState { return []PlanState{StateNothingToChange, StateTargetsPlanned} }
+
+type PlannedSegment struct {
+	Index          int
+	NodeID         string
+	Offset, Length int
+	LexicalTokens  int
+	Band           BandOutcome
+	Disposition    Disposition
+}
+type RewritePlan struct {
+	StorePath, CorpusRoot, Path                string
+	Selection                                  Selection
+	Available                                  []string
+	Refusal, ProfileID, ReferenceID, ReleaseID string
+	DraftSnapshotID                            string
+	ParagraphsBelowFloor                       int
+	Segments                                   []PlannedSegment
+	Targets                                    int
+	State                                      PlanState
+	ExemplarSelectionID                        string
+	ExemplarCertificateID                      string
+	ExemplarNodes                              []string
+}
 
 const (
 	RefusalNoProfile            = "no-profile"
@@ -217,17 +264,6 @@ type Service interface {
 	Score(context.Context, ScoreRequest) (ScoreResult, error)
 }
 
-func fittedFrom(p store.Profile) (profile.Fitted, error) {
-	f := profile.Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion, FeatureManifestDigest: p.ManifestDigest, MinParagraphLexicalTokens: p.MinParagraphLexicalTokens, Stats: make([]profile.Stats, 0, len(p.Stats))}
-	for _, s := range p.Stats {
-		f.Stats = append(f.Stats, profile.Stats{Feature: s.Feature, N: s.N, Mean: s.Mean, Variance: s.Variance, Defined: s.Defined, VarianceDefined: s.VarianceDefined, MinObservations: s.MinObservations})
-	}
-	if f.ID == "" || f.Unit != profile.UnitParagraph || f.FeatureSetVersion != features.SetVersion || f.FeatureManifestDigest != features.ManifestDigest() || f.MinParagraphLexicalTokens <= 0 || len(f.Stats) == 0 {
-		return profile.Fitted{}, errors.New("stored profile cannot score")
-	}
-	return f, nil
-}
-
 func heldOutSegments(ctx context.Context, s *store.Store, snapshotID string, fitted profile.Fitted) ([]eval.Segment, error) {
 	return storedSegments(ctx, s, snapshotID, corpus.Test, eval.ClassAuthor, fitted)
 }
@@ -273,7 +309,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	fitted, err := fittedFrom(bundle.Profile)
+	fitted, err := bundle.Profile.Fitted()
 	if err != nil {
 		return EvalResult{}, err
 	}
@@ -486,6 +522,215 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 		}
 	}
 	return out, nil
+}
+
+// Plan resolves and records every offline rewrite decision before a provider is
+// involved. It deliberately stays off Service: B1 has no CLI surface.
+func (r *Runner) Plan(ctx context.Context, request RewriteRequest) (RewritePlan, error) {
+	if request.Path == "" {
+		return RewritePlan{}, errors.New("rewrite draft path is required")
+	}
+	path, found, err := discover(request.StartDir, request.StorePath)
+	if errors.Is(err, os.ErrNotExist) || !found {
+		return RewritePlan{Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
+	}
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	defer s.Close()
+	heads, err := s.ProfileHeads(ctx)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	available := availableRegisters(heads)
+	base := RewritePlan{StorePath: path, Path: request.Path, Available: available}
+	register := request.Register
+	selection := SelectedExplicit
+	if register == "" {
+		switch len(available) {
+		case 0:
+			base.Selection, base.Refusal = SelectionNoProfile, RefusalNoProfile
+			return base, nil
+		case 1:
+			register, selection = available[0], SelectedSoleHead
+		default:
+			base.Selection = SelectionAmbiguous
+			return base, nil
+		}
+	} else if _, ok := heads[register]; !ok {
+		base.Selection = SelectionUnknownRegister
+		return base, nil
+	}
+	base.Selection = selection
+	bundle, err := s.LoadScoringBundle(ctx, register)
+	if errors.Is(err, store.ErrNotFound) {
+		base.Selection, base.Refusal = SelectionNoProfile, RefusalNoProfile
+		return base, nil
+	}
+	if errors.Is(err, store.ErrNoReference) {
+		base.Refusal = RefusalNoReference
+		return base, nil
+	}
+	if errors.Is(err, store.ErrAmbiguousReference) {
+		base.Refusal = RefusalAmbiguousReference
+		return base, nil
+	}
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	root := request.CorpusRoot
+	if root == "" {
+		root = filepath.Dir(filepath.Dir(path))
+	}
+	base.CorpusRoot, base.ProfileID, base.ReferenceID, base.ReleaseID = root, bundle.Fitted.ID, bundle.Reference.ID, bundle.Release.ID
+	if !bundle.Calibrated {
+		base.Refusal = RefusalUncalibrated
+		return base, nil
+	}
+	source, err := os.ReadFile(request.Path)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	report, err := score.Score(source, bundle.Fitted, &bundle.Reference, bundle.Release)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	base.ParagraphsBelowFloor = report.ParagraphsBelowFloor
+	if len(report.Segments) == 0 {
+		base.Refusal = RefusalInsufficientEvidence
+		return base, nil
+	}
+	draftRequirements := r.Requirements
+	draftRequirements.MinParagraphLexicalTokens = bundle.Fitted.MinParagraphLexicalTokens
+	write, leaves, err := draftWrite(request.Path, register, draftRequirements)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	indexed, err := s.Index(ctx, store.IndexWrite{Mode: store.IndexSnapshotOnly, Snapshot: write})
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	base.DraftSnapshotID = indexed.Snapshot.ID
+	var nodes []store.Node
+	for _, document := range indexed.Snapshot.Documents {
+		for _, node := range document.Nodes {
+			if node.Vector != nil {
+				nodes = append(nodes, node)
+			}
+		}
+	}
+	if len(nodes) != len(report.Segments) || len(leaves) != len(report.Segments) {
+		return RewritePlan{}, errors.New("draft score and indexed paragraphs disagree")
+	}
+	for i, segment := range report.Segments {
+		var disposition Disposition
+		switch {
+		case !segment.Distance.Defined:
+			disposition = DispositionUnmeasurable
+		case segment.Band.Band == eval.BandInRange:
+			disposition = DispositionInRange
+		case leaves[i].excisions:
+			disposition = DispositionContainsExcisions
+		case segment.Band.Band == eval.BandDrifting || segment.Band.Band == eval.BandNotYou:
+			disposition = DispositionTarget
+			base.Targets++
+		case !segment.Band.Defined:
+			disposition = DispositionUnmeasurable
+		default:
+			return RewritePlan{}, fmt.Errorf("draft segment %d has an unknown band %q", segment.Index, segment.Band.Band)
+		}
+		base.Segments = append(base.Segments, PlannedSegment{Index: segment.Index, NodeID: nodes[i].ID, Offset: nodes[i].Offset, Length: nodes[i].Length, LexicalTokens: segment.LexicalTokens, Band: BandOutcome{Band: string(segment.Band.Band), Defined: segment.Band.Defined, Reason: string(segment.Band.Reason), Distance: segment.Band.Distance}, Disposition: disposition})
+	}
+	if base.Targets == 0 {
+		base.State = StateNothingToChange
+		return base, nil
+	}
+	storedProfile, err := s.LoadProfile(ctx, bundle.Fitted.ID)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	profileSnapshot, err := s.Snapshot(ctx, storedProfile.SnapshotID)
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	var candidates []exemplar.Candidate
+	nodeFor := map[string]string{}
+	for _, document := range profileSnapshot.Documents {
+		if document.Split != corpus.Train {
+			continue
+		}
+		for _, node := range document.Nodes {
+			if node.Vector == nil {
+				continue
+			}
+			candidate := exemplar.Candidate{DocumentDigest: document.ContentHash, Span: text.Span{Offset: node.Offset, Length: node.Length}, Role: node.Role, Containers: node.Containers, Split: document.Split, Vector: *node.Vector}
+			candidates = append(candidates, candidate)
+			nodeFor[candidate.Identity()] = node.ID
+		}
+	}
+	chosen, err := exemplar.Select(bundle.Fitted, candidates, exemplar.DefaultConfig())
+	if err != nil {
+		return RewritePlan{}, err
+	}
+	for _, candidate := range chosen.Exemplars {
+		base.ExemplarNodes = append(base.ExemplarNodes, nodeFor[candidate.Identity()])
+	}
+	base.ExemplarSelectionID, base.ExemplarCertificateID = chosen.ID, chosen.Certificate.ID
+	if err = s.PutExemplarSelection(ctx, store.ExemplarSelection{ID: chosen.ID, ProfileID: bundle.Fitted.ID, N: len(base.ExemplarNodes), CertificateID: chosen.Certificate.ID, Members: base.ExemplarNodes}); err != nil {
+		return RewritePlan{}, err
+	}
+	base.State = StateTargetsPlanned
+	return base, nil
+}
+
+type draftLeaf struct{ excisions bool }
+
+func draftWrite(path, register string, requirements profile.Requirements) (store.SnapshotWrite, []draftLeaf, error) {
+	root := filepath.Dir(path)
+	snap, err := corpus.Walk(root, corpus.DefaultPolicy(register))
+	if err != nil {
+		return store.SnapshotWrite{}, nil, err
+	}
+	name := filepath.Base(path)
+	var document corpus.Document
+	found := false
+	for _, candidate := range snap.Documents {
+		if candidate.Path == name {
+			document, found = candidate, true
+			break
+		}
+	}
+	if !found || document.Admission != corpus.Eligible {
+		return store.SnapshotWrite{}, nil, errors.New("rewrite draft is not an eligible corpus document")
+	}
+	document.Split = corpus.Draft
+	snap.Documents = []corpus.Document{document}
+	snap.ID = identity.HashInputs(snap.IdentityInputs())
+	write, err := ingest.SnapshotWithRequirements(root, snap, requirements)
+	if err != nil {
+		return store.SnapshotWrite{}, nil, err
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return store.SnapshotWrite{}, nil, err
+	}
+	doc, err := text.Admit(raw)
+	if err != nil {
+		return store.SnapshotWrite{}, nil, err
+	}
+	paragraphs, _, err := profile.ParagraphLeaves(doc, doc.Structure(text.DefaultStructureOptions()), requirements.MinParagraphLexicalTokens)
+	if err != nil {
+		return store.SnapshotWrite{}, nil, err
+	}
+	leaves := make([]draftLeaf, len(paragraphs))
+	for i, paragraph := range paragraphs {
+		leaves[i].excisions = len(paragraph.Node.Excisions) != 0
+	}
+	return write, leaves, nil
 }
 
 // uncalibratedCalibration records a completed Test measurement when Calibrate

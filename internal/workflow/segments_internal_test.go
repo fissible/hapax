@@ -54,9 +54,9 @@ func TestSegmentIndexCountsAdmittedParagraphsAndNotNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadProfileBundle: %v", err)
 	}
-	fitted, err := fittedFrom(bundle.Profile)
+	fitted, err := bundle.Profile.Fitted()
 	if err != nil {
-		t.Fatalf("fittedFrom: %v", err)
+		t.Fatalf("Profile.Fitted: %v", err)
 	}
 
 	// The fixture has to actually exclude something, or admitted index and node
