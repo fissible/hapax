@@ -674,7 +674,13 @@ func invalidCalibration(calibration Calibration) string {
 	if !seen[eval.BandInRange] || !seen[eval.BandDrifting] || !seen[eval.BandNotYou] {
 		return "bands"
 	}
-	calibrated := calibration.Bands[0].Emitted || calibration.Bands[2].Emitted
+	calibrated := false
+	for _, report := range calibration.Bands {
+		if (report.Band == eval.BandInRange || report.Band == eval.BandNotYou) && report.Emitted {
+			calibrated = true
+			break
+		}
+	}
 	if calibration.Calibrated != calibrated || (calibration.Calibrated && calibration.Reason != "") || (!calibration.Calibrated && calibration.Reason != "no-claiming-band-emitted") {
 		return "decision"
 	}
@@ -761,9 +767,6 @@ func invalidBand(report BandReport) string {
 		if report.Reason != "empty-error-class" {
 			return "reason"
 		}
-		return ""
-	}
-	if !report.Emitted && report.ErrorBound == 1 && report.Reason == "empty-error-class" {
 		return ""
 	}
 	if report.ErrorBound < 3/float64(report.ClassClusters) {
