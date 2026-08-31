@@ -61,6 +61,64 @@ func TestEvalMeasuresTheIndexedGraphAndNotTheFilesOnDisk(t *testing.T) {
 	}
 }
 
+// THE WHOLE POOL IS DISTRACTOR MATERIAL. There is nothing to hold out of it —
+// every member is "not the author" — so splitting it the way the author's corpus
+// is split throws away most of the comparison. Nothing in this suite noticed
+// until the numbers were looked at: twenty distractor documents were yielding
+// six segments, which is one document's worth, and the discrimination bound came
+// back at MINUS TWO because the cap is 1 - 3/clusters and one cluster makes it
+// negative. The AUC was a perfect 1.000 the whole time.
+func TestEveryDistractorContributesToTheComparison(t *testing.T) {
+	root := corpusOf(t, 60)
+	indexed(t, indexRequest(root))
+	const members = 20
+	distractors := distractorCorpus(t, members)
+
+	result := evaluated(t, evalRequest(root, distractors))
+
+	if result.DistractorMembers != members {
+		t.Errorf("the pool holds %d of %d files", result.DistractorMembers, members)
+	}
+	// Six paragraphs each, all above the floor, and none of them held out.
+	if want := members * 6; result.DistractorSegments != want {
+		t.Errorf("%d distractor segments over %d members; want %d — the pool is being "+
+			"split as if part of it were held out", result.DistractorSegments, members, want)
+	}
+	// And the clusters are documents, so a pool of twenty is twenty of them.
+	if result.DistractorClusters != members {
+		t.Errorf("%d distractor clusters over %d members", result.DistractorClusters, members)
+	}
+}
+
+// The declared floor is unreachable below a certain number of clusters, and that
+// is arithmetic rather than luck: the bound is capped at 1 - 3/clusters, so a
+// floor of 0.80 needs fifteen clusters per class before it can be cleared at
+// all. A fixture that cannot supply them cannot ship however separable its prose
+// is — which is why the cap is reported and not just the bound.
+func TestTheBoundIsCappedByTheNumberOfClusters(t *testing.T) {
+	root := corpusOf(t, 60)
+	indexed(t, indexRequest(root))
+	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
+
+	clusters := result.Discrimination.AuthorClusters
+	if other := result.Discrimination.DistractorClusters; other < clusters {
+		clusters = other
+	}
+	if clusters == 0 {
+		t.Fatal("no clusters at all")
+	}
+	if want := 1 - 3/float64(clusters); result.Discrimination.Cap != want {
+		t.Errorf("cap = %v over %d clusters, want %v", result.Discrimination.Cap, clusters, want)
+	}
+	if result.Discrimination.LowerBound > result.Discrimination.Cap {
+		t.Errorf("bound %v exceeds its own cap %v", result.Discrimination.LowerBound, result.Discrimination.Cap)
+	}
+	if result.Discrimination.MinClusters != 15 {
+		t.Errorf("min clusters = %d for a floor of %v, want 15",
+			result.Discrimination.MinClusters, result.Discrimination.Floor)
+	}
+}
+
 // A pool is other people's writing, and what reaches the database is its
 // identity and its members' content hashes. Adding one file changes the pool,
 // and therefore the release.
@@ -112,11 +170,10 @@ func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
 // the rule — and a test that skips when it does not is a test that can quietly
 // never run.
 func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
-	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
+	root, distractors := separableFixture(t)
+	result := evaluated(t, evalRequest(root, distractors))
 
-	head := releaseHead(t, defaultStorePath(root), result.ProfileID)
+	head := releaseHeadOrEmpty(t, defaultStorePath(root), result.ProfileID)
 	switch {
 	case result.Shippable && head != result.ReleaseID:
 		t.Errorf("a shippable release %q is not the head; the head is %q", result.ReleaseID, head)
@@ -139,10 +196,9 @@ func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
 // first run leaves nothing: the invariant is either exercised or reported as
 // untested, never quietly skipped.
 func TestAnAdverseEvaluationDoesNotWithdrawAGoodRelease(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root, distractors := separableFixture(t)
 
-	good := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
+	good := evaluated(t, evalRequest(root, distractors))
 	before := releaseHeadOrEmpty(t, defaultStorePath(root), good.ProfileID)
 	if before == "" {
 		t.Fatalf("the fixture produced no shippable release (%s), so there is no good head "+
@@ -278,4 +334,20 @@ func TestThePersistedReleaseNamesItsPool(t *testing.T) {
 	if _, err := openStore(t, defaultStorePath(root)).LoadDistractorPool(ctx(), stored.DistractorPoolID); err != nil {
 		t.Errorf("the pool the release names is not in the store: %v", err)
 	}
+}
+
+// separableFixture is a corpus and a pool that can actually clear the declared
+// floor, which takes more than separable prose. The bound is capped at
+// 1 - 3/clusters, so a floor of 0.80 needs fifteen clusters per class: a
+// sixty-document corpus holds out three, and no amount of distinguishability
+// rescues a cap of zero. Three hundred documents hold out twenty-five, and
+// twenty distractors are twenty clusters, so the cap is 0.85.
+//
+// This is why the two head tests cost what they cost. Measured, not guessed:
+// at sixty documents the AUC was a perfect 1.000 and the bound was minus two.
+func separableFixture(t *testing.T) (root, distractors string) {
+	t.Helper()
+	root = corpusOf(t, 300)
+	indexed(t, indexRequest(root))
+	return root, distractorCorpus(t, 20)
 }
