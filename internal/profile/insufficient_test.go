@@ -15,30 +15,17 @@ import (
 
 func corpusOf(t *testing.T, files map[string]string) (string, *corpus.Snapshot) {
 	t.Helper()
-	return corpusUnder(t, files, corpus.DefaultPolicy("essays"))
-}
-
-func corpusUnder(t *testing.T, files map[string]string, policy corpus.Policy) (string, *corpus.Snapshot) {
-	t.Helper()
 	root := t.TempDir()
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	snapshot, err := corpus.Walk(root, policy)
+	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
 	return root, snapshot
-}
-
-// noTrainSplit weights train to zero, so which documents land where is a
-// decision rather than a coincidence of the seed.
-func noTrainSplit() corpus.Policy {
-	policy := corpus.DefaultPolicy("essays")
-	policy.Splits = corpus.SplitWeights{Train: 0, Calibrate: 1, Test: 1}
-	return policy
 }
 
 const paragraph = "A paragraph of prose with enough lexical tokens in it to clear any reasonable floor, " +
@@ -87,16 +74,24 @@ func TestEveryInsufficientCorpusIsTypedAsSuch(t *testing.T) {
 }
 
 // A corpus whose split assigns nothing to train is insufficient for the same
-// reason and must carry the same type. The weights make that a decision rather
-// than a coincidence of the split seed.
+// reason and must carry the same type. The snapshot's own splits are moved
+// rather than the policy's weights: corpus refuses a non-positive weight, so
+// weighting train to zero would demand an unrelated change to policy semantics
+// just to make a fixture deterministic.
 func TestNoTrainDocumentIsCorpusInsufficiency(t *testing.T) {
-	root, snapshot := corpusUnder(t, map[string]string{
-		"a.md": paragraph, "b.md": paragraph, "c.md": paragraph, "d.md": paragraph,
-	}, noTrainSplit())
-	for _, document := range snapshot.Eligible() {
-		if document.Split == corpus.Train {
-			t.Fatalf("%s landed in train despite a zero weight", document.Path)
+	root, snapshot := corpusOf(t, map[string]string{
+		"a.md": paragraph, "b.md": paragraph + "\nAnd a little more.\n",
+		"c.md": paragraph + "\nAnd more again.\n", "d.md": paragraph + "\nAnd once more.\n",
+	})
+	moved := 0
+	for i := range snapshot.Documents {
+		if snapshot.Documents[i].Split == corpus.Train {
+			snapshot.Documents[i].Split = corpus.Test
+			moved++
 		}
+	}
+	if moved == 0 {
+		t.Skip("the seed assigned nothing to train, so there is nothing to move")
 	}
 	requirements := profile.DefaultRequirements()
 	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1

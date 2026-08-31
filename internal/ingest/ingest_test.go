@@ -229,20 +229,35 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CalibrateStandardizations: %v", err)
 	}
-	// An empty slice satisfies every per-element assertion below.
-	calibrate := 0
+	// The COMPLETE set, derived independently: "at least one is Calibrate"
+	// permits dropping every other Calibrate leaf and every other document.
+	want := 0
 	for _, document := range snapshot.Eligible() {
-		if document.Split == corpus.Calibrate {
-			calibrate++
+		if document.Split != corpus.Calibrate {
+			continue
 		}
+		raw, err := os.ReadFile(filepath.Join(root, document.Path))
+		if err != nil {
+			t.Fatalf("read %s: %v", document.Path, err)
+		}
+		admitted, err := text.Admit(raw)
+		if err != nil {
+			t.Fatalf("admit %s: %v", document.Path, err)
+		}
+		leaves, _, err := profile.ParagraphLeaves(admitted,
+			admitted.Structure(text.DefaultStructureOptions()), prof.Requirements.MinParagraphLexicalTokens)
+		if err != nil {
+			t.Fatalf("leaves of %s: %v", document.Path, err)
+		}
+		want += len(leaves)
 	}
-	if calibrate == 0 {
-		t.Fatal("the split assigned no calibrate documents; adjust the fixture or the seed " +
-			"rather than skipping, or this proves nothing")
+	if want == 0 {
+		t.Fatal("no calibrate leaves; adjust the fixture rather than proving nothing")
 	}
-	if len(standardizations) == 0 {
-		t.Fatal("no standardizations for a corpus with calibrate documents")
+	if len(standardizations) != want {
+		t.Errorf("%d standardizations for %d calibrate leaves", len(standardizations), want)
 	}
+
 	for i, standardization := range standardizations {
 		if standardization.Split != corpus.Calibrate {
 			t.Errorf("standardization %d is from the %s split", i, standardization.Split)

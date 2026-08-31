@@ -483,8 +483,8 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	// A graph with a row in every table, written directly at version 1.
 	seedVersionOneGraph(t, db)
 	before := map[string][]string{}
-	for table, columns := range preservedColumns {
-		before[table] = dumpTable(t, db, table, columns)
+	for _, table := range preservedTables {
+		before[table] = dumpTable(t, db, table, migrationExclusions(table))
 		if len(before[table]) == 0 {
 			t.Fatalf("%s is empty at version 1; its preservation would be vacuous", table)
 		}
@@ -502,17 +502,39 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	// The ROWS, not their count: a migration that replaced every row with a
 	// different one — corrupting identities, edges, heads or audit payloads —
 	// keeps the counts exactly.
-	for table, columns := range preservedColumns {
-		if got := dumpTable(t, raw, table, columns); !reflect.DeepEqual(got, before[table]) {
+	for _, table := range preservedTables {
+		if got := dumpTable(t, raw, table, migrationExclusions(table)); !reflect.DeepEqual(got, before[table]) {
 			t.Errorf("%s changed across migration 2:\n%v\nwant\n%v", table, got, before[table])
 		}
 	}
 }
 
-// dumpTable renders the named columns of every row, sorted, so two states can
-// be compared without depending on row order.
-func dumpTable(t *testing.T, db *sql.DB, table string, columns []string) []string {
+// dumpTable renders EVERY column of every row, sorted, so two states can be
+// compared without depending on row order.
+func dumpTable(t *testing.T, db *sql.DB, table string, exclude map[string]bool) []string {
 	t.Helper()
+	// The columns come from the database itself rather than a hand-written
+	// list: a list is a place for a column to go unwatched, which is how a
+	// migration mutates one unnoticed.
+	names, err := db.Query("SELECT name FROM pragma_table_info(?) ORDER BY cid", table)
+	if err != nil {
+		t.Fatalf("columns of %s: %v", table, err)
+	}
+	var columns []string
+	for names.Next() {
+		var name string
+		if err := names.Scan(&name); err != nil {
+			t.Fatalf("scan column: %v", err)
+		}
+		if !exclude[name] {
+			columns = append(columns, name)
+		}
+	}
+	names.Close()
+	if len(columns) == 0 {
+		t.Fatalf("%s has no comparable columns", table)
+	}
+
 	rows, err := db.Query("SELECT " + strings.Join(columns, ",") + " FROM " + table)
 	if err != nil {
 		t.Fatalf("dumping %s: %v", table, err)
@@ -543,25 +565,24 @@ func dumpTable(t *testing.T, db *sql.DB, table string, columns []string) []strin
 // The columns migration 2 must leave alone. document.language is absent because
 // correcting it is the migration's job; profile's readiness columns are absent
 // because they do not exist at version 1.
-var preservedColumns = map[string][]string{
-	"snapshot":                   {"id", "policy_digest", "created_at"},
-	"document":                   {"document_id", "snapshot_id", "path", "content_hash", "register", "split", "admission"},
-	"node":                       {"node_id", "document_id", "ordinal", "kind", "role", "containers", "offset", "length", "included", "exclusion"},
-	"feature_vector":             {"node_id", "manifest_digest", "set_version", "tokens", "lexical_tokens"},
-	"feature_value":              {"node_id", "manifest_digest", "feature", "value", "defined"},
-	"profile":                    {"id", "snapshot_id", "register", "unit", "variance_convention", "manifest_digest", "feature_set_version", "min_paragraph_lexical_tokens"},
-	"profile_stat":               {"profile_id", "feature", "n", "mean", "variance", "defined", "variance_defined", "min_observations"},
-	"profile_head":               {"register", "profile_id", "updated_at"},
-	"reference":                  {"id", "profile_id", "split", "min_segments", "manifest_digest"},
-	"reference_value":            {"reference_id", "feature", "ordinal", "value"},
-	"threshold":                  {"id", "profile_id", "reference_id", "population_id", "t_low", "t_high", "verdict"},
-	"eval_result":                {"id", "profile_id", "reference_id", "shippable", "discrimination_id", "calibration_id", "calibrated", "discriminates"},
-	"calibration_band":           {"eval_result_id", "band", "claims", "emitted", "reason"},
-	"release_head":               {"profile_id", "eval_result_id", "updated_at"},
-	"exemplar_selection":         {"id", "profile_id", "n", "certificate_id"},
-	"exemplar_member":            {"selection_id", "ordinal", "node_id"},
-	"rewrite_attempt":            {"invocation_id", "attempt_index", "profile_id", "provider_id", "node_id", "accepted", "rejection"},
-	"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal", "identifier"},
+// Every table a version-1 database has. The only columns excluded are the two
+// migration 2 exists to change; everything else must survive untouched.
+var preservedTables = []string{
+	"snapshot", "document", "node", "feature_vector", "feature_value",
+	"profile", "profile_stat", "profile_head", "reference", "reference_value",
+	"threshold", "eval_result", "calibration_band", "release_head",
+	"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
+}
+
+func migrationExclusions(table string) map[string]bool {
+	switch table {
+	case "document":
+		return map[string]bool{"language": true}
+	case "profile":
+		// These do not exist at version 1, so there is nothing to compare.
+		return map[string]bool{"production_ready": true, "not_ready_reason": true}
+	}
+	return nil
 }
 
 // seedVersionOneGraph writes one row into every table a version-1 database has,
