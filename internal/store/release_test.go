@@ -1059,3 +1059,98 @@ func TestARefusedReleaseLeavesTheExistingHeadAlone(t *testing.T) {
 		t.Errorf("head = %q, want the release that was already there, %q", head, first.ID)
 	}
 }
+
+// empty-error-class is the reason eval gives when a claiming class had NO
+// clusters at all, and it is the one case that bypasses the bound-versus-target
+// comparison. Accepting it beside a populated class would let a report skip
+// that comparison while claiming to have measured something.
+func TestAnEmptyErrorClassHasNoClusters(t *testing.T) {
+	for _, c := range []struct {
+		name       string
+		clusters   int
+		segments   int
+		acceptable bool
+	}{
+		{"no clusters", 0, 0, true},
+		{"clusters after all", 40, 400, false},
+		{"segments without clusters", 0, 400, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			report := &release.Calibration.Bands[0]
+			report.Emitted, report.Reason = false, "empty-error-class"
+			report.ErrorBound, report.ErrorRate = 1, 0
+			report.ClassClusters, report.ClassSegments = c.clusters, c.segments
+			release.Calibration.Calibrated = release.Calibration.Bands[2].Emitted
+			err := s.PutEvalResult(ctx(), release, store.LeaveHead)
+			if c.acceptable && err != nil {
+				t.Errorf("refused: %v", err)
+			}
+			if !c.acceptable && err == nil {
+				t.Error("accepted")
+			}
+		})
+	}
+}
+
+// The reports arrive in the order eval emits them, and the store must not
+// depend on that order to know which band is which. A permuted write that is
+// accepted and then reads back as corrupt is the worst of both: it stores
+// something no reader will take.
+func TestBandReportsAreIdentifiedByBandAndNotByPosition(t *testing.T) {
+	for _, c := range []struct {
+		name  string
+		order []int
+	}{
+		{"drifting first", []int{1, 0, 2}},
+		{"reversed", []int{2, 1, 0}},
+		{"claiming bands swapped", []int{2, 1, 0}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			s := newStore(t)
+			release := releaseFor(t, s)
+			canonical := release.Calibration.Bands
+			permuted := make([]store.BandReport, len(canonical))
+			for to, from := range c.order {
+				permuted[to] = canonical[from]
+			}
+			release.Calibration.Bands = permuted
+
+			err := s.PutEvalResult(ctx(), release, store.LeaveHead)
+			if err != nil {
+				// Refusing a non-canonical order is a fine answer.
+				return
+			}
+			// Accepting it is also fine — but then it must read back, and read
+			// back as the same calibration. What must not happen is a write the
+			// store's own reader calls corrupt.
+			got, err := s.LoadEvalResult(ctx(), release.ID)
+			if err != nil {
+				t.Fatalf("a write the store accepted reads back as %v", err)
+			}
+			if !reflect.DeepEqual(got.Calibration.Bands, canonical) {
+				t.Errorf("bands =\n%+v\nwant the canonical order\n%+v", got.Calibration.Bands, canonical)
+			}
+		})
+	}
+}
+
+// And the derived calibration is the same whatever order the reports arrived
+// in: drifting is always emitted, so a derivation that read it as a claiming
+// band would call every calibration calibrated.
+func TestCalibrationIsDerivedFromTheBandsAndNotTheirOrder(t *testing.T) {
+	s := newStore(t)
+	release := releaseFor(t, s)
+	// Neither claiming band emitted, so the calibration is not calibrated —
+	// however the three reports are ordered.
+	setEmitted(&release.Calibration.Bands[0], false)
+	setEmitted(&release.Calibration.Bands[2], false)
+	release.Calibration.Calibrated, release.Calibration.Reason = true, ""
+	release.Shippable = true
+	release.Calibration.Bands[0], release.Calibration.Bands[1] = release.Calibration.Bands[1], release.Calibration.Bands[0]
+
+	if err := s.PutEvalResult(ctx(), release, store.LeaveHead); err == nil {
+		t.Error("a calibration claiming to be calibrated with no claiming band emitted was accepted")
+	}
+}
