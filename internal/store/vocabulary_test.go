@@ -84,6 +84,26 @@ func enumUpdate(table, column, value string) string {
 			return set(column+" = ''", "accepted = 0", "rejection = 'not-improved'")
 		}
 		return set(column + " = " + quoted)
+	case "calibration_band.claims":
+		// Which class a band claims is fixed by the band, so the VALUE chooses
+		// the row rather than any row taking any value.
+		switch value {
+		case "":
+			return "UPDATE calibration_band SET claims = '' WHERE band = 'drifting'"
+		case "author":
+			return "UPDATE calibration_band SET claims = 'author' WHERE band = 'not-you'"
+		case "distractor":
+			return "UPDATE calibration_band SET claims = 'distractor' WHERE band = 'in-range'"
+		}
+		return "UPDATE calibration_band SET claims = " + quoted + " WHERE band = 'in-range'"
+	case "calibration_band.reason":
+		// A reason is coupled to emission — empty exactly when emitted — so the
+		// companion moves with it, on one claiming report. drifting is left
+		// alone: it is emitted and silent by construction.
+		if value == "" {
+			return "UPDATE calibration_band SET reason = '', emitted = 1 WHERE band = 'in-range'"
+		}
+		return "UPDATE calibration_band SET reason = " + quoted + ", emitted = 0 WHERE band = 'in-range'"
 	case "calibration_band.band":
 		// The band is half the primary key, so setting every row to one value
 		// collides. Reduce to a single report first, then move it: what is
