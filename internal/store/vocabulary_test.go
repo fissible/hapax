@@ -26,6 +26,8 @@ func declaredVocabularies() map[string][]string {
 	return map[string][]string{
 		"document.split":                        stringsOf(corpus.Splits()),
 		"document.admission":                    stringsOf(corpus.Admissions()),
+		"document.language":                     stringsOf(corpus.CheckStates()),
+		"profile.not_ready_reason":              readinessReasons(),
 		"node.kind":                             stringsOf(text.Kinds()),
 		"node.role":                             stringsOf(text.Roles()),
 		"node.exclusion":                        stringsOf(text.ExclusionReasons()),
@@ -84,6 +86,12 @@ func enumUpdate(table, column, value string) string {
 			return set(column+" = ''", "accepted = 0", "rejection = 'not-improved'")
 		}
 		return set(column + " = " + quoted)
+	case "profile.not_ready_reason":
+		// Readiness is coupled to its reason, so the companion moves with it.
+		if value == "" {
+			return set("not_ready_reason = ''", "production_ready = 1")
+		}
+		return set("not_ready_reason = "+quoted, "production_ready = 0")
 	case "calibration_band.claims":
 		// Which class a band claims is fixed by the band, so the VALUE chooses
 		// the row rather than any row taking any value.
@@ -210,14 +218,15 @@ var textualColumnGrammars = map[string]string{
 	"snapshot.id": "hex", "snapshot.policy_digest": "hex", "snapshot.created_at": "time",
 	"document.document_id": "hex", "document.snapshot_id": "hex", "document.content_hash": "hex",
 	"document.path": "rel", "document.register": "register", "document.split": "enum",
-	"document.admission": "enum", "document.language": "language", "document.unavailable_at": "time",
+	"document.admission": "enum", "document.language": "enum", "document.unavailable_at": "time",
 	"node.node_id": "hex", "node.document_id": "hex", "node.kind": "enum",
 	"node.role": "enum", "node.exclusion": "enum", "node.containers": "enum-list",
 	"feature_vector.node_id": "hex", "feature_vector.manifest_digest": "hex",
 	"feature_value.node_id": "hex", "feature_value.manifest_digest": "hex",
 	"feature_value.feature": "feature",
 	"profile.id":            "hex", "profile.snapshot_id": "hex", "profile.register": "register",
-	"profile.unit": "enum", "profile.variance_convention": "enum", "profile.manifest_digest": "hex",
+	"profile.not_ready_reason": "enum",
+	"profile.unit":             "enum", "profile.variance_convention": "enum", "profile.manifest_digest": "hex",
 	"profile_stat.profile_id": "hex", "profile_stat.feature": "feature",
 	"profile_head.register": "register", "profile_head.profile_id": "hex",
 	"profile_head.updated_at": "time",
@@ -280,7 +289,6 @@ var grammarProbes = map[string][]string{
 	"hex":      {"", "not-a-hash", "abc123", strings.ToUpper(hashA), hashA[:63], hashA + "a"},
 	"rel":      {"", "/absolute.md", "../outside.md", `sub\essay.md`, "a//b.md", ".."},
 	"register": {"", "Diary", "my essays", "-leading", "essays/2026", strings.Repeat("a", 33)},
-	"language": {"", "English, mostly", "EN", "en_GB"},
 	"time":     {"", "yesterday", "2026/01/01", "2026-01-01 00:00:00"},
 	// A versioned contract identifier: lower case, digits, hyphens, ending in a
 	// version. Not free text, and not an enum either — these are owned by the
@@ -481,6 +489,10 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			_, err := s.Snapshot(ctx(), ids.Snapshot)
 			return err
 		},
+		"document.language": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
 		"node.kind": func(s *store.Store, ids seededIDs) error {
 			_, err := s.Snapshot(ctx(), ids.Snapshot)
 			return err
@@ -498,6 +510,10 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			return err
 		},
 		"profile.variance_convention": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadProfile(ctx(), ids.Profile)
+			return err
+		},
+		"profile.not_ready_reason": func(s *store.Store, ids seededIDs) error {
 			_, err := s.LoadProfile(ctx(), ids.Profile)
 			return err
 		},
@@ -633,6 +649,14 @@ func labelledBands() []string {
 // the drifting report carries: it claims nothing.
 func claimingClasses() []string {
 	out := append([]string{""}, stringsOf(eval.Classes())...)
+	sort.Strings(out)
+	return out
+}
+
+// readinessReasons is profile's declared set plus the empty one, which means
+// READY rather than an unnamed reason.
+func readinessReasons() []string {
+	out := append([]string{""}, profile.NotReadyReasons()...)
 	sort.Strings(out)
 	return out
 }

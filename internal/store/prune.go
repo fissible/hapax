@@ -14,13 +14,23 @@ type Pruned struct {
 // Prune removes graph components unreachable from the supplied profile roots
 // and from the unconditional audit roots.
 func (s *Store) Prune(ctx context.Context, keepProfiles []string) (Pruned, error) {
+	var result Pruned
+	err := artifactTx(ctx, s, func(connection *sql.Conn) error {
+		var err error
+		result, err = pruneConn(ctx, connection, keepProfiles)
+		return err
+	})
+	return result, err
+}
+
+func pruneConn(ctx context.Context, connection *sql.Conn, keepProfiles []string) (Pruned, error) {
 	for _, id := range keepProfiles {
 		if !validHash(id) {
 			return Pruned{}, invalidArtifact("profile", "id")
 		}
 	}
 	var result Pruned
-	err := artifactTx(ctx, s, func(connection *sql.Conn) error {
+	err := func() error {
 		for _, id := range keepProfiles {
 			var count int
 			if err := connection.QueryRowContext(ctx, "SELECT count(*) FROM profile WHERE id=?", id).Scan(&count); err != nil {
@@ -110,6 +120,6 @@ func (s *Store) Prune(ctx context.Context, keepProfiles []string) (Pruned, error
 			return err
 		}
 		return nil
-	})
+	}()
 	return result, err
 }

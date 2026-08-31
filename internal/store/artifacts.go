@@ -27,6 +27,8 @@ type Profile struct {
 	VarianceConvention                           profile.VarianceConvention
 	ManifestDigest                               string
 	FeatureSetVersion, MinParagraphLexicalTokens int
+	ProductionReady                              bool
+	NotReadyReason                               string
 	Stats                                        []ProfileStat
 }
 
@@ -222,6 +224,10 @@ func invalidProfileField(stored Profile) string {
 		return "unit"
 	case !known(stored.VarianceConvention, profile.VarianceConventions()):
 		return "variance convention"
+	case stored.ProductionReady != (stored.NotReadyReason == ""):
+		return "production readiness"
+	case stored.NotReadyReason != "" && !known(stored.NotReadyReason, profile.NotReadyReasons()):
+		return "not ready reason"
 	case len(stored.Stats) != len(features.Definitions()):
 		return "statistics"
 	}
@@ -264,20 +270,8 @@ func (s *Store) PutProfile(ctx context.Context, p Profile, h HeadPolicy) error {
 		} else if !errors.Is(err, ErrNotFound) {
 			return err
 		} else {
-			exists, err := one(c, ctx, "SELECT count(*) FROM snapshot WHERE id=?", p.SnapshotID)
-			if err != nil {
+			if err = s.putProfileConn(ctx, c, p, false); err != nil {
 				return err
-			}
-			if !exists {
-				return invalidArtifact("profile", "snapshot id")
-			}
-			if _, err = c.ExecContext(ctx, "INSERT INTO profile (id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens) VALUES (?,?,?,?,?,?,?,?)", p.ID, p.SnapshotID, p.Register, p.Unit, p.VarianceConvention, p.ManifestDigest, p.FeatureSetVersion, p.MinParagraphLexicalTokens); err != nil {
-				return err
-			}
-			for _, statistic := range p.Stats {
-				if _, err = c.ExecContext(ctx, "INSERT INTO profile_stat (profile_id,feature,n,mean,variance,defined,variance_defined,min_observations) VALUES (?,?,?,?,?,?,?,?)", p.ID, statistic.Feature, statistic.N, statistic.Mean, statistic.Variance, boolInt(statistic.Defined), boolInt(statistic.VarianceDefined), statistic.MinObservations); err != nil {
-					return err
-				}
 			}
 		}
 		if h {
@@ -295,7 +289,8 @@ func (s *Store) LoadProfile(ctx context.Context, id string) (Profile, error) {
 func (s *Store) loadProfile(query queryer, ctx context.Context, id string) (Profile, error) {
 	var stored Profile
 	var unit, varianceConvention string
-	err := query.QueryRowContext(ctx, "SELECT id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens FROM profile WHERE id=?", id).Scan(&stored.ID, &stored.SnapshotID, &stored.Register, &unit, &varianceConvention, &stored.ManifestDigest, &stored.FeatureSetVersion, &stored.MinParagraphLexicalTokens)
+	var productionReady int
+	err := query.QueryRowContext(ctx, "SELECT id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens,production_ready,not_ready_reason FROM profile WHERE id=?", id).Scan(&stored.ID, &stored.SnapshotID, &stored.Register, &unit, &varianceConvention, &stored.ManifestDigest, &stored.FeatureSetVersion, &stored.MinParagraphLexicalTokens, &productionReady, &stored.NotReadyReason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return stored, ErrNotFound
 	}
@@ -304,6 +299,7 @@ func (s *Store) loadProfile(query queryer, ctx context.Context, id string) (Prof
 	}
 	stored.Unit = profile.Unit(unit)
 	stored.VarianceConvention = profile.VarianceConvention(varianceConvention)
+	stored.ProductionReady = productionReady != 0
 	rows, err := query.QueryContext(ctx, "SELECT feature,n,mean,variance,defined,variance_defined,min_observations FROM profile_stat WHERE profile_id=? ORDER BY feature", id)
 	if err != nil {
 		return stored, err
@@ -336,7 +332,7 @@ func (s *Store) loadProfile(query queryer, ctx context.Context, id string) (Prof
 	return stored, nil
 }
 func sameProfile(a, b Profile) bool {
-	if a.ID != b.ID || a.SnapshotID != b.SnapshotID || a.Register != b.Register || a.Unit != b.Unit || a.VarianceConvention != b.VarianceConvention || a.ManifestDigest != b.ManifestDigest || a.FeatureSetVersion != b.FeatureSetVersion || a.MinParagraphLexicalTokens != b.MinParagraphLexicalTokens || len(a.Stats) != len(b.Stats) {
+	if a.ID != b.ID || a.SnapshotID != b.SnapshotID || a.Register != b.Register || a.Unit != b.Unit || a.VarianceConvention != b.VarianceConvention || a.ManifestDigest != b.ManifestDigest || a.FeatureSetVersion != b.FeatureSetVersion || a.MinParagraphLexicalTokens != b.MinParagraphLexicalTokens || a.ProductionReady != b.ProductionReady || a.NotReadyReason != b.NotReadyReason || len(a.Stats) != len(b.Stats) {
 		return false
 	}
 	for index := range a.Stats {
@@ -397,24 +393,7 @@ func (s *Store) PutReference(ctx context.Context, r Reference) error {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		exists, err := one(c, ctx, "SELECT count(*) FROM profile WHERE id=?", r.ProfileID)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return invalidArtifact("reference", "profile id")
-		}
-		if _, err = c.ExecContext(ctx, "INSERT INTO reference (id,profile_id,split,min_segments,manifest_digest) VALUES (?,?,?,?,?)", r.ID, r.ProfileID, r.Split, r.MinSegments, r.ManifestDigest); err != nil {
-			return err
-		}
-		for feature, values := range r.Values {
-			for ordinal, value := range values {
-				if _, err = c.ExecContext(ctx, "INSERT INTO reference_value (reference_id,feature,ordinal,value) VALUES (?,?,?,?)", r.ID, feature, ordinal, value); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return s.putReferenceConn(ctx, c, r)
 	})
 }
 

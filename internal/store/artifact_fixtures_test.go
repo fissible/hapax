@@ -68,7 +68,13 @@ func profileFixture(snapshotID string) store.Profile {
 		ManifestDigest:            features.ManifestDigest(),
 		FeatureSetVersion:         features.SetVersion,
 		MinParagraphLexicalTokens: 40,
-		Stats:                     profileStats(),
+		// Not ready with its declared reason: Build has never produced a ready
+		// profile, so a fixture claiming otherwise would not be one the tool
+		// can make. Ready-and-silent is exercised where readiness is the
+		// subject, not everywhere as a default.
+		ProductionReady: false,
+		NotReadyReason:  aDeclaredNotReadyReason,
+		Stats:           profileStats(),
 	}
 }
 
@@ -353,3 +359,14 @@ func walkTypes(t *testing.T, declared reflect.Type, permitted map[string]bool, s
 		}
 	}
 }
+
+// aDeclaredNotReadyReason is profile's own first declared reason. An empty one
+// would pair with ProductionReady false to make the combination the coupling
+// refuses, and every fixture would fail loudly rather than quietly.
+var aDeclaredNotReadyReason = func() string {
+	reasons := profile.NotReadyReasons()
+	if len(reasons) == 0 {
+		return ""
+	}
+	return reasons[0]
+}()

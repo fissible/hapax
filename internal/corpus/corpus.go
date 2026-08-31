@@ -24,6 +24,11 @@ const (
 	splitAlgorithmVersion  = "content-sha256-v1"
 )
 
+// CheckStates returns the closed qualification-verdict vocabulary.
+func CheckStates() []CheckState {
+	return []CheckState{CheckNotPerformed, CheckPassed, CheckFailed, CheckSkippedByPolicy}
+}
+
 // Admissions returns the closed admission vocabulary.
 func Admissions() []Admission {
 	return []Admission{Eligible, RejectedTooShort, RejectedNotUTF8, RejectedDuplicate}
@@ -92,6 +97,11 @@ type Policy struct {
 	MinLexicalTokens int
 	SplitSeed        string
 	Splits           SplitWeights
+}
+
+// DefaultPolicy returns the v1 corpus admission policy for register.
+func DefaultPolicy(register string) Policy {
+	return Policy{Register: register, Role: RoleAuthor, MinLexicalTokens: 1, SplitSeed: "hapax-v1", Splits: SplitWeights{Train: 8, Calibrate: 1, Test: 1}}
 }
 
 // Document records a source file and its mechanical admission outcome.
