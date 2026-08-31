@@ -1,8 +1,10 @@
 package score_test
 
 import (
+	"reflect"
 	"testing"
 
+	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/score"
 )
 
@@ -30,6 +32,12 @@ func TestMeasureProducesDistancesAndNoBands(t *testing.T) {
 	for i, segment := range report.Segments {
 		if segment.Band.Defined {
 			t.Errorf("segment %d carries a band with nothing calibrated: %+v", i, segment.Band)
+		}
+		// An absent band that does not say why renders as a hole. The reason is
+		// what the reader acts on.
+		if segment.Band.Reason != eval.ReasonUncalibrated {
+			t.Errorf("segment %d has no band and gives reason %q, want %q",
+				i, segment.Band.Reason, eval.ReasonUncalibrated)
 		}
 		if segment.Band.Band != "" {
 			t.Errorf("segment %d names band %q", i, segment.Band.Band)
@@ -69,15 +77,19 @@ func TestMeasureAgreesWithScoreOnEverythingButTheBand(t *testing.T) {
 	if len(raw.Segments) != len(banded.Segments) {
 		t.Fatalf("measured %d segments and scored %d", len(raw.Segments), len(banded.Segments))
 	}
+	// Compared as whole values with only the band set aside, so a delta whose
+	// direction or reason drifted between the two paths is caught. Checking two
+	// fields would let the part a reader acts on diverge unnoticed.
 	for i := range raw.Segments {
-		if raw.Segments[i].Distance != banded.Segments[i].Distance {
-			t.Errorf("segment %d distance differs:\n raw    %+v\n banded %+v",
-				i, raw.Segments[i].Distance, banded.Segments[i].Distance)
+		rawSegment, bandedSegment := raw.Segments[i], banded.Segments[i]
+		rawSegment.Band, bandedSegment.Band = eval.BandOutcome{}, eval.BandOutcome{}
+		if !reflect.DeepEqual(rawSegment, bandedSegment) {
+			t.Errorf("segment %d differs outside its band:\n raw    %+v\n banded %+v",
+				i, rawSegment, bandedSegment)
 		}
-		if raw.Segments[i].Index != banded.Segments[i].Index ||
-			raw.Segments[i].LexicalTokens != banded.Segments[i].LexicalTokens {
-			t.Errorf("segment %d identity differs", i)
-		}
+	}
+	if raw.ParagraphsBelowFloor != banded.ParagraphsBelowFloor {
+		t.Errorf("below-floor count differs: %d and %d", raw.ParagraphsBelowFloor, banded.ParagraphsBelowFloor)
 	}
 }
 

@@ -1,12 +1,16 @@
 package cli_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/fissible/hapax/internal/eval/evaltest"
+	"github.com/fissible/hapax/internal/store"
 )
 
 // Every bug in A2b that mattered was found by running the binary rather than by
@@ -63,6 +67,84 @@ func TestTheBinaryIndexesProfilesAndEvaluatesForReal(t *testing.T) {
 		t.Errorf("distractor_segments = %v over %d members", evalResult["distractor_segments"], smokeDistractors)
 	}
 
+	// score, against the same store, discovering it the same way. Before eval
+	// has shipped a release this is the uncalibrated path: it must MEASURE and
+	// refuse only the band, which is the contract ADR 0005 and DESIGN agree on
+	// and the one most likely to be got wrong by refusing outright.
+	draft := filepath.Join(corpus, "draft.md")
+	write(t, draft, "A paragraph of ordinary prose that runs on past a single sentence so the "+
+		"structure pass reads it as prose rather than as a heading; it says a thing.\n\n"+
+		"A second paragraph doing likewise, at enough length to clear the floor.\n\n")
+
+	measured := runBinary(t, binary, corpus, "--json", "score", draft)
+	if measured.code != 4 {
+		t.Fatalf("score exited %d, want 4 — no release has shipped: %s", measured.code, measured.stderr)
+	}
+	scoreResult := smokeResult(t, measured.stdout, "score")
+	if scoreResult["calibrated"] != false {
+		t.Errorf("calibrated = %v with no release", scoreResult["calibrated"])
+	}
+	segments, ok := scoreResult["segments"].([]any)
+	if !ok || len(segments) == 0 {
+		t.Fatalf("score refused and measured nothing: %v", scoreResult["segments"])
+	}
+	for i, raw := range segments {
+		segment, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("segment %d is not an object", i)
+		}
+		band, ok := segment["band"].(map[string]any)
+		if !ok {
+			t.Fatalf("segment %d has no band member", i)
+		}
+		if band["defined"] != false {
+			t.Errorf("segment %d was banded with nothing calibrated", i)
+		}
+		if band["reason"] != "uncalibrated" {
+			t.Errorf("segment %d gives reason %v for its absent band", i, band["reason"])
+		}
+		if deltas, ok := segment["features"].([]any); !ok || len(deltas) == 0 {
+			t.Errorf("segment %d kept no per-feature deltas", i)
+		}
+	}
+
+	// And the calibrated path, which nothing else reaches through the binary:
+	// the raw refusal above proves score MEASURES without a release, and this
+	// proves it BANDS with one. A seeded release rather than a measured one,
+	// because reaching a shippable release honestly costs about seven hundred
+	// documents — what is under test here is the command, not the arithmetic.
+	seeded := seedShippableRelease(t, filepath.Join(corpus, ".hapax", "hapax.sqlite3"))
+
+	banded := runBinary(t, binary, corpus, "--json", "score", draft)
+	if banded.code != 0 && banded.code != 1 {
+		t.Fatalf("score exited %d, want 0 or 1 against a calibrated release: %s",
+			banded.code, banded.stderr)
+	}
+	bandedResult := smokeResult(t, banded.stdout, "score")
+	if bandedResult["calibrated"] != true {
+		t.Errorf("calibrated = %v against a release head", bandedResult["calibrated"])
+	}
+	if bandedResult["release_id"] != seeded {
+		t.Errorf("release_id = %v, want the seeded %q", bandedResult["release_id"], seeded)
+	}
+	bandedSegments, ok := bandedResult["segments"].([]any)
+	if !ok || len(bandedSegments) == 0 {
+		t.Fatalf("scored nothing: %v", bandedResult["segments"])
+	}
+	for i, raw := range bandedSegments {
+		segment := raw.(map[string]any)
+		band := segment["band"].(map[string]any)
+		if band["defined"] != true {
+			t.Errorf("segment %d was not banded against a calibrated release", i)
+		}
+		if name, _ := band["band"].(string); name == "" {
+			t.Errorf("segment %d is banded and names no band", i)
+		}
+		if deltas, ok := segment["features"].([]any); !ok || len(deltas) == 0 {
+			t.Errorf("segment %d carries no deltas", i)
+		}
+	}
+
 	// eval with no distractors is a completed measurement, not a failure, and
 	// its document renders — the validator rejecting its own producer is what
 	// this line exists to catch.
@@ -84,6 +166,7 @@ func TestTheBinaryRefusesRatherThanFailingWithNoStore(t *testing.T) {
 	for _, args := range [][]string{
 		{"--json", "profile"},
 		{"--json", "eval", "--profile", "essays"},
+		{"--json", "score", "draft.md"},
 	} {
 		t.Run(args[1], func(t *testing.T) {
 			got := runBinary(t, binary, empty, args...)
@@ -191,4 +274,29 @@ func write(t *testing.T, path, body string) {
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+// seedShippableRelease installs a release at the head of the store the binary
+// will open, so the calibrated path can be exercised without earning a release
+// the expensive way.
+func seedShippableRelease(t *testing.T, path string) string {
+	t.Helper()
+	opened, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer opened.Close()
+
+	bundle, err := opened.LoadProfileBundle(context.Background(), "essays")
+	if err != nil {
+		t.Fatalf("LoadProfileBundle: %v", err)
+	}
+	if bundle.Reference.ID == "" {
+		t.Fatal("the indexed corpus has no reference to calibrate against")
+	}
+	release := evaltest.ShippableRelease(t, bundle.Profile.ID, bundle.Reference.ID)
+	if err := opened.PutRelease(context.Background(), release, "", store.AdvanceHead); err != nil {
+		t.Fatalf("PutRelease: %v", err)
+	}
+	return release.ID
 }

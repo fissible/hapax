@@ -103,6 +103,11 @@ func TestAnUncalibratedProfileStillMeasures(t *testing.T) {
 			if len(segment.Features) == 0 {
 				t.Errorf("segment %d measured a distance and reported no deltas", i)
 			}
+			// Exactly uncalibrated, so the workflow and the CLI cannot disagree
+			// about what an absent band means.
+			if segment.Band.Reason != "uncalibrated" {
+				t.Errorf("segment %d gives reason %q for its absent band", i, segment.Band.Reason)
+			}
 		}
 	}
 	if measured == 0 {
@@ -174,6 +179,12 @@ func TestADraftWithNothingAboveTheFloorIsInsufficientEvidence(t *testing.T) {
 	// It got as far as admitting the draft, so it can say what it found.
 	if result.ParagraphsBelowFloor == 0 {
 		t.Error("nothing was below the floor, and nothing was scored either")
+	}
+	// And it measured nothing, which is what the refusal means. A result
+	// carrying segments while calling itself insufficient-evidence would be
+	// labelling a measurement as an absence of one.
+	if len(result.Segments) != 0 {
+		t.Errorf("%d segments on an insufficient-evidence refusal", len(result.Segments))
 	}
 }
 

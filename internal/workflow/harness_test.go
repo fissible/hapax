@@ -11,6 +11,8 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
+	"github.com/fissible/hapax/internal/eval/evaltest"
+	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/store"
 	"github.com/fissible/hapax/internal/text"
@@ -475,4 +477,121 @@ func writeCorpusInto(root string, documents, long, short int) error {
 		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Scoring
+// ---------------------------------------------------------------------------
+
+// authorLikeDraft is prose in the same shape the corpus fixtures are written in,
+// so a draft has something to be close to.
+const authorLikeDraft = "Document draft paragraph one carries ordinary prose past a single sentence " +
+	"so the structure pass does not read it as a heading; it names one.\n\n" +
+	"Document draft paragraph two also carries ordinary prose past a single sentence, " +
+	"naming two again for distinctness.\n\n" +
+	"Document draft paragraph three continues in the same manner for three.\n\n"
+
+func writeDraft(t *testing.T, root, body string) string {
+	t.Helper()
+	path := filepath.Join(root, "draft.md")
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write draft: %v", err)
+	}
+	return path
+}
+
+func scoreRequest(root, path string) workflow.ScoreRequest {
+	return workflow.ScoreRequest{StorePath: defaultStorePath(root), Register: "essays", Path: path}
+}
+
+func scored(t *testing.T, request workflow.ScoreRequest) workflow.ScoreResult {
+	t.Helper()
+	result, err := workflow.Default().Score(ctx(), request)
+	if err != nil {
+		t.Fatalf("Score: %v", err)
+	}
+	return result
+}
+
+// calibratedStore is an indexed corpus with a SHIPPABLE release at its head.
+//
+// The release is crafted rather than measured, because reaching one honestly
+// costs about seven hundred documents — the calibration gate wants sixty
+// held-out author clusters. What is under test here is scoring against a
+// release, not the arithmetic that produces one, which internal/eval covers
+// over crafted populations of its own.
+func calibratedStore(t *testing.T) (root, releaseID string) {
+	t.Helper()
+	root = indexedCorpus(t)
+	opened := openStore(t, defaultStorePath(root))
+
+	bundle, err := opened.LoadProfileBundle(ctx(), "essays")
+	if err != nil {
+		t.Fatalf("LoadProfileBundle: %v", err)
+	}
+	if bundle.Reference.ID == "" {
+		t.Fatal("the indexed template has no reference to calibrate against")
+	}
+	release := evaltest.ShippableRelease(t, bundle.Profile.ID, bundle.Reference.ID)
+	if err := opened.PutRelease(ctx(), release, "", store.AdvanceHead); err != nil {
+		t.Fatalf("PutRelease: %v", err)
+	}
+	return root, release.ID
+}
+
+// uncalibratedStore has everything score needs to MEASURE and no release to band
+// with, which is the state an indexed corpus is in before eval has run.
+func uncalibratedStore(t *testing.T) string {
+	t.Helper()
+	root := indexedCorpus(t)
+	if head := releaseHeadOrEmpty(t, defaultStorePath(root), profileHead(t, root)); head != "" {
+		t.Fatalf("the indexed template already has a release head %q", head)
+	}
+	return root
+}
+
+// profileOnlyStore fits a profile and no reference: three documents, none of
+// them held out for calibration.
+func profileOnlyStore(t *testing.T) string {
+	t.Helper()
+	root := corpusOf(t, 3)
+	written := indexed(t, indexRequest(root))
+	if written.ReferenceID != "" {
+		t.Fatal("the fixture produced a reference; it was meant not to")
+	}
+	return root
+}
+
+// twoReferenceStore is the state #62 resolves by hash order: one profile, two
+// references, and no release naming either.
+func twoReferenceStore(t *testing.T) string {
+	t.Helper()
+	root := indexedCorpus(t)
+	opened := openStore(t, defaultStorePath(root))
+	bundle, err := opened.LoadProfileBundle(ctx(), "essays")
+	if err != nil {
+		t.Fatalf("LoadProfileBundle: %v", err)
+	}
+	second := bundle.Reference
+	second.ID = identity.HashInputs(map[string]string{"reference": "second", "profile": bundle.Profile.ID})
+	second.MinSegments++
+	if err := opened.PutReference(ctx(), second); err != nil {
+		t.Fatalf("PutReference: %v", err)
+	}
+	return root
+}
+
+// emptyStore is a directory with nothing above it.
+func emptyStore(t *testing.T) string {
+	t.Helper()
+	return t.TempDir()
+}
+
+func profileHead(t *testing.T, root string) string {
+	t.Helper()
+	head, err := openStore(t, defaultStorePath(root)).ProfileHead(ctx(), "essays")
+	if err != nil {
+		t.Fatalf("ProfileHead: %v", err)
+	}
+	return head
 }

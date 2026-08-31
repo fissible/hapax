@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/fissible/hapax/internal/eval/evaltest"
 	"github.com/fissible/hapax/internal/store"
 )
 
@@ -42,8 +43,47 @@ func TestAScoringBundleIsCoherentOrItIsNotReturned(t *testing.T) {
 	// And the release is the DOMAIN artifact, reconstructed through
 	// eval.NewRelease rather than handed over as storage rows: its gates have
 	// to agree with the flags the store persisted separately.
-	if bundle.Release.Shippable != bundle.Release.Discrimination.Discriminates && bundle.Release.Calibration.Calibrated {
-		t.Errorf("the reconstructed release disagrees with its own gates: %+v", bundle.Release)
+	// Parenthesised deliberately: written without them this reads as
+	// (a != b) && c, which lets a release call itself shippable while both
+	// gates failed. Codex caught that; the assertion said nothing.
+	gates := bundle.Release.Discrimination.Discriminates && bundle.Release.Calibration.Calibrated
+	if bundle.Release.Shippable != gates {
+		t.Errorf("shippable=%v with discrimination=%v and calibration=%v",
+			bundle.Release.Shippable, bundle.Release.Discrimination.Discriminates,
+			bundle.Release.Calibration.Calibrated)
+	}
+	if (bundle.Release.Reason == "") != bundle.Release.Shippable {
+		t.Errorf("shippable=%v with reason %q", bundle.Release.Shippable, bundle.Release.Reason)
+	}
+}
+
+// The reference a release NAMES, against a store that holds another one too.
+// Without the second reference a bundle still using #62's ORDER BY id would pass
+// this suite — which is the defect score must not inherit, so the fixture has to
+// make the wrong answer available.
+func TestACalibratedBundleTakesTheReferenceItsReleaseNames(t *testing.T) {
+	s := newStore(t)
+	ids := seedEveryArtifact(t, s)
+
+	other := referenceFixture(ids.Profile)
+	other.ID = fakeID("reference", "not-the-one")
+	other.MinSegments++
+	mustPutReference(t, s, other)
+	if other.ID >= ids.Reference {
+		t.Fatalf("the decoy %q does not sort before %q, so hash order would pick the right one by luck",
+			other.ID, ids.Reference)
+	}
+
+	bundle, err := s.LoadScoringBundle(ctx(), seededRegister)
+	if err != nil {
+		t.Fatalf("LoadScoringBundle: %v", err)
+	}
+	if bundle.Reference.ID != ids.Reference {
+		t.Errorf("reference = %q, want the one the release names, %q", bundle.Reference.ID, ids.Reference)
+	}
+	// And several references is only ambiguous where nothing designates one.
+	if !bundle.Calibrated {
+		t.Error("a second reference made a calibrated bundle raw")
 	}
 }
 
@@ -144,7 +184,7 @@ func TestAReleaseThatWillNotReconstructIsCorrupt(t *testing.T) {
 func TestAReleaseSurvivesTheRoundTrip(t *testing.T) {
 	s := newStore(t)
 	ids := seedProfileAndReference(t, s)
-	written := shippableRelease(t, ids.Profile, ids.Reference)
+	written := evaltest.ShippableRelease(t, ids.Profile, ids.Reference)
 
 	if err := s.PutRelease(ctx(), written, "", store.AdvanceHead); err != nil {
 		t.Fatalf("PutRelease: %v", err)
@@ -167,7 +207,7 @@ func TestAReleaseSurvivesTheRoundTrip(t *testing.T) {
 func TestRewritingAReleaseIsAReplayOrAConflict(t *testing.T) {
 	s := newStore(t)
 	ids := seedProfileAndReference(t, s)
-	written := shippableRelease(t, ids.Profile, ids.Reference)
+	written := evaltest.ShippableRelease(t, ids.Profile, ids.Reference)
 
 	if err := s.PutRelease(ctx(), written, "", store.AdvanceHead); err != nil {
 		t.Fatalf("first write: %v", err)
@@ -190,13 +230,13 @@ func TestAReleaseMustNameArtifactsTheStoreHolds(t *testing.T) {
 	ids := seedProfileAndReference(t, s)
 
 	t.Run("an unknown profile", func(t *testing.T) {
-		stranger := shippableRelease(t, fakeID("profile", "elsewhere"), ids.Reference)
+		stranger := evaltest.ShippableRelease(t, fakeID("profile", "elsewhere"), ids.Reference)
 		if err := s.PutRelease(ctx(), stranger, "", store.LeaveHead); err == nil {
 			t.Error("wrote a release about a profile that is not here")
 		}
 	})
 	t.Run("an unknown reference", func(t *testing.T) {
-		stranger := shippableRelease(t, ids.Profile, fakeID("reference", "elsewhere"))
+		stranger := evaltest.ShippableRelease(t, ids.Profile, fakeID("reference", "elsewhere"))
 		if err := s.PutRelease(ctx(), stranger, "", store.LeaveHead); err == nil {
 			t.Error("wrote a release about a reference that is not here")
 		}

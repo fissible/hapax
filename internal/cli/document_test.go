@@ -62,7 +62,7 @@ func TestTheStatusVocabularyIsThree(t *testing.T) {
 // implemented" from the code, so the only honest source is a slice adding its
 // own command here when it lands. It going stale is the test doing its job.
 func TestTheCommandSurfaceIsWhatIsImplemented(t *testing.T) {
-	want := []string{"eval", "index", "profile", "tells"}
+	want := []string{"eval", "index", "profile", "score", "tells"}
 	got := append([]string(nil), cli.Commands()...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {
