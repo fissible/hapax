@@ -816,11 +816,14 @@ func TestAStoredDiscriminationThatContradictsItsFloorIsCorrupt(t *testing.T) {
 // bound-versus-target relation that decides it.
 func setEmitted(report *store.BandReport, emitted bool) {
 	report.Emitted = emitted
-	if emitted {
-		report.ErrorBound, report.Reason = report.Target/2, ""
-	} else {
+	if !emitted {
 		report.ErrorBound, report.Reason = report.Target*2, "error-bound-exceeds-target"
+		return
 	}
+	// An emitted bound is at or under its target AND at or above the floor its
+	// own cluster count imposes. Target/2 satisfied the first and broke the
+	// second: with 40 clusters the floor is 0.075 and half of 0.10 is 0.05.
+	report.ErrorBound, report.Reason = math.Max(3/float64(report.ClassClusters), report.Target*0.8), ""
 }
 
 // The vocabularies cli and store validate against are the ones eval declares.
