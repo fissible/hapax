@@ -146,7 +146,28 @@ by construction" below.*
 | 10 | `rewrite` | The loop, depending on interfaces (`Scorer`, `Selector`, `Gate`, `Provider`, `Store`) rather than concrete components. Monotonic acceptance rule below. Retains before/after artifacts and rejection reasons. | 6, 7, 8, 9 |
 | 11 | `assemble` | Splices accepted replacements back into the original bytes. Ordered, non-overlapping raw spans; every untouched byte and excision preserved exactly; all-or-nothing output. | 3, 10 |
 | 12 | `store` | SQLite artifact persistence: the declared artifact kinds and their identities, forward migration, the persistence allowlist enforcing the privacy invariant, and span rehydration with no substitution and no silent reduction. Typed per-artifact operations, never a generic put. | 0, 2, 3, 4 |
-| 13 | `cli` | Composition root. Resolves the mode once, constructs the credential factory only on the cloud path, wires every component, and owns the command surface, output schema and exit codes. | all |
+| 13 | `ingest` | Verified corpus files to a deterministic node graph with vectors on included leaves, and the standardizations a reference needs. Builds each document's tree **once** and derives both the persisted nodes and the profile and reference inputs from that same tree. | 0, 2, 3, 4, 12 |
+| 14 | `cli` | Composition root. Resolves the mode once, constructs the credential factory only on the cloud path, wires every component, and owns the command surface, output schema and exit codes. | all |
+
+`ingest` was not in the original table. It appeared when `cli` first tried to write a real
+corpus and found that nothing owned the conversion: `corpus.Walk` produces paths, hashes and
+admission verdicts, while `store.SnapshotWrite` wants an ordered node graph with feature
+vectors, and the rules connecting them — which leaves count, what a node's ordinal means —
+have to agree with what `profile` fits, what `select` selects and what `rewrite` references.
+Three packages deriving them separately is how they drift, which is the argument the whole
+component order rests on. Issue #53.
+
+**Which leaves count is `profile`'s, not `ingest`'s.** `profile.ParagraphLeaves` owns the
+inclusion rule and the lexical floor, and takes the caller's already-built tree root so both
+consumers describe the same nodes rather than two trees that happen to agree.
+`profile.ParagraphVectors` keeps its contract by building a tree and delegating.
+
+**Every document is persisted; only eligible ones get a graph.** A rejected document is a
+document row recording its admission and rejection, with no nodes — the corpus index has to
+show what it refused, not just what it kept.
+
+`deviation` sits between `profile` and `eval` in the dependency order and was omitted from
+this table; it owns the standardization and the reference, including the reference minimum.
 
 ### Evaluation protocol
 
@@ -2083,6 +2104,38 @@ schema, answers "what version is this". Three disagreements are distinguished ra
 merged: a version newer than the binary knows, a checksum that differs from the binary's
 migration of that version, and a schema with no ledger at all — the last being a
 pre-ledger or externally-created database, which is refused rather than adopted.
+
+**`index` is one transaction, and it is not four writers composed.** `store.Index` writes the
+aggregate, advances the profile head, reads every head **on that same connection after the
+advance**, and prunes from those — inside one `BEGIN IMMEDIATE`. Composing `PutSnapshot`,
+`PutProfile`, `PutReference` and `Prune` would be four transactions wearing one function's
+name, and between any two of them another indexer's not-yet-headed write can be pruned. Every
+file read, `corpus.Walk`, `profile.Build` and the standardizations finish **before** the
+transaction opens; only database work is inside it.
+
+Its input has three declared **modes** rather than nullable parts, so an absent profile is a
+stated choice and not a nil someone forgot: `snapshot-only` when the corpus cannot fit a
+profile, `profile` when it can but the Calibrate split cannot fill a reference, and
+`profile-and-reference`. Validation requires exactly what the mode declares and refuses what
+it does not. A hard failure is not a fourth mode — it commits nothing.
+
+**An index that fits no profile does not prune.** Pruning would delete the snapshot it just
+recorded, since nothing points at it, and "indexed, adverse, no profile" has to leave
+something to look at. Only the modes that advance a head prune. The orphan is reclaimed by
+the next index that does, which is what an explicit `Prune` is for.
+
+**Profile readiness persists, and its reason is a closed set.** `profile.Profile` carries
+`ProductionReady` and a reason that `store` could not hold, so `hapax profile` had nothing to
+report. The column pair is coupled — ready exactly when the reason is empty — and the reason
+is validated against `profile.NotReadyReasons()`, the owning package's own declaration, the
+way `eval`'s reasons are. Migration 2 backfills every existing row with the one reason
+`profile.Build` has ever produced, which is what those rows always meant. **Profile identity
+is unaffected:** `IdentityInputs` does not include readiness, so no stored profile changes ID.
+
+**The corpus insufficiency outcome is typed.** `profile.Build` returned untyped errors for
+its floors, so a caller could not tell "the corpus is too small", which is adverse and
+completed, from an I/O failure, which is not. One sentinel, `ErrCorpusTooSmall`, wraps every
+insufficiency: both numeric floors, no eligible document, and no train document.
 
 **The document row holds a language VERDICT, not a tag.** The artifact table above always
 said verdict; slice 1 implemented `validLanguage` as a BCP-47-ish tag accepting `en`, which
