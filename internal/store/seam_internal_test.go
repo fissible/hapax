@@ -24,6 +24,7 @@ import (
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/preserve"
+	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -894,5 +895,14 @@ func seamProfile(snapshotID string) Profile {
 		Register: "indexed", Unit: "paragraph", VarianceConvention: "sample",
 		ManifestDigest: features.ManifestDigest(), FeatureSetVersion: features.SetVersion,
 		MinParagraphLexicalTokens: 40, Stats: seamStats(),
+		ProductionReady: false, NotReadyReason: seamNotReadyReason(),
 	}
+}
+
+func seamNotReadyReason() string {
+	reasons := profile.NotReadyReasons()
+	if len(reasons) == 0 {
+		return ""
+	}
+	return reasons[0]
 }
