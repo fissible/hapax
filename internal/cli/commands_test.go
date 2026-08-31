@@ -173,7 +173,7 @@ func TestProfileTakesNoOperand(t *testing.T) {
 // that is a limit of this slice, not an adverse finding about the corpus, and an
 // index that could never exit 0 would tell a script nothing.
 func TestIndexExitCodes(t *testing.T) {
-	adverse := func(adversity string, mode workflow.IndexMode) workflow.IndexResult {
+	adverse := func(adversity workflow.Adversity, mode workflow.IndexMode) workflow.IndexResult {
 		result := fullIndex()
 		result.Mode, result.Adverse, result.Adversity = mode, true, adversity
 		if mode == workflow.IndexSnapshotOnly {
@@ -772,11 +772,11 @@ func TestTheIndexPayloadCarriesTheWholeAnswer(t *testing.T) {
 		code       int
 		wantProfle bool
 		wantRef    bool
-		adversity  string
+		adversity  workflow.Adversity
 	}{
 		{"complete", full, 0, true, true, ""},
-		{"corpus too small", adverse, 1, false, false, string(workflow.AdversityCorpusTooSmall)},
-		{"reference too small", middle, 1, true, false, string(workflow.AdversityReferenceTooSmall)},
+		{"corpus too small", adverse, 1, false, false, workflow.AdversityCorpusTooSmall},
+		{"reference too small", middle, 1, true, false, workflow.AdversityReferenceTooSmall},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := runWith(t, &fakeService{indexResult: c.result}, "--json", "index", "--profile", "essays", "/w")
@@ -813,7 +813,7 @@ func TestTheIndexPayloadCarriesTheWholeAnswer(t *testing.T) {
 			if result.Mode != string(c.result.Mode) {
 				t.Errorf("mode = %q, want %q", result.Mode, c.result.Mode)
 			}
-			if result.Adversity != c.adversity {
+			if result.Adversity != string(c.adversity) {
 				t.Errorf("adversity = %q, want %q", result.Adversity, c.adversity)
 			}
 			if result.Documents != c.result.Documents || result.Eligible != c.result.Eligible ||
