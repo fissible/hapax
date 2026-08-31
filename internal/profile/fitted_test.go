@@ -107,6 +107,16 @@ func TestFittedDeclaresExactlyTheseFields(t *testing.T) {
 	}
 }
 
+// And a nil profile, which is not a mutation of a valid one and so is not
+// covered by the table above. It matters because deviation.Standardize used to
+// reject nil itself and now never sees one: this is where that rejection went.
+func TestANilProfileYieldsNoProjection(t *testing.T) {
+	var absent *profile.Profile
+	if _, err := absent.Fitted(); err == nil {
+		t.Error("projected a profile that is not there")
+	}
+}
+
 // builtProfile is a real fitted profile, not a literal: the projection's whole
 // job is to agree with what Build produces.
 func builtProfile(t *testing.T) *profile.Profile {
