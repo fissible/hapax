@@ -129,7 +129,7 @@ func standardize(t *testing.T, prof *profile.Profile, src string, split corpus.S
 	if err != nil {
 		t.Fatalf("Admit(%q): %v", src, err)
 	}
-	out, err := deviation.Standardize(features.Extract(doc.Tokens()), prof, split)
+	out, err := deviation.Standardize(features.Extract(doc.Tokens()), mustFit(t, prof), split)
 	if err != nil {
 		t.Fatalf("Standardize(%q): %v", src, err)
 	}
@@ -860,7 +860,7 @@ func TestTheReportIsTheCompositionOfItsParts(t *testing.T) {
 	for i, vector := range paragraphs.Vectors {
 		segment := got.Segments[i]
 
-		standardized, err := deviation.Standardize(vector, prof, corpus.Draft)
+		standardized, err := deviation.Standardize(vector, mustFit(t, prof), corpus.Draft)
 		if err != nil {
 			t.Fatalf("Standardize %d: %v", i, err)
 		}
