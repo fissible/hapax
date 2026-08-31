@@ -662,6 +662,7 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 		Register: "essays", Unit: "paragraph", VarianceConvention: "sample",
 		ManifestDigest: features.ManifestDigest(), FeatureSetVersion: features.SetVersion,
 		MinParagraphLexicalTokens: 40, Stats: seamStats(),
+		ProductionReady: false, NotReadyReason: seamNotReadyReason(),
 	}
 	if err := s.PutProfile(ctx, prof, AdvanceHead); err != nil {
 		t.Fatalf("PutProfile: %v", err)

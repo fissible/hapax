@@ -26,6 +26,8 @@ func declaredVocabularies() map[string][]string {
 	return map[string][]string{
 		"document.split":                        stringsOf(corpus.Splits()),
 		"document.admission":                    stringsOf(corpus.Admissions()),
+		"document.language":                     stringsOf(corpus.CheckStates()),
+		"profile.not_ready_reason":              readinessReasons(),
 		"node.kind":                             stringsOf(text.Kinds()),
 		"node.role":                             stringsOf(text.Roles()),
 		"node.exclusion":                        stringsOf(text.ExclusionReasons()),
