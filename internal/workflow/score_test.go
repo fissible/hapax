@@ -194,9 +194,35 @@ func TestADraftWithNothingToMeasureIsInsufficientEvidence(t *testing.T) {
 	if len(result.Segments) != 0 {
 		t.Errorf("%d segments on an insufficient-evidence refusal", len(result.Segments))
 	}
-	// And it got far enough to have admitted the draft, so it names it.
+	// And it got far enough to have admitted the draft, so it names it — along
+	// with everything it resolved before the draft turned out to be the
+	// problem. A refusal that dropped those would say the store was empty.
 	if result.Path != draft {
 		t.Errorf("path = %q, want %q", result.Path, draft)
+	}
+	if result.ProfileID == "" || result.ReferenceID == "" || result.ReleaseID == "" {
+		t.Errorf("resolved a calibrated release and reported none of it: %+v", result)
+	}
+	if !result.Calibrated {
+		t.Error("scored against a release and called itself uncalibrated")
+	}
+}
+
+// An uncalibrated store scoring an unmeasurable draft has two things wrong at
+// once. The draft is the nearer one: insufficient-evidence tells the reader to
+// look at what they handed over, where uncalibrated would send them to run eval
+// and leave them no better off.
+func TestNothingToMeasureOutranksNothingToBandWith(t *testing.T) {
+	root := uncalibratedStore(t)
+	draft := writeDraft(t, root, "123 456.\n\n789 1011.\n\n")
+
+	result := scored(t, scoreRequest(root, draft))
+
+	if result.Refusal != workflow.RefusalInsufficientEvidence {
+		t.Errorf("refusal = %q, want %q", result.Refusal, workflow.RefusalInsufficientEvidence)
+	}
+	if result.Calibrated {
+		t.Error("calibrated with no release")
 	}
 }
 

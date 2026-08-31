@@ -123,7 +123,7 @@ func TestScoreExitCodes(t *testing.T) {
 		},
 		{
 			name: "nothing above the floor", code: 4, status: cli.StatusRefused,
-			reason: cli.ReasonInsufficientEvidence, result: refusedScore(workflow.RefusalInsufficientEvidence),
+			reason: cli.ReasonInsufficientEvidence, result: unmeasurableScore(),
 		},
 		{name: "a draft that cannot be read", result: workflow.ScoreResult{}, err: errNotUsed{}, code: 3},
 	} {
@@ -369,7 +369,7 @@ func TestEveryScoreShapeTheWorkflowProducesRenders(t *testing.T) {
 		"no profile":            refusedScore(workflow.RefusalNoProfile),
 		"no reference":          refusedScore(workflow.RefusalNoReference),
 		"ambiguous reference":   refusedScore(workflow.RefusalAmbiguousReference),
-		"insufficient evidence": refusedScore(workflow.RefusalInsufficientEvidence),
+		"insufficient evidence": unmeasurableScore(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			for _, asJSON := range []bool{true, false} {
@@ -449,10 +449,29 @@ func uncalibratedScore() workflow.ScoreResult {
 	return result
 }
 
-// refusedScore is a refusal that never got as far as measuring.
+// refusedScore is a refusal that never got as far as RESOLVING anything: no
+// profile, nothing to transform against, or several references and no way to
+// choose. Nothing is named because nothing was found.
 func refusedScore(refusal string) workflow.ScoreResult {
 	return workflow.ScoreResult{
 		StorePath: "/w/.hapax/hapax.sqlite3", Path: "draft.md", Refusal: refusal,
+	}
+}
+
+// unmeasurableScore is the shape the real runner produces for
+// insufficient-evidence, which is NOT the shape above: it resolved the profile,
+// the reference and the release, and then the draft yielded no segment. Keeping
+// those identities is the point — a reader needs to know what it was measured
+// against in order to know the draft was the problem.
+//
+// The fake had them nulled, so nothing in this package ever rendered what the
+// workflow actually returns. That gap has produced a bug in every slice since
+// A2a and codex caught this one in review.
+func unmeasurableScore() workflow.ScoreResult {
+	return workflow.ScoreResult{
+		StorePath: "/w/.hapax/hapax.sqlite3", Path: "draft.md",
+		ProfileID: "pro", ReferenceID: "ref", ReleaseID: "rel", Calibrated: true,
+		Refusal: workflow.RefusalInsufficientEvidence,
 	}
 }
 
@@ -608,5 +627,33 @@ func scoreDocument(result workflow.ScoreResult) cli.Document {
 	return cli.Document{
 		Schema: cli.Schema, Command: "score", Status: status, Reason: reason,
 		Profile: &register, Result: payload,
+	}
+}
+
+// An insufficient-evidence refusal keeps what it RESOLVED and reports no
+// measurement, which is a different shape from a refusal that resolved nothing.
+// Conflating the two would tell a reader the store was empty when the draft was.
+func TestInsufficientEvidenceKeepsWhatItResolved(t *testing.T) {
+	result := unmeasurableScore()
+	got := runWith(t, &fakeService{scoreResult: result}, "--json", "score", "draft.md")
+	if got.code != 4 {
+		t.Fatalf("code = %d, want 4 (stderr %q)", got.code, got.stderr)
+	}
+
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(decode(t, got.stdout).Result, &payload); err != nil {
+		t.Fatalf("decoding result: %v", err)
+	}
+	for _, member := range []struct{ name, wanted string }{
+		{"profile_id", `"pro"`}, {"reference_id", `"ref"`}, {"release_id", `"rel"`},
+		{"calibrated", "true"},
+	} {
+		if got := string(payload[member.name]); got != member.wanted {
+			t.Errorf("%s = %s, want %s — it resolved these and then measured nothing",
+				member.name, got, member.wanted)
+		}
+	}
+	if segments := string(payload["segments"]); segments != "null" {
+		t.Errorf("segments = %s on a refusal that measured nothing", segments)
 	}
 }

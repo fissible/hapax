@@ -623,56 +623,7 @@ func invalidEvalField(stored EvalResult) string {
 	if invalidDiscrimination(stored.Discrimination) != "" || invalidCalibration(stored.Calibration) != "" {
 		return "gate"
 	}
-	release, err := eval.NewRelease(
-		eval.Discrimination{
-			ID:                    stored.Discrimination.ID,
-			PopulationID:          stored.Discrimination.PopulationID,
-			ProfileID:             stored.ProfileID,
-			ReferenceID:           stored.ReferenceID,
-			FeatureManifestDigest: stored.Discrimination.Binding.ManifestDigest,
-			WeightScheme:          stored.Discrimination.Binding.WeightScheme,
-			DistanceAlgorithm:     stored.Discrimination.Binding.DistanceAlgorithm,
-			ScoredTiers:           stored.Discrimination.Binding.ScoredTiers,
-			Split:                 stored.Discrimination.Split,
-			Spec: eval.DiscriminationSpec{
-				Floor: stored.Discrimination.Floor, Confidence: stored.Discrimination.Confidence,
-				Resamples: stored.Discrimination.Resamples, Seed: stored.Discrimination.Seed,
-			},
-			Algorithm:          stored.Discrimination.Algorithm,
-			Clustering:         stored.Discrimination.Clustering,
-			AUC:                stored.Discrimination.AUC,
-			LowerBound:         stored.Discrimination.LowerBound,
-			Cap:                stored.Discrimination.Cap,
-			AuthorSegments:     stored.Discrimination.AuthorSegments,
-			DistractorSegments: stored.Discrimination.DistractorSegments,
-			AuthorClusters:     stored.Discrimination.AuthorClusters,
-			DistractorClusters: stored.Discrimination.DistractorClusters,
-			MinClusters:        stored.Discrimination.MinClusters,
-			Discriminates:      stored.Discrimination.Discriminates,
-			Reason:             stored.Discrimination.Reason,
-		},
-		eval.Calibration{
-			ID:                    stored.Calibration.ID,
-			ThresholdsID:          stored.Calibration.ThresholdsID,
-			PopulationID:          stored.Calibration.PopulationID,
-			Low:                   stored.Calibration.Low,
-			High:                  stored.Calibration.High,
-			ProfileID:             stored.ProfileID,
-			ReferenceID:           stored.ReferenceID,
-			FeatureManifestDigest: stored.Calibration.Binding.ManifestDigest,
-			WeightScheme:          stored.Calibration.Binding.WeightScheme,
-			DistanceAlgorithm:     stored.Calibration.Binding.DistanceAlgorithm,
-			ScoredTiers:           stored.Calibration.Binding.ScoredTiers,
-			Split:                 stored.Calibration.Split,
-			Floor: eval.BandFloor{
-				Confidence: stored.Calibration.Confidence, Resamples: stored.Calibration.Resamples, Seed: stored.Calibration.Seed,
-			},
-			Algorithm:  stored.Calibration.Algorithm,
-			Bands:      evalBandReports(stored.Calibration.Bands),
-			Calibrated: stored.Calibration.Calibrated,
-			Reason:     stored.Calibration.Reason,
-		},
-	)
+	release, err := releaseFromStored(stored)
 	if err != nil {
 		return "gate composition"
 	}
@@ -686,19 +637,6 @@ func invalidEvalField(stored EvalResult) string {
 		return "release reason"
 	}
 	return ""
-}
-
-func evalBandReports(reports []BandReport) []eval.BandReport {
-	evaluated := make([]eval.BandReport, len(reports))
-	for index, report := range reports {
-		evaluated[index] = eval.BandReport{
-			Band: report.Band, Claims: report.Claims, Target: report.Target, ErrorRate: report.ErrorRate,
-			ErrorBound: report.ErrorBound, ClassSegments: report.ClassSegments, ClassClusters: report.ClassClusters,
-			MinClassClusters: report.MinClassClusters, AuthorSegments: report.AuthorSegments,
-			DistractorSegments: report.DistractorSegments, Emitted: report.Emitted, Reason: report.Reason,
-		}
-	}
-	return evaluated
 }
 
 func validBinding(binding Binding) bool {

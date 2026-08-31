@@ -184,17 +184,36 @@ func validScoreResult(status Status, reason Reason, r ScoreResult) error {
 	if r.Calibrated != (r.ReleaseID != nil) {
 		return errors.New("incoherent score calibration")
 	}
+	if r.ParagraphsBelowFloor < 0 {
+		return errors.New("incoherent score paragraph floor")
+	}
+	identified := r.ProfileID != nil && *r.ProfileID != "" && r.ReferenceID != nil && *r.ReferenceID != ""
+	switch reason {
+	case "":
+		if !r.Calibrated || !identified || len(r.Segments) == 0 {
+			return errors.New("incoherent score result")
+		}
+	case ReasonUncalibrated:
+		if r.Calibrated || !identified || len(r.Segments) == 0 {
+			return errors.New("incoherent score refusal")
+		}
+	case ReasonInsufficientEvidence:
+		if len(r.Segments) != 0 {
+			return errors.New("incoherent score refusal")
+		}
+	case ReasonNoProfile, ReasonNoReference, ReasonAmbiguousReference:
+		if r.Calibrated || identified || len(r.Segments) != 0 {
+			return errors.New("incoherent score refusal")
+		}
+	}
 	if status == StatusRefused && reason != ReasonUncalibrated && len(r.Segments) != 0 {
-		return errors.New("incoherent score refusal")
-	}
-	if reason == ReasonInsufficientEvidence && len(r.Segments) != 0 {
-		return errors.New("incoherent score refusal")
-	}
-	if reason == ReasonUncalibrated && (r.Calibrated || len(r.Segments) == 0) {
 		return errors.New("incoherent score refusal")
 	}
 	adverse := false
 	for _, s := range r.Segments {
+		if s.Band.Defined != (s.Band.Band != "") {
+			return errors.New("incoherent score band")
+		}
 		if s.Band.Defined && (!r.Calibrated || !contains(workflow.Bands(), s.Band.Band)) {
 			return errors.New("incoherent score band")
 		}
