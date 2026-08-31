@@ -253,6 +253,13 @@ func (p *Profile) Stat(id features.ID) (Stats, bool) {
 	return Stats{}, false
 }
 
+// RebindSnapshot associates the profile with its persisted snapshot and
+// recomputes the profile identity from the package's complete identity rule.
+func (p *Profile) RebindSnapshot(snapshotID string) {
+	p.SnapshotID = snapshotID
+	p.ID = identity.HashInputs(p.IdentityInputs())
+}
+
 // IdentityInputs returns the complete reviewable cache identity inputs.
 func (p *Profile) IdentityInputs() map[string]string {
 	return map[string]string{

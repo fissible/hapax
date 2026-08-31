@@ -14,6 +14,7 @@ import (
 	"github.com/fissible/hapax/internal/mode"
 	"github.com/fissible/hapax/internal/tells"
 	"github.com/fissible/hapax/internal/text"
+	"github.com/fissible/hapax/internal/workflow"
 )
 
 // Schema is the versioned JSON envelope emitted for completed commands.
@@ -47,7 +48,7 @@ var reasons = []Reason{
 	ReasonLocalOnlyForbidsProvider,
 	ReasonNoProfile,
 }
-var commands = []string{"tells"}
+var commands = []string{"index", "profile", "tells"}
 
 // Reasons returns the closed refusal vocabulary.
 func Reasons() []Reason { return append([]Reason(nil), reasons...) }
@@ -86,8 +87,9 @@ type Document struct {
 	Status  Status  `json:"status"`
 	Reason  Reason  `json:"reason"`
 	Profile *string `json:"profile"`
-	// Result widens when a second command lands.
-	Result TellsResult `json:"result"`
+	// Result is the command-selected payload. The command discriminator keeps
+	// existing hapax.v1 tells consumers reading result.path unchanged.
+	Result any `json:"result"`
 }
 
 // Render validates and writes this document in the requested representation.
@@ -116,7 +118,12 @@ func (d Document) Render(w io.Writer, asJSON bool) error {
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(w, " findings=%d\n", d.Result.Count)
+	if result := humanResult(d.Result); result != "" {
+		if _, err := fmt.Fprintf(w, " %s", result); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintln(w)
 	return err
 }
 
@@ -136,7 +143,105 @@ func (d Document) valid() error {
 	if d.Reason != "" && !contains(Reasons(), d.Reason) {
 		return errors.New("incoherent document reason")
 	}
-	return validTellsResult(d.Result)
+	switch result := d.Result.(type) {
+	case TellsResult:
+		if d.Command != "tells" {
+			return errors.New("incoherent document result")
+		}
+		return validTellsResult(result)
+	case IndexResult:
+		if d.Command != "index" {
+			return errors.New("incoherent document result")
+		}
+		if d.Status == StatusRefused || d.Profile == nil || *d.Profile == "" {
+			return errors.New("incoherent index document")
+		}
+		return validIndexResult(d.Status, result)
+	case ProfileResult:
+		if d.Command != "profile" {
+			return errors.New("incoherent document result")
+		}
+		return validProfileResult(d.Status, d.Reason, d.Profile, result)
+	default:
+		return errors.New("incoherent document result")
+	}
+}
+
+func validIndexResult(status Status, result IndexResult) error {
+	if !contains(workflow.IndexModes(), result.Mode) {
+		return errors.New("incoherent index result mode")
+	}
+	if result.ProfileID != nil && *result.ProfileID == "" || result.ReferenceID != nil && *result.ReferenceID == "" {
+		return errors.New("incoherent index result identity")
+	}
+	if result.Adversity != "" && !contains(workflow.Adversities(), result.Adversity) {
+		return errors.New("incoherent index result adversity")
+	}
+	if (status == StatusAdverse) != (result.Adversity != "") {
+		return errors.New("incoherent index result adversity")
+	}
+	switch result.Mode {
+	case workflow.IndexSnapshotOnly:
+		if result.Adversity != workflow.AdversityCorpusTooSmall || result.ProfileID != nil || result.ReferenceID != nil {
+			return errors.New("incoherent index result mode")
+		}
+	case workflow.IndexProfile:
+		if result.Adversity != workflow.AdversityReferenceTooSmall || result.ProfileID == nil || result.ReferenceID != nil {
+			return errors.New("incoherent index result mode")
+		}
+	case workflow.IndexProfileAndReference:
+		if result.Adversity != "" || result.ProfileID == nil || result.ReferenceID == nil {
+			return errors.New("incoherent index result mode")
+		}
+	}
+	return nil
+}
+
+func validProfileResult(status Status, reason Reason, envelopeProfile *string, result ProfileResult) error {
+	if !contains(workflow.Selections(), result.Selection) {
+		return errors.New("incoherent profile result selection")
+	}
+	selected := result.Selection == workflow.SelectedSoleHead || result.Selection == workflow.SelectedExplicit
+	if result.Selection == workflow.SelectionAmbiguous || result.Selection == workflow.SelectionUnknownRegister {
+		return errors.New("incoherent profile result selection")
+	}
+	if !validAvailableProfiles(result.Available) {
+		return errors.New("incoherent profile result available profiles")
+	}
+	if !selected {
+		if result.Selection != workflow.SelectionNoProfile || status != StatusRefused || reason != ReasonNoProfile ||
+			envelopeProfile != nil || len(result.Available) != 0 || !emptyProfile(result.Profile) ||
+			result.ReferenceID != nil || result.Evaluated {
+			return errors.New("incoherent profile result selection")
+		}
+		return nil
+	}
+	if status != StatusOK || envelopeProfile == nil || *envelopeProfile == "" ||
+		result.Profile.ID == "" || result.Profile.Register == "" || *envelopeProfile != result.Profile.Register ||
+		!contains(result.Available, result.Profile.Register) {
+		return errors.New("incoherent profile result selection")
+	}
+	if result.Selection == workflow.SelectedSoleHead && (len(result.Available) != 1 || result.Available[0] != result.Profile.Register) {
+		return errors.New("incoherent profile result selection")
+	}
+	if result.Evaluated && result.ReferenceID == nil {
+		return errors.New("incoherent profile result evaluation")
+	}
+	return nil
+}
+
+func validAvailableProfiles(available []string) bool {
+	for i, register := range available {
+		if register == "" || (i > 0 && available[i-1] >= register) {
+			return false
+		}
+	}
+	return true
+}
+
+func emptyProfile(profile Profile) bool {
+	return profile.ID == "" && profile.SnapshotID == "" && profile.Register == "" &&
+		!profile.ProductionReady && profile.NotReadyReason == "" && len(profile.Stats) == 0
 }
 
 func validTellsResult(result TellsResult) error {
@@ -176,12 +281,12 @@ type Deps struct {
 	Env      func(string) (string, bool)
 	Now      func() time.Time
 	ReadFile func(string) ([]byte, error)
+	Getwd    func() (string, error)
+	Service  workflow.Service
 }
 
 // Run executes one command and returns its process exit code.
 func Run(ctx context.Context, args []string, deps Deps) int {
-	// A1 has no cancellable work; retain ctx so later commands need not change Run.
-	_ = ctx
 	parsed, parseErr := parse(args)
 	modeValue, modeErr := mode.Resolve(parsed.localOnly, deps.Env)
 	// A1 has no provider to configure from the resolved mode.
@@ -195,6 +300,12 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 		return 2
 	}
 
+	if parsed.command == "index" {
+		return runIndex(ctx, parsed, deps)
+	}
+	if parsed.command == "profile" {
+		return runProfile(ctx, parsed, deps)
+	}
 	raw, err := deps.ReadFile(parsed.path)
 	if err != nil {
 		diagnostic(deps.Stderr, fmt.Sprintf("cannot read draft %q: %q", parsed.path, err.Error()))
@@ -220,16 +331,18 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 }
 
 type invocation struct {
-	json      bool
-	localOnly bool
-	path      string
+	json                     bool
+	localOnly                bool
+	command, register, store string
+	path                     string
 }
 
 func parse(args []string) (invocation, error) {
 	var positional []string
 	flags := true
 	result := invocation{}
-	for _, arg := range args {
+	for i := 0; i < len(args); i++ {
+		arg := args[i]
 		if flags && arg == "--" {
 			flags = false
 			continue
@@ -240,8 +353,30 @@ func parse(args []string) (invocation, error) {
 				result.json = true
 			case "--local-only":
 				result.localOnly = true
+			case "--profile", "--store":
+				if i+1 == len(args) || args[i+1] == "--" {
+					return invocation{}, fmt.Errorf("flag %q requires a value", arg)
+				}
+				i++
+				if arg == "--profile" {
+					result.register = args[i]
+				} else {
+					result.store = args[i]
+				}
 			default:
-				return invocation{}, fmt.Errorf("invalid flag %q", arg)
+				if strings.HasPrefix(arg, "--profile=") {
+					result.register = strings.TrimPrefix(arg, "--profile=")
+					if result.register == "" {
+						return invocation{}, fmt.Errorf("flag %q requires a value", "--profile")
+					}
+				} else if strings.HasPrefix(arg, "--store=") {
+					result.store = strings.TrimPrefix(arg, "--store=")
+					if result.store == "" {
+						return invocation{}, fmt.Errorf("flag %q requires a value", "--store")
+					}
+				} else {
+					return invocation{}, fmt.Errorf("invalid flag %q", arg)
+				}
 			}
 			continue
 		}
@@ -250,16 +385,189 @@ func parse(args []string) (invocation, error) {
 	if len(positional) == 0 {
 		return invocation{}, errors.New("missing command")
 	}
-	if positional[0] != "tells" {
+	result.command = positional[0]
+	if !contains(Commands(), result.command) {
 		available := Commands()
 		sort.Strings(available)
 		return invocation{}, fmt.Errorf("unknown command %q (available: %s)", positional[0], strings.Join(available, ", "))
+	}
+	if result.command == "index" {
+		if result.register == "" || len(positional) != 2 {
+			return invocation{}, errors.New("index requires --profile and exactly one corpus root")
+		}
+		result.path = positional[1]
+		return result, nil
+	}
+	if result.command == "profile" {
+		if len(positional) != 1 {
+			return invocation{}, errors.New("profile takes no operands")
+		}
+		return result, nil
 	}
 	if len(positional) != 2 {
 		return invocation{}, errors.New("tells requires exactly one file operand")
 	}
 	result.path = positional[1]
 	return result, nil
+}
+
+type IndexResult struct {
+	Store             string             `json:"store"`
+	SnapshotID        string             `json:"snapshot_id"`
+	Mode              workflow.IndexMode `json:"mode"`
+	Adversity         workflow.Adversity `json:"adversity"`
+	Documents         int                `json:"documents"`
+	Eligible          int                `json:"eligible"`
+	Nodes             int                `json:"nodes"`
+	CalibrateSegments int                `json:"calibrate_segments"`
+	TrainParagraphs   int                `json:"train_paragraphs"`
+	ProfileID         *string            `json:"profile_id"`
+	ReferenceID       *string            `json:"reference_id"`
+	NotReadyReason    string             `json:"profile_not_ready_reason"`
+	Checks            []workflow.Check   `json:"checks"`
+	Pruned            workflow.Pruned    `json:"pruned"`
+}
+type ProfileResult struct {
+	Store       string             `json:"store"`
+	Selection   workflow.Selection `json:"selection"`
+	Available   []string           `json:"available_profiles"`
+	ReferenceID *string            `json:"reference_id"`
+	Evaluated   bool               `json:"evaluated"`
+	Profile     Profile            `json:"profile"`
+}
+
+// MarshalJSON omits profile when the workflow did not resolve one.  A zero
+// profile object would falsely imply that a profile exists but lacks an ID.
+func (r ProfileResult) MarshalJSON() ([]byte, error) {
+	type result struct {
+		Store       string             `json:"store"`
+		Selection   workflow.Selection `json:"selection"`
+		Available   []string           `json:"available_profiles"`
+		ReferenceID *string            `json:"reference_id"`
+		Evaluated   bool               `json:"evaluated"`
+		Profile     *Profile           `json:"profile,omitempty"`
+	}
+	encoded := result{Store: r.Store, Selection: r.Selection, Available: r.Available, ReferenceID: r.ReferenceID, Evaluated: r.Evaluated}
+	if !emptyProfile(r.Profile) {
+		profile := r.Profile
+		encoded.Profile = &profile
+	}
+	return json.Marshal(encoded)
+}
+
+type Profile struct {
+	ID              string        `json:"id"`
+	SnapshotID      string        `json:"snapshot_id"`
+	Register        string        `json:"register"`
+	ProductionReady bool          `json:"production_ready"`
+	NotReadyReason  string        `json:"not_ready_reason"`
+	Stats           []ProfileStat `json:"stats"`
+}
+
+type ProfileStat struct {
+	Feature         string  `json:"feature"`
+	N               int     `json:"n"`
+	Mean            float64 `json:"mean"`
+	Variance        float64 `json:"variance"`
+	Defined         bool    `json:"defined"`
+	VarianceDefined bool    `json:"variance_defined"`
+	MinObservations int     `json:"min_observations"`
+}
+
+func ptr(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+func indexResultFrom(r workflow.IndexResult) IndexResult {
+	return IndexResult{Store: r.StorePath, SnapshotID: r.SnapshotID, Mode: r.Mode, Adversity: r.Adversity, Documents: r.Documents, Eligible: r.Eligible, Nodes: r.Nodes, CalibrateSegments: r.CalibrateSegments, TrainParagraphs: r.TrainParagraphs, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), NotReadyReason: r.NotReadyReason, Checks: r.Checks, Pruned: r.Pruned}
+}
+func profileResultFrom(r workflow.ProfileResult) ProfileResult {
+	if r.Selection != workflow.SelectedSoleHead && r.Selection != workflow.SelectedExplicit {
+		return ProfileResult{Store: r.StorePath, Selection: r.Selection, Available: r.Available}
+	}
+	available := append([]string(nil), r.Available...)
+	// A selected workflow result always has its resolved register available. The
+	// fallback keeps this projection total for Service implementations that only
+	// supply the resolved profile (including the composition-root test seam).
+	if len(available) == 0 {
+		available = []string{r.Profile.Register}
+	}
+	p := Profile{ID: r.Profile.ID, SnapshotID: r.Profile.SnapshotID, Register: r.Profile.Register, ProductionReady: r.Profile.ProductionReady, NotReadyReason: r.Profile.NotReadyReason}
+	for _, stat := range r.Profile.Stats {
+		p.Stats = append(p.Stats, ProfileStat{Feature: stat.Feature, N: stat.N, Mean: stat.Mean, Variance: stat.Variance, Defined: stat.Defined, VarianceDefined: stat.VarianceDefined, MinObservations: stat.MinObservations})
+	}
+	return ProfileResult{Store: r.StorePath, Selection: r.Selection, Available: available, ReferenceID: ptr(r.ReferenceID), Evaluated: r.Evaluated, Profile: p}
+}
+func runIndex(ctx context.Context, parsed invocation, deps Deps) int {
+	if deps.Service == nil {
+		diagnostic(deps.Stderr, "index service unavailable")
+		return 3
+	}
+	result, err := deps.Service.Index(ctx, workflow.IndexRequest{CorpusRoot: parsed.path, Register: parsed.register, StorePath: parsed.store})
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	status, code := StatusOK, 0
+	if result.Adverse {
+		status, code = StatusAdverse, 1
+	}
+	if err = (Document{Schema: Schema, Command: "index", Status: status, Profile: &parsed.register, Result: indexResultFrom(result)}).Render(deps.Stdout, parsed.json); err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	return code
+}
+func runProfile(ctx context.Context, parsed invocation, deps Deps) int {
+	if deps.Service == nil || deps.Getwd == nil {
+		diagnostic(deps.Stderr, "profile service unavailable")
+		return 3
+	}
+	cwd, err := deps.Getwd()
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	result, err := deps.Service.Profile(ctx, workflow.ProfileRequest{StartDir: cwd, StorePath: parsed.store, Register: parsed.register})
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	if result.Selection == workflow.SelectionAmbiguous || result.Selection == workflow.SelectionUnknownRegister {
+		diagnostic(deps.Stderr, strings.Join(result.Available, ", "))
+		return 2
+	}
+	status, reason, code := StatusOK, Reason(""), 0
+	if result.Selection == workflow.SelectionNoProfile {
+		status, reason, code = StatusRefused, ReasonNoProfile, 4
+	}
+	payload := profileResultFrom(result)
+	if err = (Document{Schema: Schema, Command: "profile", Status: status, Reason: reason, Profile: ptr(payload.Profile.Register), Result: payload}).Render(deps.Stdout, parsed.json); err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	return code
+}
+func humanResult(result any) string {
+	switch x := result.(type) {
+	case TellsResult:
+		return fmt.Sprintf("findings=%d", x.Count)
+	case IndexResult:
+		result := fmt.Sprintf("store=%s mode=%s", x.Store, x.Mode)
+		if x.Adversity != "" {
+			result += fmt.Sprintf(" adversity=%s", x.Adversity)
+		}
+		return result
+	case ProfileResult:
+		if x.Store == "" {
+			return ""
+		}
+		return fmt.Sprintf("store=%s", x.Store)
+	default:
+		return ""
+	}
 }
 
 func diagnostic(w io.Writer, message string) {

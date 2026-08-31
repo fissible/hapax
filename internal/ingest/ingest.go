@@ -22,9 +22,18 @@ func realDeps() deps {
 }
 
 func Snapshot(root string, snap *corpus.Snapshot) (store.SnapshotWrite, error) {
-	return snapshotWith(root, snap, realDeps())
+	return SnapshotWithRequirements(root, snap, profile.DefaultRequirements())
+}
+
+// SnapshotWithRequirements builds graph vectors under the same paragraph floor
+// as the profile the caller is fitting.
+func SnapshotWithRequirements(root string, snap *corpus.Snapshot, req profile.Requirements) (store.SnapshotWrite, error) {
+	return snapshotWithRequirements(root, snap, req, realDeps())
 }
 func snapshotWith(root string, snap *corpus.Snapshot, d deps) (store.SnapshotWrite, error) {
+	return snapshotWithRequirements(root, snap, profile.DefaultRequirements(), d)
+}
+func snapshotWithRequirements(root string, snap *corpus.Snapshot, req profile.Requirements, d deps) (store.SnapshotWrite, error) {
 	if snap == nil {
 		return store.SnapshotWrite{}, fmt.Errorf("ingest snapshot is nil")
 	}
@@ -37,7 +46,7 @@ func snapshotWith(root string, snap *corpus.Snapshot, d deps) (store.SnapshotWri
 				return store.SnapshotWrite{}, err
 			}
 			rootNode := d.BuildTree(admitted)
-			leaves, _, err := profile.ParagraphLeaves(admitted, rootNode, profile.DefaultRequirements().MinParagraphLexicalTokens)
+			leaves, _, err := profile.ParagraphLeaves(admitted, rootNode, req.MinParagraphLexicalTokens)
 			if err != nil {
 				return store.SnapshotWrite{}, err
 			}

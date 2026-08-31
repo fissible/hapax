@@ -307,16 +307,20 @@ func TestADiagnosticIsOneEscapedLineWhateverTheFilenameContains(t *testing.T) {
 }
 
 // The unknown-command diagnostic names what exists. Listing commands that are
-// not built would tell a user they can run something they cannot.
+// not built would tell a user they can run something they cannot. Driven from
+// cli.Commands() rather than a second hand-written list, so the two cannot
+// disagree about what is implemented — the list itself is pinned above.
 func TestTheUnknownCommandDiagnosticPromisesNothing(t *testing.T) {
 	h := newHarness(t, nil)
 	h.run("score", "draft.md")
 	diagnostic := h.Stderr.String()
-	if !strings.Contains(diagnostic, "tells") {
-		t.Errorf("the diagnostic does not name the command that exists: %q", diagnostic)
+	for _, implemented := range cli.Commands() {
+		if !strings.Contains(diagnostic, implemented) {
+			t.Errorf("the diagnostic does not name %q, which exists: %q", implemented, diagnostic)
+		}
 	}
-	for _, unimplemented := range []string{"index", "profile", "eval", "score", "rewrite"} {
-		if strings.Contains(diagnostic, unimplemented) && unimplemented != "score" {
+	for _, unimplemented := range []string{"eval", "rewrite"} {
+		if strings.Contains(diagnostic, unimplemented) {
 			t.Errorf("the diagnostic offers %q, which is not implemented: %q", unimplemented, diagnostic)
 		}
 	}

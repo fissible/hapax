@@ -146,7 +146,7 @@ by construction" below.*
 | 10 | `rewrite` | The loop, depending on interfaces (`Scorer`, `Selector`, `Gate`, `Provider`, `Store`) rather than concrete components. Monotonic acceptance rule below. Retains before/after artifacts and rejection reasons. | 6, 7, 8, 9 |
 | 11 | `assemble` | Splices accepted replacements back into the original bytes. Ordered, non-overlapping raw spans; every untouched byte and excision preserved exactly; all-or-nothing output. | 3, 10 |
 | 12 | `store` | SQLite artifact persistence: the declared artifact kinds and their identities, forward migration, the persistence allowlist enforcing the privacy invariant, and span rehydration with no substitution and no silent reduction. Typed per-artifact operations, never a generic put. | 0, 2, 3, 4 |
-| 13 | `ingest` | Verified corpus files to a deterministic node graph with vectors on included leaves, and the standardizations a reference needs. Builds each document's tree **once** and derives both the persisted nodes and the profile and reference inputs from that same tree. | 0, 2, 3, 4, 12 |
+| 13 | `ingest` | Verified corpus files to a deterministic node graph with vectors on included leaves, and the standardizations a reference needs. Builds each document's tree **once per call** and derives the persisted nodes and the vectors on them from that one tree. | 0, 2, 3, 4, 12 |
 | 14 | `cli` | Composition root. Resolves the mode once, constructs the credential factory only on the cloud path, wires every component, and owns the command surface, output schema and exit codes. | all |
 
 `ingest` was not in the original table. It appeared when `cli` first tried to write a real
@@ -159,7 +159,12 @@ component order rests on. Issue #53.
 
 **Which leaves count is `profile`'s, not `ingest`'s.** `profile.ParagraphLeaves` owns the
 inclusion rule and the lexical floor, and takes the caller's already-built tree root so both
-consumers describe the same nodes rather than two trees that happen to agree.
+consumers describe the same nodes rather than two trees that happen to agree. The rule is shared;
+the *tree* is not. An index calls `ingest.Snapshot`, `profile.Build` and
+`CalibrateStandardizations` in turn, and each reads and structures the documents it needs, so
+one document is read up to three times in a single index. Measured at ~77ms for 200 documents,
+about half of it repetition. Recorded as #55, deferred deliberately, and the row above no
+longer claims otherwise.
 `profile.ParagraphVectors` keeps its contract by building a tree and delegating.
 
 **Every document is persisted; only eligible ones get a graph.** A rejected document is a
@@ -392,6 +397,49 @@ string equal to a profile ID, and no filter should be pretending otherwise.
 - `hapax score draft.md` — band, per-feature deltas, insufficient-evidence markers. **No LLM, no network**
 - `hapax tells draft.md` — linter only
 - `hapax rewrite draft.md` — the full gated loop
+
+### `index` and `profile`: the first commands that open a store
+
+**`cli` still cannot name `internal/store`.** A1's guarantee was structural — a package that
+cannot reach a type cannot reach it on any path — and `index` needing a store is not a reason
+to delete it. `internal/workflow` owns the composition (`corpus.Walk` → `ingest` →
+`profile.Build` → `store.Index`, and store discovery), `cli` declares the interfaces it calls
+and carries them in `Deps`, and `cmd/hapax` widens by exactly one import to wire them. This is
+what row 12 meant by "`cli` is then a thin adapter over command services".
+
+**Where the database lives.** `<corpus-root>/.hapax/hapax.sqlite3`, with a `--store` override.
+Not an XDG path: `profile_head` is keyed by register alone, so two unrelated corpora both
+called `essays` would silently overwrite each other's head. `corpus.Walk` skips dot-prefixed
+entries, so the store is not indexed by the corpus it belongs to. `index` creates
+`<root>/.hapax/` but `--store` creates nothing — a typo should not produce a directory
+somewhere unexpected. `profile` searches upward from the working directory to the filesystem
+root and **never creates a database to answer a query**; a `.hapax` directory with no database
+stops the search rather than falling through to an ancestor's store.
+
+**The flag grammar extends rather than changes.** A1 settled that the command is the first
+non-flag token wherever it appears, which worked because every flag was bare. A value-taking
+option consumes the token after it, so `hapax --profile essays index ~/w` reads as
+`--profile=essays`, command `index`, operand `~/w` — the value was consumed and was never a
+candidate command. Both `--profile=x` and `--profile x` are accepted. A1's rule and its frozen
+tests survive.
+
+**One result payload per command, discriminated by `command`.** The wire shape does not gain a
+wrapper — `result` stays where it is, and `command` says how to read it — so `hapax.v1`
+consumers of `tells` are unaffected. Internally it is a tagged union carrying exactly the
+variant `Command` names, validated like every other vocabulary here.
+
+**What the codes mean for these two.** A full index exits 0 with every qualification check
+reported `not-performed`: that is a declared limit of this slice, not an adverse finding about
+this corpus, and an `index` that could never exit 0 would make the code useless to a script.
+A corpus too small to fit a profile, and one that fits a profile but cannot fill a reference,
+are both completed adverse results — exit 1, with the snapshot persisted either way.
+`ErrCorpusTooSmall` is the first; everything else that fails is exit 3 and commits nothing.
+
+`profile` selects: the named register if it exists; the sole head if there is exactly one and
+none was named; exit 2 listing the available registers if a named one is missing or if several
+exist and none was named — a correctable invocation, not a refusal. **No store, or a store
+with no head at all, is the `no-profile` refusal, exit 4**, which is what that reason was added
+for.
 
 ### Exit codes, and the split that produced them
 
