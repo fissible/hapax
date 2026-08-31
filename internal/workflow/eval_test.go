@@ -20,8 +20,7 @@ import (
 // change what eval reports. Nothing else in the suite would notice the
 // difference, because both paths produce plausible numbers.
 func TestEvalMeasuresTheIndexedGraphAndNotTheFilesOnDisk(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
 	before := evaluated(t, evalRequest(root, distractors))
@@ -69,12 +68,13 @@ func TestEvalMeasuresTheIndexedGraphAndNotTheFilesOnDisk(t *testing.T) {
 // back at MINUS TWO because the cap is 1 - 3/clusters and one cluster makes it
 // negative. The AUC was a perfect 1.000 the whole time.
 func TestEveryDistractorContributesToTheComparison(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	const members = 20
 	distractors := distractorCorpus(t, members)
 
-	result := evaluated(t, evalRequest(root, distractors))
+	// At the DECLARED spec, so the real bootstrap runs end to end somewhere in
+	// this package rather than only being asserted as a field value.
+	result := evaluatedAtTheDeclaredSpec(t, evalRequest(root, distractors))
 
 	if result.DistractorMembers != members {
 		t.Errorf("the pool holds %d of %d files", result.DistractorMembers, members)
@@ -96,8 +96,7 @@ func TestEveryDistractorContributesToTheComparison(t *testing.T) {
 // all. A fixture that cannot supply them cannot ship however separable its prose
 // is — which is why the cap is reported and not just the bound.
 func TestTheBoundIsCappedByTheNumberOfClusters(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 
 	clusters := result.Discrimination.AuthorClusters
@@ -123,8 +122,7 @@ func TestTheBoundIsCappedByTheNumberOfClusters(t *testing.T) {
 // identity and its members' content hashes. Adding one file changes the pool,
 // and therefore the release.
 func TestTheDistractorPoolIdentifiesTheReleaseItCalibrated(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
 	first := evaluated(t, evalRequest(root, distractors))
@@ -146,8 +144,7 @@ func TestTheDistractorPoolIdentifiesTheReleaseItCalibrated(t *testing.T) {
 // The same pool, unchanged, is the same release. A rerun that produced a new
 // identity every time would make the head churn and the audit record meaningless.
 func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
 	first := evaluated(t, evalRequest(root, distractors))
@@ -170,8 +167,7 @@ func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
 // the rule — and a test that skips when it does not is a test that can quietly
 // never run.
 func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 
 	head := releaseHeadOrEmpty(t, defaultStorePath(root), result.ProfileID)
@@ -197,8 +193,7 @@ func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
 // Sixty held-out documents is a corpus of about seven hundred, which is a slow
 // fixture to pay for one assertion about whether a head moved.
 func TestAnAdverseEvaluationDoesNotClearAnExistingHead(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 
 	// A first evaluation, persisted but not shipped.
 	first := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
@@ -228,8 +223,7 @@ func TestAnAdverseEvaluationDoesNotClearAnExistingHead(t *testing.T) {
 // Omitting --distractors is a declared outcome rather than a usage error: ADR
 // 0005 says eval reports uncalibrated without them. It completes and is adverse.
 func TestNoDistractorsIsACompletedUncalibratedMeasurement(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 
 	result := evaluated(t, evalRequest(root, ""))
 	if result.Shippable {
@@ -255,8 +249,7 @@ func TestNoDistractorsIsACompletedUncalibratedMeasurement(t *testing.T) {
 // why none of them noticed that a bare `hapax eval` failed outright — found by
 // running the binary, not by reading the suite.
 func TestEvalDiscoversTheStoreTheWayProfileDoes(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	deep := filepath.Join(root, "a", "b")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
@@ -343,8 +336,7 @@ func TestEvaluatingWithNoProfileIsARefusalAndNotAFailure(t *testing.T) {
 // A distractor directory that is not there is operational: nothing was
 // measured, so there is nothing to report about it.
 func TestAMissingDistractorDirectoryIsAFailure(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 
 	request := evalRequest(root, filepath.Join(t.TempDir(), "absent"))
 	if _, err := workflow.Default().Eval(ctx(), request); err == nil {
@@ -355,8 +347,7 @@ func TestAMissingDistractorDirectoryIsAFailure(t *testing.T) {
 // Two members with identical content would be one cluster pretending to be two,
 // and the bootstrap groups by content hash because a pool keeps no paths.
 func TestADistractorPoolRefusesDuplicateContent(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
 	// Same bytes under a different name.
@@ -394,8 +385,7 @@ func TestADistractorPoolRefusesDuplicateContent(t *testing.T) {
 // only in the return value. A release whose evidence cannot be identified after
 // the fact is not an audit record.
 func TestThePersistedReleaseNamesItsPool(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 	if result.ReleaseID == "" {
 		t.Fatal("nothing was persisted")
@@ -424,3 +414,45 @@ func TestThePersistedReleaseNamesItsPool(t *testing.T) {
 // The prose was never the problem. At sixty documents the AUC was a perfect
 // 1.000 and the bound was minus two, because twenty distractors were being
 // split down to one cluster.
+
+// Fields that equal the defaults prove nothing about whether Eval reads them. An
+// implementation could carry all three specs and still call eval.DefaultBootstrap
+// and friends directly: TestTheDefaultRunnerUsesTheDeclaredBootstrap would pass,
+// cheapRunner would silently not be cheap, and the suite would be slow again
+// without anyone noticing it had stopped being fast for a reason.
+//
+// So the specs are followed into the artifact the run persists.
+func TestTheRunnersSpecsReachTheMeasurement(t *testing.T) {
+	root := indexedCorpus(t)
+	distractors := distractorCorpus(t, 20)
+
+	runner := cheapRunner()
+	result, err := runner.Eval(ctx(), evalRequest(root, distractors))
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	stored := storedRelease(t, defaultStorePath(root), result.ReleaseID)
+
+	if stored.Discrimination.Resamples != runner.Discrimination.Resamples {
+		t.Errorf("the release records %d discrimination resamples and the runner asked for %d",
+			stored.Discrimination.Resamples, runner.Discrimination.Resamples)
+	}
+	if stored.Calibration.Resamples != runner.BandFloor.Resamples {
+		t.Errorf("the release records %d calibration resamples and the runner asked for %d",
+			stored.Calibration.Resamples, runner.BandFloor.Resamples)
+	}
+
+	// The third spec has no column of its own, so it is followed by its effect:
+	// two runners differing ONLY in the threshold bootstrap must not produce the
+	// same release, or that spec is being ignored.
+	other := cheapRunner()
+	other.Bootstrap.Resamples = runner.Bootstrap.Resamples + 7
+	elsewhere := indexedCorpus(t)
+	differing, err := other.Eval(ctx(), evalRequest(elsewhere, distractors))
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if differing.ReleaseID == result.ReleaseID {
+		t.Error("changing the threshold bootstrap changed nothing; the spec is not reaching it")
+	}
+}

@@ -121,8 +121,7 @@ func TestHowAProfileIsSelected(t *testing.T) {
 // never do is create one: answering "is there a profile" by writing a database
 // makes the answer wrong the next time it is asked.
 func TestProfileDiscoversUpwardAndCreatesNothing(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 
 	deep := filepath.Join(root, "a", "b", "c")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
@@ -162,8 +161,7 @@ func TestProfileWithNoStoreAnywhereRefusesWithoutWriting(t *testing.T) {
 // ancestor would answer with a different corpus's profile, which is worse than
 // answering with none.
 func TestAnEmptyMarkerStopsTheSearchRatherThanFallingThrough(t *testing.T) {
-	outer := corpusOf(t, 60)
-	indexed(t, indexRequest(outer))
+	outer := indexedCorpus(t)
 
 	inner := filepath.Join(outer, "inner")
 	if err := os.MkdirAll(filepath.Join(inner, ".hapax"), 0o755); err != nil {
@@ -193,8 +191,7 @@ func TestAMarkerThatIsAFileIsAFailure(t *testing.T) {
 // An explicit --store is exact: no upward search, and a path that is not there
 // is a failure rather than a refusal, because the caller named it.
 func TestAnExplicitStoreIsNotSearchedFor(t *testing.T) {
-	root := corpusOf(t, 60)
-	indexed(t, indexRequest(root))
+	root := indexedCorpus(t)
 	nested := filepath.Join(root, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
