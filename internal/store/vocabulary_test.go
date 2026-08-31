@@ -280,6 +280,7 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt.current_band": "enum", "rewrite_attempt.candidate_band": "enum",
 	"rewrite_attempt.rejection":                "enum",
 	"rewrite_attempt_identifier.invocation_id": "hex",
+	"rewrite_attempt_identifier.node_id":       "hex",
 	"rewrite_attempt_identifier.identifier":    "preserve-identifier",
 	"migration.checksum":                       "hex", "migration.applied_at": "time",
 }
