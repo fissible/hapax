@@ -253,7 +253,9 @@ func TestAnEvalResultsReasonAgreesWithItsShippability(t *testing.T) {
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Shippable, result.Reason = c.shippable, c.reason
 			if !c.shippable {
-				result.Discrimination.Discriminates = false
+				// The gate's verdict is derived from its bound, so the bound
+				// and the reason move with it.
+				setDiscriminates(&result.Discrimination, false)
 			}
 			err := s.PutEvalResult(ctx(), result, store.LeaveHead)
 			if c.want && err != nil {
