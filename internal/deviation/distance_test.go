@@ -655,7 +655,7 @@ func TestDistanceEndToEndOnRealText(t *testing.T) {
 
 	segments := make([]deviation.Standardization, 0, len(calibrate))
 	for _, src := range calibrate {
-		s, err := deviation.Standardize(admit(src), p, corpus.Calibrate)
+		s, err := deviation.Standardize(admit(src), mustFit(t, p), corpus.Calibrate)
 		if err != nil {
 			t.Fatalf("Standardize(%q): %v", src, err)
 		}
@@ -667,7 +667,7 @@ func TestDistanceEndToEndOnRealText(t *testing.T) {
 		t.Fatalf("BuildReference: %v", err)
 	}
 
-	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), p, corpus.Test)
+	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), mustFit(t, p), corpus.Test)
 	if err != nil {
 		t.Fatalf("Standardize the query: %v", err)
 	}
@@ -752,7 +752,7 @@ func TestInsufficientEvidenceEndToEnd(t *testing.T) {
 	}
 	segments := make([]deviation.Standardization, 0, len(calibrate))
 	for _, src := range calibrate {
-		s, err := deviation.Standardize(admit(src), p, corpus.Calibrate)
+		s, err := deviation.Standardize(admit(src), mustFit(t, p), corpus.Calibrate)
 		if err != nil {
 			t.Fatalf("Standardize(%q): %v", src, err)
 		}
@@ -769,7 +769,7 @@ func TestInsufficientEvidenceEndToEnd(t *testing.T) {
 		}
 	}
 
-	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), p, corpus.Test)
+	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), mustFit(t, p), corpus.Test)
 	if err != nil {
 		t.Fatalf("Standardize the query: %v", err)
 	}

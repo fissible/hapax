@@ -73,7 +73,11 @@ func TestAProfileScoringCannotUseYieldsNoProjection(t *testing.T) {
 		{"a feature set version from another build", func(p *profile.Profile) { p.FeatureSetVersion = features.SetVersion + 1 }},
 		{"a manifest digest from another build", func(p *profile.Profile) { p.FeatureManifestDigest = "0f4a2c9b" }},
 		{"no statistics at all", func(p *profile.Profile) { p.Stats = nil }},
+		// Non-positive, not merely zero: Build validates the floor, so one
+		// arriving here at all is malformed however it got that way. Both
+		// values moved here from score, where they can no longer be passed.
 		{"a floor of zero", func(p *profile.Profile) { p.Requirements.MinParagraphLexicalTokens = 0 }},
+		{"a negative floor", func(p *profile.Profile) { p.Requirements.MinParagraphLexicalTokens = -1 }},
 		{"no identity", func(p *profile.Profile) { p.ID = "" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -104,6 +108,16 @@ func TestFittedDeclaresExactlyTheseFields(t *testing.T) {
 	sort.Strings(want)
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Fitted carries %v, and scoring needs %v", got, want)
+	}
+}
+
+// And a nil profile, which is not a mutation of a valid one and so is not
+// covered by the table above. It matters because deviation.Standardize used to
+// reject nil itself and now never sees one: this is where that rejection went.
+func TestANilProfileYieldsNoProjection(t *testing.T) {
+	var absent *profile.Profile
+	if _, err := absent.Fitted(); err == nil {
+		t.Error("projected a profile that is not there")
 	}
 }
 

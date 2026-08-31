@@ -251,7 +251,7 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 			t.Fatalf("leaves of %s: %v", document.Path, err)
 		}
 		for _, leaf := range leaves {
-			standardized, err := deviation.Standardize(leaf.Vector, prof, corpus.Calibrate)
+			standardized, err := deviation.Standardize(leaf.Vector, mustFit(t, prof), corpus.Calibrate)
 			if err != nil {
 				t.Fatalf("standardize: %v", err)
 			}
@@ -290,4 +290,16 @@ func sortStandardizations(values []deviation.Standardization) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// mustFit projects a built profile the way store and the workflow do, so this
+// package reaches the scoring boundary through the same narrow input production
+// uses rather than through a union kept alive for its convenience.
+func mustFit(t *testing.T, p *profile.Profile) profile.Fitted {
+	t.Helper()
+	fitted, err := p.Fitted()
+	if err != nil {
+		t.Fatalf("Fitted: %v", err)
+	}
+	return fitted
 }

@@ -375,3 +375,43 @@ var aDeclaredNotReadyReason = func() string {
 	}
 	return reasons[0]
 }()
+
+// seededRegister is the register every profile fixture here belongs to.
+const seededRegister = "essays"
+
+// The three states a scoring bundle has to tell apart, seeded separately so a
+// test does not have to damage a full graph to reach one of them.
+
+// seedProfileOnly leaves a headed profile with nothing to transform against.
+func seedProfileOnly(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	snapshot, prof := seededProfile(t, s)
+	if err := s.PutProfile(ctx(), prof, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	return seededIDs{Snapshot: snapshot.ID, Profile: prof.ID}
+}
+
+// seedProfileAndReference is the uncalibrated state: everything score needs to
+// measure, and no release to band with.
+func seedProfileAndReference(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	ids := seedProfileOnly(t, s)
+	reference := referenceFixture(ids.Profile)
+	mustPutReference(t, s, reference)
+	ids.Reference = reference.ID
+	return ids
+}
+
+// seedProfileAndTwoReferences is the state no release names a way out of: two
+// references for one profile, which the schema permits and which #62 currently
+// resolves by hash order.
+func seedProfileAndTwoReferences(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	ids := seedProfileAndReference(t, s)
+	second := referenceFixture(ids.Profile)
+	second.ID = fakeID("reference", "second")
+	second.MinSegments++
+	mustPutReference(t, s, second)
+	return ids
+}

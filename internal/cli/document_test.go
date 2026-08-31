@@ -38,8 +38,10 @@ func TestTheRefusalVocabularyIsTheDeclaredSet(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"insufficient-evidence", "local-only-forbids-provider",
-		"no-profile", "stale-exemplars", "uncalibrated",
+		// A2c added the two a raw score can hit: nothing to transform against,
+		// and several references with no release to designate one — #62.
+		"ambiguous-reference", "insufficient-evidence", "local-only-forbids-provider",
+		"no-profile", "no-reference", "stale-exemplars", "uncalibrated",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("reasons =\n%v\nwant\n%v", got, want)
@@ -62,7 +64,7 @@ func TestTheStatusVocabularyIsThree(t *testing.T) {
 // implemented" from the code, so the only honest source is a slice adding its
 // own command here when it lands. It going stale is the test doing its job.
 func TestTheCommandSurfaceIsWhatIsImplemented(t *testing.T) {
-	want := []string{"eval", "index", "profile", "tells"}
+	want := []string{"eval", "index", "profile", "score", "tells"}
 	got := append([]string(nil), cli.Commands()...)
 	sort.Strings(got)
 	if !reflect.DeepEqual(got, want) {

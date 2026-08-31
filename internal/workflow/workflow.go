@@ -17,6 +17,7 @@ import (
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/ingest"
 	"github.com/fissible/hapax/internal/profile"
+	"github.com/fissible/hapax/internal/score"
 	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/store"
 )
@@ -116,6 +117,54 @@ type ProfileResult struct {
 	Profile     StoredProfile
 }
 type EvalRequest struct{ StartDir, StorePath, Register, DistractorRoot string }
+type ScoreRequest struct{ StartDir, StorePath, Register, Path string }
+type MeasuredDistance struct {
+	Value   float64
+	Defined bool
+	Reason  string
+	Partial bool
+}
+type BandOutcome struct {
+	Band     string
+	Defined  bool
+	Reason   string
+	Distance float64
+}
+type FeatureDelta struct {
+	Feature   string
+	Deviation float64
+	Defined   bool
+	Reason    string
+	Direction string
+}
+type ScoredSegment struct {
+	Index, LexicalTokens int
+	Distance             MeasuredDistance
+	Band                 BandOutcome
+	Features             []FeatureDelta
+}
+type ScoreResult struct {
+	StorePath, Path, ProfileID, ReferenceID, ReleaseID string
+	Selection                                          Selection
+	Available                                          []string
+	Calibrated, Adverse                                bool
+	Refusal                                            string
+	ParagraphsBelowFloor                               int
+	Segments                                           []ScoredSegment
+}
+
+const (
+	RefusalNoProfile            = "no-profile"
+	RefusalNoReference          = "no-reference"
+	RefusalAmbiguousReference   = "ambiguous-reference"
+	RefusalUncalibrated         = "uncalibrated"
+	RefusalInsufficientEvidence = "insufficient-evidence"
+)
+
+func Refusals() []string {
+	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence}
+}
+func Bands() []string { return []string{"in-range", "drifting", "not-you"} }
 
 // EvalReasonNoReference names a completed evaluation that cannot measure a
 // profile because indexing retained it without a reference distribution.
@@ -165,6 +214,7 @@ type Service interface {
 	Index(context.Context, IndexRequest) (IndexResult, error)
 	Profile(context.Context, ProfileRequest) (ProfileResult, error)
 	Eval(context.Context, EvalRequest) (EvalResult, error)
+	Score(context.Context, ScoreRequest) (ScoreResult, error)
 }
 
 func fittedFrom(p store.Profile) (profile.Fitted, error) {
@@ -334,8 +384,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	stored := store.EvalResult{ID: release.ID, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, DistractorPoolID: pool.ID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason), Discrimination: storeDiscrimination(discrimination), Calibration: storeCalibration(calibration)}
-	if err = s.PutEvalResult(ctx, stored, store.HeadPolicy(release.Shippable)); err != nil {
+	if err = s.PutRelease(ctx, release, pool.ID, store.HeadPolicy(release.Shippable)); err != nil {
 		return EvalResult{}, err
 	}
 	result.ReleaseID, result.Shippable, result.Adverse, result.Reason = release.ID, release.Shippable, !release.Shippable, release.Reason
@@ -348,6 +397,95 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	}
 	result.Calibration = calibrationReport(calibration)
 	return result, nil
+}
+
+// Score discovers the store exactly as profile and eval do, then either bands
+// a measurement through its release or returns the raw, uncalibrated measure.
+func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, error) {
+	path, found, err := discover(request.StartDir, request.StorePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return ScoreResult{Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
+	}
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	if !found {
+		return ScoreResult{Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	defer s.Close()
+	heads, err := s.ProfileHeads(ctx)
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	available := availableRegisters(heads)
+	result := ScoreResult{StorePath: path, Path: request.Path, Available: available}
+	register := request.Register
+	if register == "" {
+		switch len(available) {
+		case 0:
+			result.Selection, result.Refusal = SelectionNoProfile, RefusalNoProfile
+			return result, nil
+		case 1:
+			register, result.Selection = available[0], SelectedSoleHead
+		default:
+			result.Selection = SelectionAmbiguous
+			return result, nil
+		}
+	} else {
+		if _, ok := heads[register]; !ok {
+			result.Selection = SelectionUnknownRegister
+			return result, nil
+		}
+		result.Selection = SelectedExplicit
+	}
+	bundle, err := s.LoadScoringBundle(ctx, register)
+	if errors.Is(err, store.ErrNotFound) {
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
+	}
+	if errors.Is(err, store.ErrNoReference) {
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, Refusal: RefusalNoReference}, nil
+	}
+	if errors.Is(err, store.ErrAmbiguousReference) {
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, Refusal: RefusalAmbiguousReference}, nil
+	}
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	source, err := os.ReadFile(request.Path)
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	var report score.Report
+	if bundle.Calibrated {
+		report, err = score.Score(source, bundle.Fitted, &bundle.Reference, bundle.Release)
+	} else {
+		report, err = score.Measure(source, bundle.Fitted, &bundle.Reference)
+	}
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	out := ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, ProfileID: report.ProfileID, ReferenceID: report.ReferenceID, ReleaseID: report.ReleaseID, Calibrated: report.Calibrated, ParagraphsBelowFloor: report.ParagraphsBelowFloor}
+	if !bundle.Calibrated {
+		out.Refusal = RefusalUncalibrated
+	}
+	if len(report.Segments) == 0 {
+		out.Refusal = RefusalInsufficientEvidence
+	}
+	for _, segment := range report.Segments {
+		x := ScoredSegment{Index: segment.Index, LexicalTokens: segment.LexicalTokens, Distance: MeasuredDistance{Value: segment.Distance.Value, Defined: segment.Distance.Defined, Reason: string(segment.Distance.Reason), Partial: segment.Distance.Partial}, Band: BandOutcome{Band: string(segment.Band.Band), Defined: segment.Band.Defined, Reason: string(segment.Band.Reason), Distance: segment.Band.Distance}}
+		for _, d := range segment.Features {
+			x.Features = append(x.Features, FeatureDelta{Feature: string(d.Feature), Deviation: d.Deviation, Defined: d.Defined, Reason: string(d.Reason), Direction: string(d.Direction)})
+		}
+		out.Segments = append(out.Segments, x)
+		if x.Band.Band == "drifting" || x.Band.Band == "not-you" {
+			out.Adverse = true
+		}
+	}
+	return out, nil
 }
 
 // uncalibratedCalibration records a completed Test measurement when Calibrate
@@ -562,11 +700,7 @@ func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileRe
 	if err != nil {
 		return ProfileResult{}, err
 	}
-	available := make([]string, 0, len(heads))
-	for register := range heads {
-		available = append(available, register)
-	}
-	sort.Strings(available)
+	available := availableRegisters(heads)
 	result := ProfileResult{StorePath: path, Available: available}
 	register := request.Register
 	if register == "" {
@@ -595,6 +729,15 @@ func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileRe
 	result.Evaluated = bundle.Evaluated
 	result.ReferenceID = bundle.Reference.ID
 	return result, nil
+}
+
+func availableRegisters(heads map[string]string) []string {
+	available := make([]string, 0, len(heads))
+	for register := range heads {
+		available = append(available, register)
+	}
+	sort.Strings(available)
+	return available
 }
 
 func discover(startDir, storePath string) (string, bool, error) {

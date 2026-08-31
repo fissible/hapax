@@ -123,7 +123,12 @@ func profileWith(stats ...profile.Stats) *profile.Profile {
 		FeatureSetVersion:     features.SetVersion,
 		FeatureManifestDigest: features.ManifestDigest(),
 		VarianceConvention:    profile.SampleVariance,
-		Stats:                 all,
+		// A real profile always carries a positive paragraph floor; this
+		// fixture omitted it because Standardize never reads it, and the union
+		// let an unfitted profile through without anyone noticing. Projecting
+		// to Fitted refuses a floor of zero, which is how it surfaced.
+		Requirements: profile.Requirements{MinParagraphLexicalTokens: 1},
+		Stats:        all,
 	}
 }
 
@@ -150,7 +155,7 @@ func vectorWith(lexicalTokens int, values ...features.FeatureValue) features.Vec
 
 func standardize(t *testing.T, v features.Vector, p *profile.Profile) deviation.Standardization {
 	t.Helper()
-	s, err := deviation.Standardize(v, p, corpus.Calibrate)
+	s, err := deviation.Standardize(v, mustFit(t, p), corpus.Calibrate)
 	if err != nil {
 		t.Fatalf("Standardize: %v", err)
 	}
@@ -656,32 +661,49 @@ func TestStandardizeCarriesItsProvenance(t *testing.T) {
 	}
 }
 
+// Narrowing Standardize to the fitted projection took three of this test's
+// cases away from it: a nil profile, a document-unit profile and one fitted
+// under a different manifest can no longer be PASSED here, because
+// profile.Fitted() refuses to project any of them. Those rejections did not
+// disappear — they moved to where the projection is made, and profile covers all
+// three there, along with an empty identity, an absent floor and no statistics.
+//
+// It would overstate it to call a bad Fitted unrepresentable. The fields are
+// exported, so a caller can still hand-build an invalid one; what is protected
+// is the PROJECTION PATH, which is how every real caller obtains one. Go does
+// not make the value unconstructable and this test should not imply that it
+// does.
+//
+// What is left here is what Standardize still owns: the split, and the vector.
 func TestStandardizeRejectsBadInput(t *testing.T) {
-	documentUnit := profileWith()
-	documentUnit.Unit = profile.UnitDocument
+	fitted := mustFit(t, profileWith())
 
-	staleManifest := profileWith()
-	staleManifest.FeatureManifestDigest = "a-different-digest"
-
-	cases := []struct {
-		name string
-		p    *profile.Profile
-		v    features.Vector
-		want error
+	for _, c := range []struct {
+		name  string
+		split corpus.Split
+		v     features.Vector
+		want  error
 	}{
-		{name: "no profile", p: nil, v: vectorWith(25), want: deviation.ErrMissingInput},
-		{name: "a document-unit profile", p: documentUnit, v: vectorWith(25), want: deviation.ErrProfileUnit},
-		{name: "a profile fitted under a different manifest", p: staleManifest, v: vectorWith(25), want: deviation.ErrManifestMismatch},
-	}
-
-	for _, c := range cases {
+		{name: "a split it does not know", split: "someday", v: vectorWith(25), want: deviation.ErrUnknownSplit},
+		{
+			name: "a vector from a different feature set", split: corpus.Calibrate,
+			v: staleVector(), want: deviation.ErrManifestMismatch,
+		},
+	} {
 		t.Run(c.name, func(t *testing.T) {
-			_, err := deviation.Standardize(c.v, c.p, corpus.Calibrate)
+			_, err := deviation.Standardize(c.v, fitted, c.split)
 			if !errors.Is(err, c.want) {
 				t.Errorf("err = %v, want %v", err, c.want)
 			}
 		})
 	}
+}
+
+// staleVector is a vector built under a feature set this binary does not carry.
+func staleVector() features.Vector {
+	v := vectorWith(25)
+	v.SetVersion = features.SetVersion + 1
+	return v
 }
 
 // A vector extracted under a different feature-set version is not comparable to
@@ -691,7 +713,7 @@ func TestStandardizeRejectsAMismatchedFeatureSetVersion(t *testing.T) {
 	v := vectorWith(25)
 	v.SetVersion = features.SetVersion + 1
 
-	if _, err := deviation.Standardize(v, p, corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
+	if _, err := deviation.Standardize(v, mustFit(t, p), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
 		t.Errorf("err = %v, want %v", err, deviation.ErrManifestMismatch)
 	}
 }
@@ -703,7 +725,7 @@ func TestStandardizeRejectsAVectorMissingAManifestFeature(t *testing.T) {
 	v := vectorWith(25)
 	v.Values = v.Values[1:]
 
-	if _, err := deviation.Standardize(v, p, corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
+	if _, err := deviation.Standardize(v, mustFit(t, p), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
 		t.Errorf("err = %v, want %v", err, deviation.ErrManifestMismatch)
 	}
 }
@@ -716,7 +738,7 @@ func TestStandardizeRejectsAProfileMissingAManifestFeature(t *testing.T) {
 	p.Stats = p.Stats[1:]
 	v := vectorWith(25)
 
-	if _, err := deviation.Standardize(v, p, corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
+	if _, err := deviation.Standardize(v, mustFit(t, p), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
 		t.Errorf("err = %v, want %v", err, deviation.ErrManifestMismatch)
 	}
 }
@@ -1360,7 +1382,7 @@ func TestStandardizeAndTransformRealExtractedText(t *testing.T) {
 
 	segments := make([]deviation.Standardization, 0, len(calibrate))
 	for _, src := range calibrate {
-		s, err := deviation.Standardize(admit(src), p, corpus.Calibrate)
+		s, err := deviation.Standardize(admit(src), mustFit(t, p), corpus.Calibrate)
 		if err != nil {
 			t.Fatalf("Standardize(%q): %v", src, err)
 		}
@@ -1372,7 +1394,7 @@ func TestStandardizeAndTransformRealExtractedText(t *testing.T) {
 		t.Fatalf("BuildReference: %v", err)
 	}
 
-	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), p, corpus.Test)
+	query, err := deviation.Standardize(admit("Whether the passage supports the reading is a question the passage itself cannot settle."), mustFit(t, p), corpus.Test)
 	if err != nil {
 		t.Fatalf("Standardize the query: %v", err)
 	}
@@ -1451,7 +1473,7 @@ func TestBuildReferenceRefusesSegmentsFromAnotherSplit(t *testing.T) {
 // An unrecorded split is not a default. Standardizing without one would put the
 // burden back on a caller to remember, which is what the field exists to remove.
 func TestStandardizeRefusesAnUnrecordedSplit(t *testing.T) {
-	if _, err := deviation.Standardize(vectorWith(25), profileWith(), ""); !errors.Is(err, deviation.ErrUnknownSplit) {
+	if _, err := deviation.Standardize(vectorWith(25), mustFit(t, profileWith()), ""); !errors.Is(err, deviation.ErrUnknownSplit) {
 		t.Errorf("err = %v, want %v", err, deviation.ErrUnknownSplit)
 	}
 }
@@ -1490,7 +1512,7 @@ func TestDuplicateManifestEntriesAreRefused(t *testing.T) {
 	t.Run("in a vector", func(t *testing.T) {
 		v := vectorWith(25)
 		v.Values = append(v.Values, value(features.FunctionWordRate, 0.9, 0.01))
-		if _, err := deviation.Standardize(v, profileWith(), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
+		if _, err := deviation.Standardize(v, mustFit(t, profileWith()), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
 			t.Errorf("err = %v, want %v", err, deviation.ErrManifestMismatch)
 		}
 	})
@@ -1498,7 +1520,7 @@ func TestDuplicateManifestEntriesAreRefused(t *testing.T) {
 	t.Run("in a profile", func(t *testing.T) {
 		p := profileWith()
 		p.Stats = append(p.Stats, stat(features.FunctionWordRate, 0.9, 0.02))
-		if _, err := deviation.Standardize(vectorWith(25), p, corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
+		if _, err := deviation.Standardize(vectorWith(25), mustFit(t, p), corpus.Calibrate); !errors.Is(err, deviation.ErrManifestMismatch) {
 			t.Errorf("err = %v, want %v", err, deviation.ErrManifestMismatch)
 		}
 	})
@@ -1677,7 +1699,7 @@ func TestTransformCarriesTheQuerySplit(t *testing.T) {
 func TestStandardizeRefusesAnUnknownSplit(t *testing.T) {
 	for _, split := range []corpus.Split{"holdout", "validation", "CALIBRATE", " calibrate"} {
 		t.Run(string(split), func(t *testing.T) {
-			if _, err := deviation.Standardize(vectorWith(25), profileWith(), split); !errors.Is(err, deviation.ErrUnknownSplit) {
+			if _, err := deviation.Standardize(vectorWith(25), mustFit(t, profileWith()), split); !errors.Is(err, deviation.ErrUnknownSplit) {
 				t.Errorf("err = %v, want %v", err, deviation.ErrUnknownSplit)
 			}
 		})
@@ -1687,7 +1709,7 @@ func TestStandardizeRefusesAnUnknownSplit(t *testing.T) {
 func TestStandardizeAcceptsEveryDeclaredSplit(t *testing.T) {
 	for _, split := range []corpus.Split{corpus.Train, corpus.Calibrate, corpus.Test} {
 		t.Run(string(split), func(t *testing.T) {
-			got, err := deviation.Standardize(vectorWith(25), profileWith(), split)
+			got, err := deviation.Standardize(vectorWith(25), mustFit(t, profileWith()), split)
 			if err != nil {
 				t.Fatalf("Standardize: %v", err)
 			}
@@ -1794,7 +1816,7 @@ func TestMalformedNumbersAreRefused(t *testing.T) {
 			for _, b := range bad {
 				t.Run(position.name+"/"+b.name, func(t *testing.T) {
 					v, p := position.with(b.value)
-					if _, err := deviation.Standardize(v, p, corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
+					if _, err := deviation.Standardize(v, mustFit(t, p), corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
 						t.Errorf("err = %v, want %v", err, deviation.ErrMalformedInput)
 					}
 				})
@@ -1803,12 +1825,12 @@ func TestMalformedNumbersAreRefused(t *testing.T) {
 
 		// A negative variance is finite and still impossible.
 		t.Run("negative sampling variance", func(t *testing.T) {
-			if _, err := deviation.Standardize(withValue(id, value(id, 0.5, -0.01)), profileWith(), corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
+			if _, err := deviation.Standardize(withValue(id, value(id, 0.5, -0.01)), mustFit(t, profileWith()), corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
 				t.Errorf("err = %v, want %v", err, deviation.ErrMalformedInput)
 			}
 		})
 		t.Run("negative profile variance", func(t *testing.T) {
-			if _, err := deviation.Standardize(vectorWith(25), withStat(id, stat(id, 0.4, -0.01)), corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
+			if _, err := deviation.Standardize(vectorWith(25), mustFit(t, withStat(id, stat(id, 0.4, -0.01))), corpus.Calibrate); !errors.Is(err, deviation.ErrMalformedInput) {
 				t.Errorf("err = %v, want %v", err, deviation.ErrMalformedInput)
 			}
 		})
@@ -1925,4 +1947,16 @@ func TestReferenceIdentityIncludesTheManifestDigest(t *testing.T) {
 	if refOne.ID == refTwo.ID {
 		t.Errorf("references under different feature manifests share the ID %q", refOne.ID)
 	}
+}
+
+// mustFit projects a built profile the way store and score do, so these tests
+// exercise Standardize through the same narrow input production uses rather
+// than through a union kept alive for their convenience.
+func mustFit(t *testing.T, p *profile.Profile) profile.Fitted {
+	t.Helper()
+	fitted, err := p.Fitted()
+	if err != nil {
+		t.Fatalf("Fitted: %v", err)
+	}
+	return fitted
 }

@@ -1340,13 +1340,15 @@ func TestTheLoopAgreesWithTheRealScorerOnStructure(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 type scoreAdapter struct {
-	profile   *profile.Profile
+	// The projection rather than the build artifact, because that is what the
+	// scoring boundary takes now.
+	fitted    profile.Fitted
 	reference *deviation.Reference
 	release   eval.Release
 }
 
 func (a scoreAdapter) Score(source []byte) (score.Report, error) {
-	return score.Score(source, a.profile, a.reference, a.release)
+	return score.Score(source, a.fitted, a.reference, a.release)
 }
 
 func realScorerFor(t *testing.T) rewrite.Scorer {
@@ -1381,7 +1383,7 @@ func realScorerFor(t *testing.T) rewrite.Scorer {
 		if err != nil {
 			t.Fatalf("Admit: %v", err)
 		}
-		standardized, err := deviation.Standardize(features.Extract(doc.Tokens()), prof, corpus.Calibrate)
+		standardized, err := deviation.Standardize(features.Extract(doc.Tokens()), mustFit(t, prof), corpus.Calibrate)
 		if err != nil {
 			t.Fatalf("Standardize: %v", err)
 		}
@@ -1435,7 +1437,7 @@ func realScorerFor(t *testing.T) rewrite.Scorer {
 		t.Fatalf("NewRelease: %v", err)
 	}
 
-	return scoreAdapter{profile: prof, reference: ref, release: release}
+	return scoreAdapter{fitted: mustFit(t, prof), reference: ref, release: release}
 }
 
 func itoa(n int) string {
@@ -1563,4 +1565,16 @@ func TestAPreservedVerdictCarriesNoIdentifiers(t *testing.T) {
 	if got := store.attempts[0].PreserveIdentifiers; len(got) != 0 {
 		t.Errorf("a preserved attempt recorded %v", got)
 	}
+}
+
+// mustFit projects a built profile the way store and the workflow do, so this
+// package reaches the scoring boundary through the same narrow input production
+// uses rather than through a union kept alive for its convenience.
+func mustFit(t *testing.T, p *profile.Profile) profile.Fitted {
+	t.Helper()
+	fitted, err := p.Fitted()
+	if err != nil {
+		t.Fatalf("Fitted: %v", err)
+	}
+	return fitted
 }

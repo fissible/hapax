@@ -201,6 +201,14 @@ type ProfileBundle struct {
 	Evaluated bool
 }
 
+// ScoringBundle is the complete, domain-level input for one score invocation.
+type ScoringBundle struct {
+	Fitted     profile.Fitted
+	Reference  deviation.Reference
+	Release    eval.Release
+	Calibrated bool
+}
+
 // ExemplarSelection is the ordered exemplar-node selection for a profile.
 type ExemplarSelection struct {
 	ID, ProfileID string
@@ -615,56 +623,7 @@ func invalidEvalField(stored EvalResult) string {
 	if invalidDiscrimination(stored.Discrimination) != "" || invalidCalibration(stored.Calibration) != "" {
 		return "gate"
 	}
-	release, err := eval.NewRelease(
-		eval.Discrimination{
-			ID:                    stored.Discrimination.ID,
-			PopulationID:          stored.Discrimination.PopulationID,
-			ProfileID:             stored.ProfileID,
-			ReferenceID:           stored.ReferenceID,
-			FeatureManifestDigest: stored.Discrimination.Binding.ManifestDigest,
-			WeightScheme:          stored.Discrimination.Binding.WeightScheme,
-			DistanceAlgorithm:     stored.Discrimination.Binding.DistanceAlgorithm,
-			ScoredTiers:           stored.Discrimination.Binding.ScoredTiers,
-			Split:                 stored.Discrimination.Split,
-			Spec: eval.DiscriminationSpec{
-				Floor: stored.Discrimination.Floor, Confidence: stored.Discrimination.Confidence,
-				Resamples: stored.Discrimination.Resamples, Seed: stored.Discrimination.Seed,
-			},
-			Algorithm:          stored.Discrimination.Algorithm,
-			Clustering:         stored.Discrimination.Clustering,
-			AUC:                stored.Discrimination.AUC,
-			LowerBound:         stored.Discrimination.LowerBound,
-			Cap:                stored.Discrimination.Cap,
-			AuthorSegments:     stored.Discrimination.AuthorSegments,
-			DistractorSegments: stored.Discrimination.DistractorSegments,
-			AuthorClusters:     stored.Discrimination.AuthorClusters,
-			DistractorClusters: stored.Discrimination.DistractorClusters,
-			MinClusters:        stored.Discrimination.MinClusters,
-			Discriminates:      stored.Discrimination.Discriminates,
-			Reason:             stored.Discrimination.Reason,
-		},
-		eval.Calibration{
-			ID:                    stored.Calibration.ID,
-			ThresholdsID:          stored.Calibration.ThresholdsID,
-			PopulationID:          stored.Calibration.PopulationID,
-			Low:                   stored.Calibration.Low,
-			High:                  stored.Calibration.High,
-			ProfileID:             stored.ProfileID,
-			ReferenceID:           stored.ReferenceID,
-			FeatureManifestDigest: stored.Calibration.Binding.ManifestDigest,
-			WeightScheme:          stored.Calibration.Binding.WeightScheme,
-			DistanceAlgorithm:     stored.Calibration.Binding.DistanceAlgorithm,
-			ScoredTiers:           stored.Calibration.Binding.ScoredTiers,
-			Split:                 stored.Calibration.Split,
-			Floor: eval.BandFloor{
-				Confidence: stored.Calibration.Confidence, Resamples: stored.Calibration.Resamples, Seed: stored.Calibration.Seed,
-			},
-			Algorithm:  stored.Calibration.Algorithm,
-			Bands:      evalBandReports(stored.Calibration.Bands),
-			Calibrated: stored.Calibration.Calibrated,
-			Reason:     stored.Calibration.Reason,
-		},
-	)
+	release, err := releaseFromStored(stored)
 	if err != nil {
 		return "gate composition"
 	}
@@ -678,19 +637,6 @@ func invalidEvalField(stored EvalResult) string {
 		return "release reason"
 	}
 	return ""
-}
-
-func evalBandReports(reports []BandReport) []eval.BandReport {
-	evaluated := make([]eval.BandReport, len(reports))
-	for index, report := range reports {
-		evaluated[index] = eval.BandReport{
-			Band: report.Band, Claims: report.Claims, Target: report.Target, ErrorRate: report.ErrorRate,
-			ErrorBound: report.ErrorBound, ClassSegments: report.ClassSegments, ClassClusters: report.ClassClusters,
-			MinClassClusters: report.MinClassClusters, AuthorSegments: report.AuthorSegments,
-			DistractorSegments: report.DistractorSegments, Emitted: report.Emitted, Reason: report.Reason,
-		}
-	}
-	return evaluated
 }
 
 func validBinding(binding Binding) bool {
@@ -974,6 +920,126 @@ func (s *Store) LoadProfileBundle(ctx context.Context, register string) (Profile
 	out.Release, err = s.LoadEvalResult(ctx, rid)
 	out.Evaluated = err == nil
 	return out, err
+}
+
+// LoadScoringBundle resolves the current profile head and the artifacts that
+// designate its scoring reference.  Raw bundles deliberately have no release.
+func (s *Store) LoadScoringBundle(ctx context.Context, register string) (ScoringBundle, error) {
+	var out ScoringBundle
+	profileID, err := s.ProfileHead(ctx, register)
+	if err != nil {
+		return out, err
+	}
+	p, err := s.LoadProfile(ctx, profileID)
+	if err != nil {
+		return out, err
+	}
+	out.Fitted = fittedFromStored(p)
+	if out.Fitted.ID == "" {
+		return out, ErrCorrupt
+	}
+	releaseID, err := s.ReleaseHead(ctx, profileID)
+	if err == nil {
+		stored, err := s.LoadEvalResult(ctx, releaseID)
+		if err != nil {
+			return out, err
+		}
+		reference, err := s.LoadReference(ctx, stored.ReferenceID)
+		if err != nil {
+			return out, err
+		}
+		out.Reference = deviation.Reference{ID: reference.ID, ProfileID: reference.ProfileID, FeatureManifestDigest: reference.ManifestDigest, Split: reference.Split, MinSegments: reference.MinSegments, Values: reference.Values}
+		out.Release, err = releaseFromStored(stored)
+		if err != nil {
+			return out, ErrCorrupt
+		}
+		out.Calibrated = true
+		return out, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return out, err
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id FROM reference WHERE profile_id=?", profileID)
+	if err != nil {
+		return out, err
+	}
+	defer rows.Close()
+	var ids []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return out, err
+		}
+		ids = append(ids, id)
+	}
+	if err := rows.Err(); err != nil {
+		return out, err
+	}
+	if len(ids) == 0 {
+		return out, ErrNoReference
+	}
+	if len(ids) != 1 {
+		return out, ErrAmbiguousReference
+	}
+	r, err := s.LoadReference(ctx, ids[0])
+	if err != nil {
+		return out, err
+	}
+	out.Reference = deviation.Reference{ID: r.ID, ProfileID: r.ProfileID, FeatureManifestDigest: r.ManifestDigest, Split: r.Split, MinSegments: r.MinSegments, Values: r.Values}
+	return out, nil
+}
+
+func fittedFromStored(p Profile) profile.Fitted {
+	f := profile.Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion, FeatureManifestDigest: p.ManifestDigest, MinParagraphLexicalTokens: p.MinParagraphLexicalTokens}
+	for _, s := range p.Stats {
+		f.Stats = append(f.Stats, profile.Stats{Feature: s.Feature, N: s.N, Mean: s.Mean, Variance: s.Variance, Defined: s.Defined, VarianceDefined: s.VarianceDefined, MinObservations: s.MinObservations})
+	}
+	return f
+}
+func releaseFromStored(x EvalResult) (eval.Release, error) {
+	d := eval.Discrimination{ID: x.Discrimination.ID, PopulationID: x.Discrimination.PopulationID, ProfileID: x.ProfileID, ReferenceID: x.ReferenceID, FeatureManifestDigest: x.Discrimination.Binding.ManifestDigest, WeightScheme: x.Discrimination.Binding.WeightScheme, DistanceAlgorithm: x.Discrimination.Binding.DistanceAlgorithm, ScoredTiers: x.Discrimination.Binding.ScoredTiers, Split: x.Discrimination.Split, Spec: eval.DiscriminationSpec{Floor: x.Discrimination.Floor, Confidence: x.Discrimination.Confidence, Resamples: x.Discrimination.Resamples, Seed: x.Discrimination.Seed}, Algorithm: x.Discrimination.Algorithm, Clustering: x.Discrimination.Clustering, AUC: x.Discrimination.AUC, LowerBound: x.Discrimination.LowerBound, Cap: x.Discrimination.Cap, AuthorSegments: x.Discrimination.AuthorSegments, DistractorSegments: x.Discrimination.DistractorSegments, AuthorClusters: x.Discrimination.AuthorClusters, DistractorClusters: x.Discrimination.DistractorClusters, MinClusters: x.Discrimination.MinClusters, Discriminates: x.Discrimination.Discriminates, Reason: x.Discrimination.Reason}
+	c := eval.Calibration{ID: x.Calibration.ID, ThresholdsID: x.Calibration.ThresholdsID, PopulationID: x.Calibration.PopulationID, ProfileID: x.ProfileID, ReferenceID: x.ReferenceID, FeatureManifestDigest: x.Calibration.Binding.ManifestDigest, WeightScheme: x.Calibration.Binding.WeightScheme, DistanceAlgorithm: x.Calibration.Binding.DistanceAlgorithm, ScoredTiers: x.Calibration.Binding.ScoredTiers, Split: x.Calibration.Split, Floor: eval.BandFloor{Confidence: x.Calibration.Confidence, Resamples: x.Calibration.Resamples, Seed: x.Calibration.Seed}, Algorithm: x.Calibration.Algorithm, Low: x.Calibration.Low, High: x.Calibration.High, Calibrated: x.Calibration.Calibrated, Reason: x.Calibration.Reason}
+	for _, b := range x.Calibration.Bands {
+		c.Bands = append(c.Bands, eval.BandReport{Band: b.Band, Claims: b.Claims, Target: b.Target, ErrorRate: b.ErrorRate, ErrorBound: b.ErrorBound, ClassSegments: b.ClassSegments, ClassClusters: b.ClassClusters, MinClassClusters: b.MinClassClusters, AuthorSegments: b.AuthorSegments, DistractorSegments: b.DistractorSegments, Emitted: b.Emitted, Reason: b.Reason})
+	}
+	return eval.NewRelease(d, c)
+}
+
+// PutRelease persists the domain release through the same codec used by score.
+func (s *Store) PutRelease(ctx context.Context, release eval.Release, poolID string, policy HeadPolicy) error {
+	x := EvalResult{ID: release.ID, ProfileID: release.Discrimination.ProfileID, ReferenceID: release.Discrimination.ReferenceID, DistractorPoolID: poolID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason)}
+	x.Discrimination = storedDiscrimination(release.Discrimination)
+	x.Calibration = storedCalibration(release.Calibration)
+
+	stored, err := s.LoadEvalResult(ctx, x.ID)
+	if err == nil {
+		if !sameEval(stored, x) {
+			return ErrConflict
+		}
+		return s.PutEvalResult(ctx, x, policy)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
+	threshold := Threshold{ID: release.Calibration.ThresholdsID, ProfileID: release.Calibration.ProfileID, ReferenceID: release.Calibration.ReferenceID, PopulationID: release.Calibration.PopulationID, Low: release.Calibration.Low, High: release.Calibration.High, Verdict: eval.VerdictPairIncompatible}
+	if release.Calibration.Calibrated {
+		threshold.Verdict = eval.VerdictSeparated
+	}
+	if err := s.PutThreshold(ctx, threshold); err != nil && !errors.Is(err, ErrConflict) {
+		return err
+	}
+	return s.PutEvalResult(ctx, x, policy)
+}
+func storedDiscrimination(x eval.Discrimination) Discrimination {
+	return Discrimination{ID: x.ID, PopulationID: x.PopulationID, Binding: Binding{ManifestDigest: x.FeatureManifestDigest, WeightScheme: x.WeightScheme, DistanceAlgorithm: x.DistanceAlgorithm, ScoredTiers: x.ScoredTiers}, Split: x.Split, Algorithm: x.Algorithm, Clustering: x.Clustering, Floor: x.Spec.Floor, Confidence: x.Spec.Confidence, Resamples: x.Spec.Resamples, Seed: x.Spec.Seed, AUC: x.AUC, LowerBound: x.LowerBound, Cap: x.Cap, AuthorSegments: x.AuthorSegments, DistractorSegments: x.DistractorSegments, AuthorClusters: x.AuthorClusters, DistractorClusters: x.DistractorClusters, MinClusters: x.MinClusters, Discriminates: x.Discriminates, Reason: x.Reason}
+}
+func storedCalibration(x eval.Calibration) Calibration {
+	y := Calibration{ID: x.ID, ThresholdsID: x.ThresholdsID, PopulationID: x.PopulationID, Binding: Binding{ManifestDigest: x.FeatureManifestDigest, WeightScheme: x.WeightScheme, DistanceAlgorithm: x.DistanceAlgorithm, ScoredTiers: x.ScoredTiers}, Split: x.Split, Algorithm: x.Algorithm, Low: x.Low, High: x.High, Confidence: x.Floor.Confidence, Resamples: x.Floor.Resamples, Seed: x.Floor.Seed, Calibrated: x.Calibrated, Reason: x.Reason}
+	for _, b := range x.Bands {
+		y.Bands = append(y.Bands, BandReport{Band: b.Band, Claims: b.Claims, Target: b.Target, ErrorRate: b.ErrorRate, ErrorBound: b.ErrorBound, ClassSegments: b.ClassSegments, ClassClusters: b.ClassClusters, MinClassClusters: b.MinClassClusters, AuthorSegments: b.AuthorSegments, DistractorSegments: b.DistractorSegments, Emitted: b.Emitted, Reason: b.Reason})
+	}
+	return y
 }
 
 // LoadEvalResult returns a persisted release evaluation.

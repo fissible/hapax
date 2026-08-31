@@ -129,7 +129,7 @@ func standardize(t *testing.T, prof *profile.Profile, src string, split corpus.S
 	if err != nil {
 		t.Fatalf("Admit(%q): %v", src, err)
 	}
-	out, err := deviation.Standardize(features.Extract(doc.Tokens()), prof, split)
+	out, err := deviation.Standardize(features.Extract(doc.Tokens()), mustFit(t, prof), split)
 	if err != nil {
 		t.Fatalf("Standardize(%q): %v", src, err)
 	}
@@ -231,7 +231,7 @@ func scoreDraft(t *testing.T, source string) score.Report {
 	t.Helper()
 	prof := testProfile()
 	ref := testReference(t, prof)
-	got, err := score.Score([]byte(source), prof, ref, testRelease(t, ref))
+	got, err := score.Score([]byte(source), mustFit(t, prof), ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -345,11 +345,11 @@ func TestAReferenceSurvivesBeingPersisted(t *testing.T) {
 	}
 
 	release := testRelease(t, live)
-	before, err := score.Score([]byte(draft), prof, live, release)
+	before, err := score.Score([]byte(draft), mustFit(t, prof), live, release)
 	if err != nil {
 		t.Fatalf("Score against the live reference: %v", err)
 	}
-	after, err := score.Score([]byte(draft), prof, &restored, release)
+	after, err := score.Score([]byte(draft), mustFit(t, prof), &restored, release)
 	if err != nil {
 		t.Fatalf("Score against the restored reference: %v", err)
 	}
@@ -411,7 +411,7 @@ func TestParagraphsBelowTheFloorAreExcludedAndCounted(t *testing.T) {
 func TestTheFloorIsTheProfilesOwn(t *testing.T) {
 	prof := withFloor(testProfile(), 500)
 	ref := testReference(t, testProfile())
-	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -511,7 +511,7 @@ func TestAnUnmeasurableFeatureStatesItsReason(t *testing.T) {
 	}
 
 	ref := testReference(t, prof)
-	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -578,7 +578,7 @@ func TestAnUncalibratedProfileStillReportsDistancesAndDeltas(t *testing.T) {
 		t.Fatalf("this fixture must fail discrimination; the bound is %v", release.Discrimination.LowerBound)
 	}
 
-	got, err := score.Score([]byte(draft), prof, ref, release)
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -624,7 +624,7 @@ func TestASegmentWithInsufficientEvidenceIsReportedAsSuch(t *testing.T) {
 	}
 
 	ref := testReference(t, prof)
-	got, err := score.Score([]byte(draft), prof, ref, testRelease(t, ref))
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, testRelease(t, ref))
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -683,7 +683,7 @@ func TestTheReportCarriesItsProvenance(t *testing.T) {
 	ref := testReference(t, prof)
 	release := testRelease(t, ref)
 
-	got, err := score.Score([]byte(draft), prof, ref, release)
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -718,7 +718,7 @@ func TestScoreRefusesMismatchedArtifacts(t *testing.T) {
 	t.Run("a reference from another profile", func(t *testing.T) {
 		other := testProfile()
 		other.ID = "another-profile"
-		if _, err := score.Score([]byte(draft), other, ref, release); !errors.Is(err, score.ErrProfileMismatch) {
+		if _, err := score.Score([]byte(draft), mustFit(t, other), ref, release); !errors.Is(err, score.ErrProfileMismatch) {
 			t.Errorf("err = %v, want %v", err, score.ErrProfileMismatch)
 		}
 	})
@@ -728,40 +728,37 @@ func TestScoreRefusesMismatchedArtifacts(t *testing.T) {
 		for i := range population {
 			population[i].Distance.ReferenceID = "another-reference"
 		}
-		if _, err := score.Score([]byte(draft), prof, ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
+		if _, err := score.Score([]byte(draft), mustFit(t, prof), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
 			t.Errorf("err = %v, want %v", err, score.ErrReferenceMismatch)
 		}
 	})
 
-	t.Run("no profile", func(t *testing.T) {
-		if _, err := score.Score([]byte(draft), nil, ref, release); !errors.Is(err, score.ErrMissingInput) {
-			t.Errorf("err = %v, want %v", err, score.ErrMissingInput)
+	// "no profile" left this table when Score narrowed to the fitted
+	// projection: there is no nil to pass. The rejection moved to where the
+	// projection is made — profile's TestANilProfileYieldsNoProjection — and a
+	// caller that gets that far is holding a Fitted that was produced, not
+	// invented.
+	t.Run("a profile whose statistics are not the manifest", func(t *testing.T) {
+		short := mustFit(t, prof)
+		short.Stats = short.Stats[:len(short.Stats)-1]
+		if _, err := score.Score([]byte(draft), short, ref, release); err == nil {
+			t.Error("scored against a profile missing a manifest feature")
 		}
 	})
 
 	t.Run("no reference", func(t *testing.T) {
-		if _, err := score.Score([]byte(draft), prof, nil, release); !errors.Is(err, score.ErrMissingInput) {
+		if _, err := score.Score([]byte(draft), mustFit(t, prof), nil, release); !errors.Is(err, score.ErrMissingInput) {
 			t.Errorf("err = %v, want %v", err, score.ErrMissingInput)
 		}
 	})
 
-	t.Run("a document-unit profile", func(t *testing.T) {
-		other := testProfile()
-		other.Unit = profile.UnitDocument
-		if _, err := score.Score([]byte(draft), other, ref, release); !errors.Is(err, deviation.ErrProfileUnit) {
-			t.Errorf("err = %v, want %v", err, deviation.ErrProfileUnit)
-		}
-	})
-
-	// Non-positive, not merely zero: profile.Build validates the floor, so one
-	// arriving here at all is malformed however it got that way.
-	for _, floor := range []int{0, -1} {
-		t.Run("a profile whose paragraph floor is "+itoa(floor), func(t *testing.T) {
-			if _, err := score.Score([]byte(draft), withFloor(prof, floor), ref, release); !errors.Is(err, score.ErrInvalidRequirements) {
-				t.Errorf("err = %v, want %v", err, score.ErrInvalidRequirements)
-			}
-		})
-	}
+	// A document-unit profile and a non-positive paragraph floor left this table
+	// when Score narrowed: profile.Fitted() refuses to project either, so
+	// neither can be passed here any more. Both are asserted where the
+	// projection is made, in profile's
+	// TestAProfileScoringCannotUseYieldsNoProjection, which covers the unit and
+	// both floors — the negative one having been moved there rather than
+	// dropped.
 }
 
 // ---------------------------------------------------------------------------
@@ -827,7 +824,7 @@ func TestTheReportIsTheCompositionOfItsParts(t *testing.T) {
 	ref := testReference(t, prof)
 	release := testRelease(t, ref)
 
-	got, err := score.Score([]byte(draft), prof, ref, release)
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -853,7 +850,7 @@ func TestTheReportIsTheCompositionOfItsParts(t *testing.T) {
 	for i, vector := range paragraphs.Vectors {
 		segment := got.Segments[i]
 
-		standardized, err := deviation.Standardize(vector, prof, corpus.Draft)
+		standardized, err := deviation.Standardize(vector, mustFit(t, prof), corpus.Draft)
 		if err != nil {
 			t.Fatalf("Standardize %d: %v", i, err)
 		}
@@ -951,7 +948,7 @@ func TestARefusedBandNeverReachesAReport(t *testing.T) {
 		t.Fatalf("this fixture needs the calibration to survive")
 	}
 
-	got, err := score.Score([]byte(draft), prof, ref, release)
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -1098,7 +1095,7 @@ func TestAReportIsUncalibratedWhenTheBandGateFailsAlone(t *testing.T) {
 		t.Fatalf("this fixture needs the band gate to fail")
 	}
 
-	got, err := score.Score([]byte(draft), prof, ref, release)
+	got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 	if err != nil {
 		t.Fatalf("Score: %v", err)
 	}
@@ -1136,7 +1133,7 @@ func TestReportedCalibrationFollowsTheRelease(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			release := releaseOver(t, c.population)
-			got, err := score.Score([]byte(draft), prof, ref, release)
+			got, err := score.Score([]byte(draft), mustFit(t, prof), ref, release)
 			if err != nil {
 				t.Fatalf("Score: %v", err)
 			}
@@ -1166,7 +1163,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 		t.Run("another profile", func(t *testing.T) {
 			other := testProfile()
 			other.ID = "another-profile"
-			if _, err := score.Score(source, other, ref, release); !errors.Is(err, score.ErrProfileMismatch) {
+			if _, err := score.Score(source, mustFit(t, other), ref, release); !errors.Is(err, score.ErrProfileMismatch) {
 				t.Errorf("err = %v, want %v", err, score.ErrProfileMismatch)
 			}
 		})
@@ -1176,7 +1173,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 			for i := range population {
 				population[i].Distance.ReferenceID = "another-reference"
 			}
-			if _, err := score.Score(source, prof, ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
+			if _, err := score.Score(source, mustFit(t, prof), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
 				t.Errorf("err = %v, want %v", err, score.ErrReferenceMismatch)
 			}
 		})
@@ -1189,7 +1186,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 		t.Run("another profile", func(t *testing.T) {
 			other := withFloor(testProfile(), 500)
 			other.ID = "another-profile"
-			if _, err := score.Score([]byte(draft), other, ref, release); !errors.Is(err, score.ErrProfileMismatch) {
+			if _, err := score.Score([]byte(draft), mustFit(t, other), ref, release); !errors.Is(err, score.ErrProfileMismatch) {
 				t.Errorf("err = %v, want %v", err, score.ErrProfileMismatch)
 			}
 		})
@@ -1199,9 +1196,20 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 			for i := range population {
 				population[i].Distance.ReferenceID = "another-reference"
 			}
-			if _, err := score.Score([]byte(draft), withFloor(prof, 500), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
+			if _, err := score.Score([]byte(draft), mustFit(t, withFloor(prof, 500)), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
 				t.Errorf("err = %v, want %v", err, score.ErrReferenceMismatch)
 			}
 		})
 	})
+}
+
+// mustFit projects a built profile the way store and the workflow do, so these
+// tests reach Score through the same narrow input production uses.
+func mustFit(t *testing.T, p *profile.Profile) profile.Fitted {
+	t.Helper()
+	fitted, err := p.Fitted()
+	if err != nil {
+		t.Fatalf("Fitted: %v", err)
+	}
+	return fitted
 }

@@ -20,11 +20,19 @@ type fakeService struct {
 	indexRequest   workflow.IndexRequest
 	profileRequest workflow.ProfileRequest
 	evalRequest    workflow.EvalRequest
+	scoreRequest   workflow.ScoreRequest
 	indexResult    workflow.IndexResult
 	profileResult  workflow.ProfileResult
 	evalResult     workflow.EvalResult
+	scoreResult    workflow.ScoreResult
 	err            error
 	calls          int
+}
+
+func (f *fakeService) Score(_ context.Context, request workflow.ScoreRequest) (workflow.ScoreResult, error) {
+	f.calls++
+	f.scoreRequest = request
+	return f.scoreResult, f.err
 }
 
 func (f *fakeService) Eval(_ context.Context, request workflow.EvalRequest) (workflow.EvalResult, error) {

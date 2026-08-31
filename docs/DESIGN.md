@@ -485,6 +485,34 @@ member a segment came from, which a population does not need. Duplicate admitted
 refused, as it already is for the author's corpus, because otherwise the content hash cannot
 serve as the per-document clustering key the bootstrap needs.
 
+**`release_head` identifies the release used for CALIBRATED scoring, not every score.** The
+head advances only for a shippable release, so resolving `score` exclusively through it could
+never load an uncalibrated one — and ADR 0005 says `score` without a release still emits raw
+distance and per-feature deltas. Those look contradictory and are not: **an absent release
+head, with a fitted profile and a reference, IS the uncalibrated path.** Measure the
+segments, define no band, refuse the classification. Synthesising a release for that outcome
+would be false provenance, the same objection that stops an adverse evaluation moving the
+head.
+
+So `score` takes a closed input rather than a nullable release: a calibrated input carries an
+`eval.Release`, a raw one carries none, and the loader returns whichever applies. A nil
+release is exactly the thing that gets dereferenced on a path nobody tested — A2b's
+no-reference bug was an absent artifact escaping as a library-internal error.
+
+**Which reference, when no release names one.** A release names its reference, so the
+calibrated path has a provenance-bearing selector. The raw path has none, and the schema
+permits several references for one profile. `ORDER BY id` over content-derived hashes is
+selection by coincidence, so the raw path requires exactly one eligible reference: none is
+the `no-reference` refusal, and more than one is `ambiguous-reference` rather than a guess.
+Recorded as #62, which is where `hapax profile` already makes that guess.
+
+**The refusals `score` can make**, all exit 4 and all carrying what was measured: `no-profile`
+when no head exists, `uncalibrated` when a profile and reference exist and no release does,
+`no-reference` when nothing can be transformed against, `ambiguous-reference` when several
+could be, and `insufficient-evidence` when paragraphs were measured and none cleared tier
+availability. The last is the only one that follows an attempted measurement, which is what
+distinguishes it from the others rather than the exit code, which they share.
+
 **What a shippable release costs, measured.** Two floors bind, and the stricter one was
 never written down. The discrimination bound is capped at `1 - 3/clusters`, so a floor of
 0.80 cannot be cleared below fifteen clusters per class however separable the prose is. The
@@ -534,11 +562,12 @@ The codes partition on one question — *did the tool produce a verdict?*
 
 0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
 rather than a failure. A refusal carries a reason from a closed set — `uncalibrated`,
-`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile` —
+`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile`,
+`no-reference`, `ambiguous-reference` —
 because a script must not have to parse prose to tell them apart.
 
-`no-profile` was added when `cli` was designed. The other four were written before any
-composition root existed and none of them covers the most common first-run state there is:
+`no-profile` was added when `cli` was designed. None of the earlier refusal reasons covers
+the most common first-run state there is:
 a store with no profile head at all, because nothing has been indexed yet. That is an unmet
 precondition, not a user error — naming a register that does not exist is exit 2 and lists
 the ones that do, but asking for a profile before there are any is an ordinary thing to do.
