@@ -26,11 +26,19 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 			dir:         ".",
 			allowGetenv: false,
 			// Neither internal/llm nor internal/store nor net is here, and that
-			// is the guarantee rather than a convenience. A1 cannot construct a
-			// provider, read a credential or open a store because it cannot
-			// NAME them. A failing seam in a harness only covers the paths a
-			// test walks; a package that cannot reach a type cannot reach it on
-			// any path, including one that lazily fills a nil callback.
+			// is the guarantee rather than a convenience. This package cannot
+			// construct a provider, read a credential or open a store because
+			// it cannot NAME them. A failing seam in a harness only covers the
+			// paths a test walks; a package that cannot reach a type cannot
+			// reach it on any path, including one that lazily fills a nil
+			// callback.
+			//
+			// A2a added internal/workflow and NOT internal/store, which is the
+			// whole point of adding it. index and profile need a database; the
+			// package that owns opening one is the one that may name it. What
+			// this list still refuses is cli reaching past workflow to compose
+			// its own writes — a store opened here would be outside the single
+			// transaction store.Index exists to be.
 			allowedImports: []string{
 				// time is here so Deps.Now can be typed. It cannot open a
 				// socket or read the environment, so it does not weaken what
@@ -39,6 +47,7 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 				"github.com/fissible/hapax/internal/mode",
 				"github.com/fissible/hapax/internal/tells",
 				"github.com/fissible/hapax/internal/text",
+				"github.com/fissible/hapax/internal/workflow",
 			},
 		},
 		{
@@ -49,6 +58,10 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 			allowedImports: []string{
 				"context", "os", "time",
 				"github.com/fissible/hapax/internal/cli",
+				// The binary names workflow to construct the real one. It still
+				// may not name internal/store: what it hands cli is a service,
+				// not a database.
+				"github.com/fissible/hapax/internal/workflow",
 			},
 		},
 	} {
@@ -105,10 +118,10 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 	}
 }
 
-// A1 constructs no provider, no credential and no store, and the import rule
-// above is what says so: internal/cli cannot name internal/llm, internal/store
-// or net, so there is no path — including one that lazily fills a nil callback
-// inside Run — by which it could.
+// This package constructs no provider, no credential and no store, and the
+// import rule above is what says so: internal/cli cannot name internal/llm,
+// internal/store or net, so there is no path — including one that lazily fills a
+// nil callback inside Run — by which it could.
 //
 // What is left for the binary is that it builds its Deps by NAME. A positional
 // literal populates fields without naming them, which would silently carry
