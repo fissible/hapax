@@ -18,6 +18,11 @@ import (
 // Algorithm identifies this reference and rank-transform contract.
 const Algorithm = "length-aware-standardization-empirical-normal-v1"
 
+// DefaultMinSegments is the smallest Calibrate population used for a reference.
+// Thirty matches profile's declared observation floor: it is large enough for a
+// reference to be a measured distribution, rather than a handful of ranks.
+func DefaultMinSegments() int { return 30 }
+
 var (
 	// ErrMissingInput reports a required input that was not provided.
 	ErrMissingInput = errors.New("missing input")

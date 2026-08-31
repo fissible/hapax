@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/fissible/hapax/internal/cli"
+	"github.com/fissible/hapax/internal/workflow"
 )
 
 func main() {
@@ -15,5 +16,7 @@ func main() {
 		Env:      os.LookupEnv,
 		Now:      time.Now,
 		ReadFile: os.ReadFile,
+		Getwd:    os.Getwd,
+		Service:  workflow.Default(),
 	}))
 }

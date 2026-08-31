@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"time"
 
 	"github.com/fissible/hapax/internal/features"
@@ -22,6 +23,9 @@ type IndexWrite struct {
 	Snapshot  SnapshotWrite
 	Profile   Profile
 	Reference Reference
+	// LockWait bounds acquisition of SQLite's writer lock. An unset value uses
+	// the store default; the write itself remains bounded by ctx.
+	LockWait time.Duration
 }
 type Indexed struct {
 	Snapshot SnapshotWrite
@@ -30,6 +34,16 @@ type Indexed struct {
 
 // Index performs the complete selected write in one immediate transaction.
 func (s *Store) Index(ctx context.Context, w IndexWrite) (Indexed, error) {
+	lockWait := w.LockWait
+	if lockWait == 0 {
+		lockWait = defaultIndexLockWait
+	}
+	lockCtx, cancel := context.WithTimeout(ctx, lockWait)
+	defer cancel()
+	return s.index(ctx, lockCtx, w)
+}
+
+func (s *Store) index(ctx, lockCtx context.Context, w IndexWrite) (Indexed, error) {
 	if err := indexValid(w); err != nil {
 		return Indexed{}, err
 	}
@@ -37,21 +51,21 @@ func (s *Store) Index(ctx context.Context, w IndexWrite) (Indexed, error) {
 	if err := validateWrite(&w.Snapshot); err != nil {
 		return Indexed{}, err
 	}
-	conn, err := s.immediate(ctx)
+	conn, err := s.immediateWithLockContext(ctx, lockCtx)
 	if err != nil {
 		return Indexed{}, err
 	}
 	defer conn.Close()
 	defer conn.ExecContext(context.Background(), "ROLLBACK")
-	if err = s.putSnapshotConn(ctx, conn, w.Snapshot); err != nil {
+	if err = s.indexSnapshot(ctx, conn, w.Snapshot); err != nil {
 		return Indexed{}, err
 	}
 	if w.Mode != IndexSnapshotOnly {
-		if err = s.putProfileConn(ctx, conn, w.Profile, true); err != nil {
+		if err = s.indexProfile(ctx, conn, w.Profile); err != nil {
 			return Indexed{}, err
 		}
 		if w.Mode == IndexProfileAndReference {
-			if err = s.putReferenceConn(ctx, conn, w.Reference); err != nil {
+			if err = s.indexReference(ctx, conn, w.Reference); err != nil {
 				return Indexed{}, err
 			}
 		}
@@ -70,6 +84,54 @@ func (s *Store) Index(ctx context.Context, w IndexWrite) (Indexed, error) {
 		return Indexed{}, err
 	}
 	return result, nil
+}
+
+// indexSnapshot accepts an immutable snapshot replay only when its complete
+// stored payload agrees with the row already at that content-derived ID.
+func (s *Store) indexSnapshot(ctx context.Context, c *sql.Conn, w SnapshotWrite) error {
+	stored, err := snapshotFrom(c, ctx, w.ID)
+	if err == nil {
+		if sameSnapshot(stored, w) {
+			return nil
+		}
+		return ErrConflict
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.putSnapshotConn(ctx, c, w)
+}
+
+// indexProfile has the same replay semantics as PutProfile while retaining
+// Index's one-transaction graph write and its responsibility to advance heads.
+func (s *Store) indexProfile(ctx context.Context, c *sql.Conn, p Profile) error {
+	stored, err := s.loadProfile(c, ctx, p.ID)
+	if err == nil {
+		if !sameProfile(stored, p) {
+			return ErrConflict
+		}
+	} else if !errors.Is(err, ErrNotFound) {
+		return err
+	} else if err = s.putProfileConn(ctx, c, p, false); err != nil {
+		return err
+	}
+	_, err = c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) VALUES(?,?,?) ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", p.Register, p.ID, s.deps.Now().UTC().Format(time.RFC3339))
+	return err
+}
+
+// indexReference accepts only an exact replay at a content-derived ID.
+func (s *Store) indexReference(ctx context.Context, c *sql.Conn, r Reference) error {
+	stored, err := s.loadReference(c, ctx, r.ID)
+	if err == nil {
+		if sameReference(stored, r) {
+			return nil
+		}
+		return ErrConflict
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+	return s.putReferenceConn(ctx, c, r)
 }
 func indexValid(w IndexWrite) error {
 	switch w.Mode {

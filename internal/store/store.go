@@ -21,6 +21,11 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+const defaultIndexLockWait = time.Second
+
+// DefaultIndexLockWait is the bounded wait used when IndexWrite omits one.
+func DefaultIndexLockWait() time.Duration { return defaultIndexLockWait }
+
 var (
 	ErrNotFound         = errors.New("store: not found")
 	ErrConflict         = errors.New("store: conflict")
@@ -255,23 +260,36 @@ func (s *Store) PutSnapshot(ctx context.Context, w SnapshotWrite) error {
 }
 
 func (s *Store) immediate(ctx context.Context) (*sql.Conn, error) {
+	return s.immediateWithLockContext(ctx, ctx)
+}
+
+// immediateWithLockContext uses ctx to obtain a connection and lockCtx only
+// while acquiring SQLite's writer lock.
+func (s *Store) immediateWithLockContext(ctx, lockCtx context.Context) (*sql.Conn, error) {
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Make one immediate attempt under the command context. A successful BEGIN
+	// has not waited for a competing writer, so a tiny lock-wait value must not
+	// turn scheduler or driver setup time into a command deadline.
+	_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+	if err == nil {
+		return conn, nil
+	}
 	for {
-		_, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE")
+		_, err = conn.ExecContext(lockCtx, "BEGIN IMMEDIATE")
 		if err == nil {
 			return conn, nil
 		}
-		if ctx.Err() != nil {
+		if lockCtx.Err() != nil {
 			conn.Close()
-			return nil, ctx.Err()
+			return nil, lockCtx.Err()
 		}
 		select {
-		case <-ctx.Done():
+		case <-lockCtx.Done():
 			conn.Close()
-			return nil, ctx.Err()
+			return nil, lockCtx.Err()
 		case <-time.After(5 * time.Millisecond):
 		}
 	}
