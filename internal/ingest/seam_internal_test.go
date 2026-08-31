@@ -1,6 +1,7 @@
 package ingest
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -21,12 +22,7 @@ import (
 // span, vector and count, so an output comparison proves agreement and not
 // shared identity. It is observable only at the construction itself.
 func TestEachDocumentsTreeIsBuiltExactlyOnce(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"a.md", "b.md"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(seamProse), 0o644); err != nil {
-			t.Fatalf("write: %v", err)
-		}
-	}
+	root := seamCorpus(t, 4)
 	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -52,12 +48,7 @@ func TestEachDocumentsTreeIsBuiltExactlyOnce(t *testing.T) {
 // previous version of this test never called it, so an implementation that
 // rebuilt every tree there passed.
 func TestStandardizationsBuildEachTreeOnce(t *testing.T) {
-	root := t.TempDir()
-	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"} {
-		if err := os.WriteFile(filepath.Join(root, name), []byte(seamProse), 0o644); err != nil {
-			t.Fatalf("write: %v", err)
-		}
-	}
+	root := seamCorpus(t, 12)
 	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
@@ -66,7 +57,7 @@ func TestStandardizationsBuildEachTreeOnce(t *testing.T) {
 	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1
 	built, err := profile.Build(root, snapshot, requirements)
 	if err != nil {
-		t.Skipf("this corpus cannot fit a profile: %v", err)
+		t.Fatalf("the fixture cannot fit a profile: %v", err)
 	}
 
 	calibrate := 0
@@ -76,7 +67,7 @@ func TestStandardizationsBuildEachTreeOnce(t *testing.T) {
 		}
 	}
 	if calibrate == 0 {
-		t.Skip("the split assigned no calibrate documents")
+		t.Fatal("the split assigned no calibrate documents; the count would prove nothing")
 	}
 
 	counter := &treeCounter{}
@@ -108,9 +99,22 @@ func (c *treeCounter) count() int {
 	return c.seen
 }
 
-const seamProse = "A paragraph of prose with enough lexical tokens in it to clear the floor, " +
-	"and a second sentence so it is not taken for a heading.\n\n" +
-	"A second paragraph, also long enough to be counted, continuing past one sentence.\n"
+// Distinct bodies: identical ones are deduplicated by corpus, which would leave
+// one eligible document and a count that proves nothing.
+func seamCorpus(t *testing.T, count int) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < count; i++ {
+		body := fmt.Sprintf(
+			"Document %d opens with a paragraph long enough to clear the lexical floor, "+
+				"and continues past a single sentence so it is not read as a heading.\n\n"+
+				"Its second paragraph is also long enough to count, and mentions %d again.\n", i, i)
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("doc%02d.md", i)), []byte(body), 0o644); err != nil {
+			t.Fatalf("write: %v", err)
+		}
+	}
+	return root
+}
 
 // A seam the package can reach around is not a seam: if any path outside
 // realDeps calls doc.Structure or reads a file directly, the count above stops

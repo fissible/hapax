@@ -1,6 +1,7 @@
 package ingest_test
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -14,12 +15,25 @@ import (
 	"github.com/fissible/hapax/internal/text"
 )
 
-const (
-	prose = "A paragraph of prose with enough lexical tokens in it to clear the floor, " +
-		"and a second sentence so it is not taken for a heading.\n\n" +
-		"A second paragraph, also long enough to be counted, continuing past one sentence.\n"
-	tooShort = "hi\n"
-)
+const tooShort = "hi\n"
+
+// Identical bodies would be deduplicated by corpus, leaving one eligible
+// document and a fixture that quietly tests almost nothing. Each is distinct.
+func prose(n int) string {
+	return fmt.Sprintf(
+		"Document %d opens with a paragraph long enough to clear the lexical floor, "+
+			"and continues past a single sentence so it is not read as a heading.\n\n"+
+			"Its second paragraph is also long enough to count, and mentions %d again "+
+			"so that no two documents share a content hash.\n", n, n)
+}
+
+func distinct(count int) map[string]string {
+	files := map[string]string{}
+	for i := 0; i < count; i++ {
+		files[fmt.Sprintf("doc%02d.md", i)] = prose(i)
+	}
+	return files
+}
 
 func walked(t *testing.T, files map[string]string) (string, *corpus.Snapshot) {
 	t.Helper()
@@ -44,7 +58,7 @@ func walked(t *testing.T, files map[string]string) (string, *corpus.Snapshot) {
 // document becomes a row. Only the eligible ones get a structural graph: a
 // rejected document is a row with no nodes.
 func TestEveryDocumentIsPersistedAndOnlyEligibleOnesGetAGraph(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose, "short.md": tooShort})
+	root, snapshot := walked(t, withShort(distinct(4)))
 
 	write, err := ingest.Snapshot(root, snapshot)
 	if err != nil {
@@ -82,7 +96,7 @@ func TestEveryDocumentIsPersistedAndOnlyEligibleOnesGetAGraph(t *testing.T) {
 // The verdict that reaches the store is the one corpus produced, not a value
 // ingest invented — which is the whole point of the column being a verdict.
 func TestTheLanguageVerdictIsTheOneCorpusProduced(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose, "b.md": prose})
+	root, snapshot := walked(t, distinct(2))
 	// Corpus produces not-performed for everything today, so a hard-coded
 	// not-performed would pass. Vary them, and require the value to travel.
 	varied := []corpus.CheckState{corpus.CheckPassed, corpus.CheckSkippedByPolicy}
@@ -107,7 +121,7 @@ func TestTheLanguageVerdictIsTheOneCorpusProduced(t *testing.T) {
 // Ordinals are contiguous from zero in one deterministic traversal, which is
 // what makes a node's identity stable across reindexes of an unchanged corpus.
 func TestOrdinalsAreContiguousAndDeterministic(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose, "b.md": prose})
+	root, snapshot := walked(t, distinct(2))
 
 	first, err := ingest.Snapshot(root, snapshot)
 	if err != nil {
@@ -135,13 +149,13 @@ func TestOrdinalsAreContiguousAndDeterministic(t *testing.T) {
 // profile.ParagraphLeaves returned for that root — same span, same vector, same
 // count. A second tree would have to agree on all three by coincidence.
 func TestVectorsComeFromTheSameTreeAsTheNodes(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose})
+	root, snapshot := walked(t, distinct(1))
 	write, err := ingest.Snapshot(root, snapshot)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
 
-	raw, err := os.ReadFile(filepath.Join(root, "a.md"))
+	raw, err := os.ReadFile(filepath.Join(root, "doc00.md"))
 	if err != nil {
 		t.Fatalf("read: %v", err)
 	}
@@ -180,8 +194,8 @@ func TestVectorsComeFromTheSameTreeAsTheNodes(t *testing.T) {
 // A file that changed under the snapshot is an error, not a quietly smaller
 // graph: ReadVerified owns that check and ingest does not work around it.
 func TestAChangedFileIsRefusedRatherThanSkipped(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose, "b.md": prose})
-	if err := os.WriteFile(filepath.Join(root, "a.md"), []byte(prose+"\nAnd more.\n"), 0o644); err != nil {
+	root, snapshot := walked(t, distinct(2))
+	if err := os.WriteFile(filepath.Join(root, "doc00.md"), []byte(prose(0)+"\nAnd more.\n"), 0o644); err != nil {
 		t.Fatalf("rewrite: %v", err)
 	}
 	if _, err := ingest.Snapshot(root, snapshot); err == nil {
@@ -190,8 +204,8 @@ func TestAChangedFileIsRefusedRatherThanSkipped(t *testing.T) {
 }
 
 func TestAMissingFileIsRefusedRatherThanSkipped(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose, "b.md": prose})
-	if err := os.Remove(filepath.Join(root, "a.md")); err != nil {
+	root, snapshot := walked(t, distinct(2))
+	if err := os.Remove(filepath.Join(root, "doc00.md")); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
 	if _, err := ingest.Snapshot(root, snapshot); err == nil {
@@ -202,11 +216,7 @@ func TestAMissingFileIsRefusedRatherThanSkipped(t *testing.T) {
 // The reference is built from Calibrate-split standardizations, which is what
 // deviation.BuildReference takes — a snapshot and a split will not do.
 func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
-	files := map[string]string{}
-	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md", "g.md", "h.md"} {
-		files[name] = prose
-	}
-	root, snapshot := walked(t, files)
+	root, snapshot := walked(t, distinct(12))
 
 	requirements := profile.DefaultRequirements()
 	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1
@@ -227,7 +237,8 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 		}
 	}
 	if calibrate == 0 {
-		t.Skip("the split assigned no calibrate documents; nothing to standardize")
+		t.Fatal("the split assigned no calibrate documents; adjust the fixture or the seed " +
+			"rather than skipping, or this proves nothing")
 	}
 	if len(standardizations) == 0 {
 		t.Fatal("no standardizations for a corpus with calibrate documents")
@@ -240,4 +251,9 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 			t.Errorf("standardization %d names profile %q", i, standardization.ProfileID)
 		}
 	}
+}
+
+func withShort(files map[string]string) map[string]string {
+	files["short.md"] = tooShort
+	return files
 }

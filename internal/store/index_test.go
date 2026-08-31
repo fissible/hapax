@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"reflect"
+	"sort"
+	"strings"
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
@@ -479,12 +482,10 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	}
 	// A graph with a row in every table, written directly at version 1.
 	seedVersionOneGraph(t, db)
-	before := map[string]int{}
-	for _, table := range preservedTables {
-		before[table] = countIn(t, db, table)
-	}
-	for _, table := range preservedTables {
-		if before[table] == 0 {
+	before := map[string][]string{}
+	for table, columns := range preservedColumns {
+		before[table] = dumpTable(t, db, table, columns)
+		if len(before[table]) == 0 {
 			t.Fatalf("%s is empty at version 1; its preservation would be vacuous", table)
 		}
 	}
@@ -498,27 +499,69 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	}
 	defer s.Close()
 	raw := openRaw(t, s)
-	for _, table := range preservedTables {
-		if got := rowsIn(t, raw, table); got != before[table] {
-			t.Errorf("%s has %d rows after migration 2, had %d", table, got, before[table])
+	// The ROWS, not their count: a migration that replaced every row with a
+	// different one — corrupting identities, edges, heads or audit payloads —
+	// keeps the counts exactly.
+	for table, columns := range preservedColumns {
+		if got := dumpTable(t, raw, table, columns); !reflect.DeepEqual(got, before[table]) {
+			t.Errorf("%s changed across migration 2:\n%v\nwant\n%v", table, got, before[table])
 		}
 	}
 }
 
-var preservedTables = []string{
-	"snapshot", "document", "node", "feature_vector", "feature_value",
-	"profile", "profile_stat", "profile_head", "reference", "reference_value",
-	"threshold", "eval_result", "calibration_band", "release_head",
-	"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
+// dumpTable renders the named columns of every row, sorted, so two states can
+// be compared without depending on row order.
+func dumpTable(t *testing.T, db *sql.DB, table string, columns []string) []string {
+	t.Helper()
+	rows, err := db.Query("SELECT " + strings.Join(columns, ",") + " FROM " + table)
+	if err != nil {
+		t.Fatalf("dumping %s: %v", table, err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		cells := make([]any, len(columns))
+		for i := range cells {
+			cells[i] = new(sql.NullString)
+		}
+		if err := rows.Scan(cells...); err != nil {
+			t.Fatalf("scanning %s: %v", table, err)
+		}
+		rendered := make([]string, len(cells))
+		for i, cell := range cells {
+			rendered[i] = cell.(*sql.NullString).String
+		}
+		out = append(out, strings.Join(rendered, "|"))
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows %s: %v", table, err)
+	}
+	sort.Strings(out)
+	return out
 }
 
-func countIn(t *testing.T, db *sql.DB, table string) int {
-	t.Helper()
-	var count int
-	if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
-		t.Fatalf("counting %s: %v", table, err)
-	}
-	return count
+// The columns migration 2 must leave alone. document.language is absent because
+// correcting it is the migration's job; profile's readiness columns are absent
+// because they do not exist at version 1.
+var preservedColumns = map[string][]string{
+	"snapshot":                   {"id", "policy_digest", "created_at"},
+	"document":                   {"document_id", "snapshot_id", "path", "content_hash", "register", "split", "admission"},
+	"node":                       {"node_id", "document_id", "ordinal", "kind", "role", "containers", "offset", "length", "included", "exclusion"},
+	"feature_vector":             {"node_id", "manifest_digest", "set_version", "tokens", "lexical_tokens"},
+	"feature_value":              {"node_id", "manifest_digest", "feature", "value", "defined"},
+	"profile":                    {"id", "snapshot_id", "register", "unit", "variance_convention", "manifest_digest", "feature_set_version", "min_paragraph_lexical_tokens"},
+	"profile_stat":               {"profile_id", "feature", "n", "mean", "variance", "defined", "variance_defined", "min_observations"},
+	"profile_head":               {"register", "profile_id", "updated_at"},
+	"reference":                  {"id", "profile_id", "split", "min_segments", "manifest_digest"},
+	"reference_value":            {"reference_id", "feature", "ordinal", "value"},
+	"threshold":                  {"id", "profile_id", "reference_id", "population_id", "t_low", "t_high", "verdict"},
+	"eval_result":                {"id", "profile_id", "reference_id", "shippable", "discrimination_id", "calibration_id", "calibrated", "discriminates"},
+	"calibration_band":           {"eval_result_id", "band", "claims", "emitted", "reason"},
+	"release_head":               {"profile_id", "eval_result_id", "updated_at"},
+	"exemplar_selection":         {"id", "profile_id", "n", "certificate_id"},
+	"exemplar_member":            {"selection_id", "ordinal", "node_id"},
+	"rewrite_attempt":            {"invocation_id", "attempt_index", "profile_id", "provider_id", "node_id", "accepted", "rejection"},
+	"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal", "identifier"},
 }
 
 // seedVersionOneGraph writes one row into every table a version-1 database has,
