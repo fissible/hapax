@@ -1,6 +1,8 @@
 package cli_test
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -49,6 +51,23 @@ func TestEvalWithoutDistractorsStillRuns(t *testing.T) {
 	}
 	if service.evalRequest.DistractorRoot != "" {
 		t.Errorf("invented a distractor root %q", service.evalRequest.DistractorRoot)
+	}
+}
+
+// eval has no operand, so the directory it searches from is the process's own,
+// exactly as profile's is.
+func TestEvalSearchesFromTheWorkingDirectory(t *testing.T) {
+	service := &fakeService{evalResult: shippableEval()}
+	var out, errOut bytes.Buffer
+	cli.Run(context.Background(), []string{"eval", "--profile", "essays"}, cli.Deps{
+		Stdout: &out, Stderr: &errOut,
+		Env:      func(string) (string, bool) { return "", false },
+		ReadFile: func(string) ([]byte, error) { return nil, errNotUsed{} },
+		Getwd:    func() (string, error) { return "/where/the/user/is", nil },
+		Service:  service,
+	})
+	if service.evalRequest.StartDir != "/where/the/user/is" {
+		t.Errorf("start dir = %q", service.evalRequest.StartDir)
 	}
 }
 

@@ -857,7 +857,7 @@ func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy
 			if !sameEval(stored, result) {
 				return ErrConflict
 			}
-			return nil
+			return s.advanceEvalHead(c, ctx, result, headPolicy)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
@@ -883,16 +883,21 @@ func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy
 				return err
 			}
 		}
-		if headPolicy {
-			_, err = c.ExecContext(ctx, "INSERT INTO release_head(profile_id,eval_result_id,updated_at) VALUES (?,?,?) ON CONFLICT(profile_id) DO UPDATE SET eval_result_id=excluded.eval_result_id,updated_at=excluded.updated_at", result.ProfileID, result.ID, s.deps.Now().UTC().Format(time.RFC3339))
-			if err != nil {
-				return err
-			}
-			_, err = c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) SELECT register,id,? FROM profile WHERE id=? ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", s.deps.Now().UTC().Format(time.RFC3339), result.ProfileID)
-		}
-		return err
+		return s.advanceEvalHead(c, ctx, result, headPolicy)
 	})
 }
+
+func (s *Store) advanceEvalHead(c *sql.Conn, ctx context.Context, result EvalResult, headPolicy HeadPolicy) error {
+	if !headPolicy {
+		return nil
+	}
+	if _, err := c.ExecContext(ctx, "INSERT INTO release_head(profile_id,eval_result_id,updated_at) VALUES (?,?,?) ON CONFLICT(profile_id) DO UPDATE SET eval_result_id=excluded.eval_result_id,updated_at=excluded.updated_at", result.ProfileID, result.ID, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err := c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) SELECT register,id,? FROM profile WHERE id=? ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", s.deps.Now().UTC().Format(time.RFC3339), result.ProfileID)
+	return err
+}
+
 func sameEval(first, second EvalResult) bool {
 	return first.ID == second.ID && first.ProfileID == second.ProfileID && first.ReferenceID == second.ReferenceID && first.DistractorPoolID == second.DistractorPoolID && first.Shippable == second.Shippable && first.Reason == second.Reason && reflect.DeepEqual(first.Discrimination, second.Discrimination) && reflect.DeepEqual(first.Calibration, second.Calibration)
 }

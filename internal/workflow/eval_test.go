@@ -250,6 +250,47 @@ func TestNoDistractorsIsACompletedUncalibratedMeasurement(t *testing.T) {
 // Failures that are not outcomes
 // ---------------------------------------------------------------------------
 
+// eval takes no corpus operand, so like profile it has to FIND the store rather
+// than be told where it is. Every other test here names it explicitly, which is
+// why none of them noticed that a bare `hapax eval` failed outright — found by
+// running the binary, not by reading the suite.
+func TestEvalDiscoversTheStoreTheWayProfileDoes(t *testing.T) {
+	root := corpusOf(t, 60)
+	indexed(t, indexRequest(root))
+	deep := filepath.Join(root, "a", "b")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	// No StorePath at all: discovered upward from where the caller is standing.
+	result, err := workflow.Default().Eval(ctx(), workflow.EvalRequest{
+		StartDir: deep, Register: "essays", DistractorRoot: distractorCorpus(t, 20),
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if result.StorePath != defaultStorePath(root) {
+		t.Errorf("store = %q, want the ancestor's %q", result.StorePath, defaultStorePath(root))
+	}
+	if result.ProfileID == "" {
+		t.Error("discovered the store and measured nothing in it")
+	}
+}
+
+// And with nowhere to discover, it is the same refusal profile makes rather than
+// an operational failure: an unmet precondition, not a broken invocation.
+func TestEvalWithNoStoreAnywhereRefuses(t *testing.T) {
+	result, err := workflow.Default().Eval(ctx(), workflow.EvalRequest{
+		StartDir: t.TempDir(), Register: "essays", DistractorRoot: distractorCorpus(t, 20),
+	})
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	if result.Selection != workflow.SelectionNoProfile {
+		t.Errorf("selection = %q, want %q", result.Selection, workflow.SelectionNoProfile)
+	}
+}
+
 // Nothing indexed yet is the ordinary first-run state and the same refusal
 // profile makes: an unmet precondition, not a failure.
 func TestEvaluatingWithNoProfileIsARefusalAndNotAFailure(t *testing.T) {
