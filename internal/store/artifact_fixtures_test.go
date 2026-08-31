@@ -3,6 +3,7 @@ package store_test
 import (
 	"math"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -375,3 +376,121 @@ var aDeclaredNotReadyReason = func() string {
 	}
 	return reasons[0]
 }()
+
+// seededRegister is the register every profile fixture here belongs to.
+const seededRegister = "essays"
+
+// The three states a scoring bundle has to tell apart, seeded separately so a
+// test does not have to damage a full graph to reach one of them.
+
+// seedProfileOnly leaves a headed profile with nothing to transform against.
+func seedProfileOnly(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	snapshot, prof := seededProfile(t, s)
+	if err := s.PutProfile(ctx(), prof, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	return seededIDs{Snapshot: snapshot.ID, Profile: prof.ID}
+}
+
+// seedProfileAndReference is the uncalibrated state: everything score needs to
+// measure, and no release to band with.
+func seedProfileAndReference(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	ids := seedProfileOnly(t, s)
+	reference := referenceFixture(ids.Profile)
+	mustPutReference(t, s, reference)
+	ids.Reference = reference.ID
+	return ids
+}
+
+// seedProfileAndTwoReferences is the state no release names a way out of: two
+// references for one profile, which the schema permits and which #62 currently
+// resolves by hash order.
+func seedProfileAndTwoReferences(t *testing.T, s *store.Store) seededIDs {
+	t.Helper()
+	ids := seedProfileAndReference(t, s)
+	second := referenceFixture(ids.Profile)
+	second.ID = fakeID("reference", "second")
+	second.MinSegments++
+	mustPutReference(t, s, second)
+	return ids
+}
+
+// shippableRelease builds a release through eval's own constructors rather than
+// by hand, so what the store's codec has to reconstruct is a real domain
+// artifact and not a literal that happens to look like one.
+//
+// The cluster counts are not arbitrary. The discrimination bound is capped at
+// 1 - 3/clusters and the calibration gate wants ceil(3/target) clusters per
+// band, which is sixty author clusters at p_author = 0.05 and thirty distractor
+// clusters at p_distractor = 0.10. A fixture short of those cannot ship however
+// cleanly its distances separate — the distances here are just numbers, so they
+// are cheap where seven hundred documents would not be.
+func shippableRelease(t *testing.T, profileID, referenceID string) eval.Release {
+	t.Helper()
+	// Distractors cluster by AUTHOR, not by document, so that one prolific
+	// writer cannot dominate the comparison. A pool whose members all carry the
+	// same author name is one cluster however many files it holds — which is
+	// how this fixture first came back with a cap of minus two.
+	distance := func(class eval.Class, document, author string, value float64) eval.ClassedDistance {
+		return eval.ClassedDistance{
+			Class: class, Document: document, Author: author,
+			Distance: deviation.Distance{
+				ProfileID: profileID, ReferenceID: referenceID,
+				FeatureManifestDigest: features.ManifestDigest(),
+				Split:                 corpus.Test, Value: value, Defined: true,
+				ScoredTiers:  []features.Tier{features.TierA},
+				WeightScheme: deviation.WeightSchemeUniform, Algorithm: deviation.DistanceAlgorithm,
+			},
+		}
+	}
+
+	// Thresholds come from the CALIBRATE population and both gates are then
+	// measured over the TEST one, which is what makes their population
+	// identities agree — NewRelease refuses a pair that measured different
+	// populations, and building both from one split is the easy way to trip it.
+	population := func(split corpus.Split) []eval.ClassedDistance {
+		var out []eval.ClassedDistance
+		for i := 0; i < 60; i++ {
+			d := distance(eval.ClassAuthor, fakeID("author", strconv.Itoa(i)), "the-author", 0.10+float64(i)*0.001)
+			d.Distance.Split = split
+			out = append(out, d)
+		}
+		for i := 0; i < 30; i++ {
+			d := distance(eval.ClassDistractor, fakeID("distractor", strconv.Itoa(i)),
+				"other-writer-"+strconv.Itoa(i), 3.00+float64(i)*0.001)
+			d.Distance.Split = split
+			out = append(out, d)
+		}
+		return out
+	}
+	held, calibrating := population(corpus.Test), population(corpus.Calibrate)
+
+	thresholds, err := eval.Calibrate(calibrating,
+		eval.Source{Cohort: fakeID("cohort", profileID), DistractorPool: fakeID("pool", profileID)},
+		eval.DefaultTargets())
+	if err != nil {
+		t.Fatalf("Calibrate: %v", err)
+	}
+	calibration, err := thresholds.CalibrateBands(held, eval.DefaultBandFloor())
+	if err != nil {
+		t.Fatalf("CalibrateBands: %v", err)
+	}
+	discrimination, err := eval.Discriminate(held, eval.DefaultDiscrimination())
+	if err != nil {
+		t.Fatalf("Discriminate: %v", err)
+	}
+	release, err := eval.NewRelease(discrimination, calibration)
+	if err != nil {
+		t.Fatalf("NewRelease: %v", err)
+	}
+	if !release.Shippable {
+		t.Fatalf("the fixture did not ship: %s (auc=%.3f bound=%.3f cap=%.3f clusters=%d/%d min=%d calibrated=%v)",
+			release.Reason, release.Discrimination.AUC, release.Discrimination.LowerBound,
+			release.Discrimination.Cap, release.Discrimination.AuthorClusters,
+			release.Discrimination.DistractorClusters, release.Discrimination.MinClusters,
+			release.Calibration.Calibrated)
+	}
+	return release
+}
