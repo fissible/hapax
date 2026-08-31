@@ -32,7 +32,8 @@ model, then review.
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
-| 13 | `cli` | **partial** | A1 shipped (#51). A2 blocked on #53; a 14th component, `ingest`, is proposed there |
+| 13 | `ingest` | **built** | PR #54. Verified snapshot to a deterministic node/vector graph; one tree per call |
+| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 offline planning #67. Only **B2 `rewrite`** remains |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -44,7 +45,15 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 |---|---|---|
 | [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
 | [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` is complete; needs `cli` to drive reindexing |
-| [#53](https://github.com/fissible/hapax/issues/53) | Make `hapax index` possible — four gaps between corpus, profile and store | nothing — blocks all remaining `cli` work |
+| [#55](https://github.com/fissible/hapax/issues/55) | One verified read and one tree per document across an index | nothing — **held deliberately**, see below |
+| [#56](https://github.com/fissible/hapax/issues/56) | One corpus, two snapshot identities | nothing; load-bearing in three places now |
+| [#58](https://github.com/fissible/hapax/issues/58) | Say why nothing ships, instead of reporting a bound of zero | nothing |
+| [#62](https://github.com/fissible/hapax/issues/62) | `hapax profile` reports an arbitrary reference | nothing; `score` does not inherit it |
+| [#63](https://github.com/fissible/hapax/issues/63) | The distractor pool cannot get its author-clustering protection | needs a schema decision, not just a workflow one |
+| [#64](https://github.com/fissible/hapax/issues/64) | `paragraphs_below_floor` is always zero at the declared floor | a stylometry decision about the floor |
+| [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view |
+| [#68](https://github.com/fissible/hapax/issues/68) | B2 — the provider, the loop, assembly, and the command | #67, which is done |
+| [#70](https://github.com/fissible/hapax/issues/70) | Every store open pays for two table rebuilds it does not need | nothing; measured, and the fix is #61's named follow-up |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
@@ -135,6 +144,115 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### 2026-08-31 (B1: everything `rewrite` decides before it spends anything)
+
+`rewrite` split into #67 and #68. B1 ships no command — `Plan` is on the runner and
+deliberately not on `Service` — because a command that reports targets it cannot rewrite
+promises an action it cannot perform.
+
+**Two defects were found at design time rather than by running the binary,** which is a first
+for this project. `rewrite.Loop.Rewrite` is per-segment and numbers attempts from zero within
+each, so one invocation over two paragraphs wrote one `rewrite_attempt` key twice; every test
+that reached that table used a single node, so the whole suite passed. And a draft had never
+been in the store at all, so `PutRewriteAttempt` would have refused every attempt as an
+invalid artifact — after the provider had been paid. DESIGN anticipated the second and nothing
+implemented it.
+
+**A third was found by a test fixture, and it had shipped: #69.** `joinContainers` joins with
+a pipe; the column's grammar admitted only lower case and hyphen. Every leaf with two or more
+containers was unstorable — every paragraph inside a list, a quote, a table cell, a footnote
+or a definition list — so `hapax index` failed on most real Markdown with a constraint error
+rather than a refusal. Twelve slices missed it because every corpus fixture in this repository
+is plain top-level paragraphs: one container, no separator. The fixture that caught it was
+added at the reviewer's insistence, on the grounds that inline code alone "can pass with a
+syntax-specific shortcut".
+
+**Eight review rounds before the freeze, and the last four each found a hole in a fix for the
+previous one.** Counting rows is not "nothing was written" — an implementation that moves a
+head leaves every count where it was, so the census hashes each table's contents. Node/span
+consistency is not identity — a same-shaped snapshot from a previous run satisfied it. The
+pattern is mine: I closed the instance the reviewer named instead of the class. Generalising
+first would have cost fewer rounds.
+
+**Both frozen-test amendments were my errors.** I froze `vocabulary_test.go`, which describes
+the schema this slice changes — the same category as `allowlist_test.go`, which I had
+deliberately excluded for exactly that reason. And I wrote a test asserting that a profile
+built directly and the same profile as indexed share an identity, which is #56 and is open.
+Each was agreed before it was made, committed on its own, and the freeze renewed, so the diff
+between consecutive freeze commits is exactly the amendment. The implementer stopped and
+reported both times rather than editing a frozen file, which is the whole argument for the
+process.
+
+**CI cost is real and filed rather than hidden: #70.** `internal/store` under race goes 140s
+to 242s, +102s on the critical path, because two rebuild migrations run on every `store.Open`
+including a brand-new empty database. That is #61's named follow-up — materialising a fresh
+store's head schema, derived from the chain rather than hand-written. Not done here; B1
+already carries two migrations, one of them unplanned.
+
+**A measurement that corrected six rounds of my own worry.** `requireBoundariesProduce`, which
+I flagged repeatedly as a CI risk, costs nothing: three fixtures and twelve score calls run in
+0.43s. B1's +57s on `internal/workflow` is 21 tests at ~0.19s each amplified about 12x by the
+race detector, with no hot spot. Third time this session a performance hypothesis of mine was
+wrong before measurement.
+
+**Next: B2, #68.** The provider seam with type-separated local and cloud factories, the loop,
+assembly, the atomic destination write, `--local-endpoint` so the smoke test can drive the
+real binary against a loopback server, and #65's human-line builder. Three things B1 leaves
+pinned only by agreement and not by test, all recorded on #68: `Selection` is populated but
+unasserted, `plan_state` and `state` must be separate envelope members, and an in-range
+paragraph with excisions stays in-range.
+
+### 2026-08-31 (ingest, and the CLI down to one command)
+
+Five slices merged: #54 `ingest` and the four gaps under it, #57 `index` and
+`profile`, #59 `eval`, #61 the CI-time work, #66 `score`. **Only `rewrite`
+remains.** Every one of them was `duet`, and the pattern that decided this run
+is worth stating plainly:
+
+**Almost every defect that mattered was found by running the binary, not by the
+suite.** Twenty distractors collapsing to one cluster behind a perfect AUC of
+1.000; `hapax eval` unable to discover its own store; a deviation-internal error
+escaping as an operational failure; `Document.valid` rejecting a payload its own
+workflow produced; `hapax score` looking up the empty register. Three of those
+live in the gap between a fake service and the real composition root — a gap
+every `internal/cli` test sits on one side of. `internal/cli/smoke_test.go`
+closes it: a real corpus, a real database, the real binary, run from a working
+directory rather than handed `--store`, because passing the path everywhere is
+exactly how the missing discovery went unnoticed.
+
+**The arithmetic nobody had written down.** A shippable release needs sixty
+held-out author documents and thirty distractors — `ceil(3/target)` clusters per
+band — which is a corpus of about seven hundred. DESIGN stated ⌈1/p⌉, twenty and
+ten, but that is the minimum number of *distances* for a quantile to exist, not
+the *clusters* the bootstrap needs. Both are real; only one was documented. This
+is why no test asserts a shippable release end to end and why
+`internal/eval/evaltest` exists.
+
+**Two constraints met in letter.** A2b's `deviation.Standardize` was asked to
+take `profile.Fitted` and became generic over `profile.Fitted | *profile.Profile`
+— every test passed, because every test passed a `Fitted`. Same shape as the
+reflection that got around the ingest seam in #53. Closed in A2c with a guard
+that reads the *signature*, since compilation cannot catch a union coming back.
+And an implementation raised the default paragraph floor from 1 to 3 so one test
+would pass — a product-wide change to what counts as a paragraph. Reverted;
+exactly one test failed, which is the definition of special-casing a fixture.
+
+**My own recurring failure was mechanical.** Five or six bulk regex edits across
+many call sites silently matched nothing or split an argument containing a
+comma, and codex stopped on each rather than working around it. Two habits fixed
+it: verify every edit landed before moving on, and sweep the whole repository for
+call sites rather than discovering them one package per round trip.
+
+**#55 is held deliberately.** Its correctness rationale was spent when A2a closed
+the floor divergence, and doing it would make a real cross-check tautological:
+`profile.Build` and `ingest` currently count the admitted population
+independently, and the floor test compares one against the other.
+
+**Next: B, `rewrite`.** It is the only command that touches a provider, so it is
+the first to exercise `--local-only`, the credential factory and the refusal
+`local-only-forbids-provider` end to end. #65 should be done with its rendering
+in view rather than after it.
 
 ### 2026-08-30 (store slice 2b — component 12 complete)
 

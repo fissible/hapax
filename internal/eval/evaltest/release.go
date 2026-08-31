@@ -41,6 +41,20 @@ func digest(parts ...string) string {
 // are cheap where seven hundred documents would not be.
 func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release {
 	t.Helper()
+	return ReleaseAround(t, profileID, referenceID, 0.10, 3.00)
+}
+
+// ReleaseAround is ShippableRelease with the two populations placed where the
+// caller needs them, so a test can decide which band a measured distance falls
+// in. The boundaries are quantiles of these populations rather than either
+// argument, so a caller that depends on where they land must read Low and High
+// off the result and say so — see the callers in internal/workflow.
+//
+// It exists because band membership is otherwise an accident of whatever the
+// fixture corpus happens to measure, and a test asserting "this paragraph is a
+// rewrite target" against an accident is asserting nothing.
+func ReleaseAround(t *testing.T, profileID, referenceID string, authorCenter, distractorCenter float64) eval.Release {
+	t.Helper()
 	// Distractors cluster by AUTHOR when every one carries a name, and by
 	// DOCUMENT when none does. This fixture leaves the author empty on purpose,
 	// for two reasons found the hard way. Giving thirty distractors one name
@@ -64,6 +78,15 @@ func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release 
 		}
 	}
 
+	// The spread is PROPORTIONAL to each centre, not a fixed 0.001 step. A fixed
+	// step put the two populations on top of each other whenever the centres were
+	// closer together than sixty steps — at 1e-4 and 1e-3 the author distances ran
+	// from 0.0001 to 0.0591 and straight through the distractors, the AUC came out
+	// near 0.26, and the fixture died on the discrimination floor instead of
+	// producing a release. Scaling by the centre keeps the separation the caller
+	// asked for at any magnitude.
+	spread := func(centre float64, i int) float64 { return centre * (1 + float64(i)*0.001) }
+
 	// Thresholds come from the CALIBRATE population and both gates are then
 	// measured over the TEST one, which is what makes their population
 	// identities agree — NewRelease refuses a pair that measured different
@@ -71,13 +94,13 @@ func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release 
 	population := func(split corpus.Split) []eval.ClassedDistance {
 		var out []eval.ClassedDistance
 		for i := 0; i < 60; i++ {
-			d := distance(eval.ClassAuthor, digest("author", strconv.Itoa(i)), "", 0.10+float64(i)*0.001)
+			d := distance(eval.ClassAuthor, digest("author", strconv.Itoa(i)), "", spread(authorCenter, i))
 			d.Distance.Split = split
 			out = append(out, d)
 		}
 		for i := 0; i < 30; i++ {
 			d := distance(eval.ClassDistractor, digest("distractor", strconv.Itoa(i)),
-				"", 3.00+float64(i)*0.001)
+				"", spread(distractorCenter, i))
 			d.Distance.Split = split
 			out = append(out, d)
 		}

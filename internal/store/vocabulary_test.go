@@ -280,6 +280,7 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt.current_band": "enum", "rewrite_attempt.candidate_band": "enum",
 	"rewrite_attempt.rejection":                "enum",
 	"rewrite_attempt_identifier.invocation_id": "hex",
+	"rewrite_attempt_identifier.node_id":       "hex",
 	"rewrite_attempt_identifier.identifier":    "preserve-identifier",
 	"migration.checksum":                       "hex", "migration.applied_at": "time",
 }
@@ -538,19 +539,19 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			return err
 		},
 		"rewrite_attempt.provider_id": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.current_band": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.candidate_band": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.rejection": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		// Every column of the release reaches the reader through one loader.

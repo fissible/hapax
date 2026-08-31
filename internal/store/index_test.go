@@ -11,6 +11,7 @@ import (
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/identity"
+	"github.com/fissible/hapax/internal/ingest"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/store"
 	"github.com/fissible/hapax/internal/text"
@@ -162,6 +163,54 @@ func aNotReadyReason(t *testing.T) string {
 // ---------------------------------------------------------------------------
 // Index
 // ---------------------------------------------------------------------------
+
+// The graph comes from one Markdown document rather than hand-built nodes: the
+// original constraint passed every fixture that only used document, while every
+// nested leaf parser actually produces was impossible to store (#69).
+func TestStructureParserMultiContainerLeavesAreStorable(t *testing.T) {
+	root := corpusRoot(t, map[string]string{"nested.md": "- A list item is a complete sentence with enough words to be prose.\n\n" +
+		"> A quotation is also a complete sentence with enough words to be prose.\n\n" +
+		"| Column | Tier |\n|---|---|\n| A cell | A |\n\n" +
+		"Term\n: A definition description is a complete sentence with enough words.\n\n" +
+		"A claim has a source.[^1]\n\n[^1]: The source is a complete sentence with enough words.\n",
+	})
+	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
+	if err != nil {
+		t.Fatalf("Walk: %v", err)
+	}
+	write, err := ingest.Snapshot(root, snapshot)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	s := newStore(t)
+	if err := s.PutSnapshot(ctx(), write); err != nil {
+		t.Fatalf("PutSnapshot nested Markdown: %v", err)
+	}
+	persisted, err := s.Snapshot(ctx(), write.ID)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	want := [][]text.ContainerKind{
+		{text.ContainerDocument, text.ContainerList, text.ContainerListItem},
+		{text.ContainerDocument, text.ContainerBlockQuote},
+		{text.ContainerDocument, text.ContainerTable},
+		{text.ContainerDocument, text.ContainerDefinitionList},
+		{text.ContainerDocument, text.ContainerFootnoteSection, text.ContainerFootnote},
+	}
+	for _, path := range want {
+		found := false
+		for _, node := range persisted.Documents[0].Nodes {
+			if reflect.DeepEqual(node.Containers, path) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("no stored node has parser container path %v", path)
+		}
+	}
+}
 
 func indexWrite(t *testing.T, s *store.Store, mode store.IndexMode) store.IndexWrite {
 	t.Helper()
@@ -747,6 +796,10 @@ func migrationExclusions(table string) map[string]bool {
 		// This nullable audit edge did not exist in the version-1 graph the
 		// migration test seeds, so its NULL backfill is not a mutation of that row.
 		return map[string]bool{"distractor_pool_id": true}
+	case "rewrite_attempt_identifier":
+		// Migration 4 derives this value from the child node. Its preservation is
+		// verified by TestWideningTheAttemptKeyKeepsTheAttemptsAlreadyStored.
+		return map[string]bool{"node_id": true}
 	}
 	return nil
 }

@@ -43,6 +43,18 @@ type ProfileStat struct {
 	MinObservations          int
 }
 
+// Fitted projects a persisted profile into the one scoring representation.
+func (p Profile) Fitted() (profile.Fitted, error) {
+	f := profile.Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion, FeatureManifestDigest: p.ManifestDigest, MinParagraphLexicalTokens: p.MinParagraphLexicalTokens, Stats: make([]profile.Stats, 0, len(p.Stats))}
+	for _, stat := range p.Stats {
+		f.Stats = append(f.Stats, profile.Stats{Feature: stat.Feature, N: stat.N, Mean: stat.Mean, Variance: stat.Variance, Defined: stat.Defined, VarianceDefined: stat.VarianceDefined, MinObservations: stat.MinObservations})
+	}
+	if f.ID == "" || f.Unit != profile.UnitParagraph || f.FeatureSetVersion != features.SetVersion || f.FeatureManifestDigest != features.ManifestDigest() || f.MinParagraphLexicalTokens <= 0 || len(f.Stats) == 0 {
+		return profile.Fitted{}, errors.New("stored profile cannot score")
+	}
+	return f, nil
+}
+
 // Reference is the persisted reference distribution for a profile split.
 type Reference struct {
 	ID, ProfileID  string
@@ -934,8 +946,8 @@ func (s *Store) LoadScoringBundle(ctx context.Context, register string) (Scoring
 	if err != nil {
 		return out, err
 	}
-	out.Fitted = fittedFromStored(p)
-	if out.Fitted.ID == "" {
+	out.Fitted, err = p.Fitted()
+	if err != nil {
 		return out, ErrCorrupt
 	}
 	releaseID, err := s.ReleaseHead(ctx, profileID)
@@ -989,13 +1001,6 @@ func (s *Store) LoadScoringBundle(ctx context.Context, register string) (Scoring
 	return out, nil
 }
 
-func fittedFromStored(p Profile) profile.Fitted {
-	f := profile.Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion, FeatureManifestDigest: p.ManifestDigest, MinParagraphLexicalTokens: p.MinParagraphLexicalTokens}
-	for _, s := range p.Stats {
-		f.Stats = append(f.Stats, profile.Stats{Feature: s.Feature, N: s.N, Mean: s.Mean, Variance: s.Variance, Defined: s.Defined, VarianceDefined: s.VarianceDefined, MinObservations: s.MinObservations})
-	}
-	return f
-}
 func releaseFromStored(x EvalResult) (eval.Release, error) {
 	d := eval.Discrimination{ID: x.Discrimination.ID, PopulationID: x.Discrimination.PopulationID, ProfileID: x.ProfileID, ReferenceID: x.ReferenceID, FeatureManifestDigest: x.Discrimination.Binding.ManifestDigest, WeightScheme: x.Discrimination.Binding.WeightScheme, DistanceAlgorithm: x.Discrimination.Binding.DistanceAlgorithm, ScoredTiers: x.Discrimination.Binding.ScoredTiers, Split: x.Discrimination.Split, Spec: eval.DiscriminationSpec{Floor: x.Discrimination.Floor, Confidence: x.Discrimination.Confidence, Resamples: x.Discrimination.Resamples, Seed: x.Discrimination.Seed}, Algorithm: x.Discrimination.Algorithm, Clustering: x.Discrimination.Clustering, AUC: x.Discrimination.AUC, LowerBound: x.Discrimination.LowerBound, Cap: x.Discrimination.Cap, AuthorSegments: x.Discrimination.AuthorSegments, DistractorSegments: x.Discrimination.DistractorSegments, AuthorClusters: x.Discrimination.AuthorClusters, DistractorClusters: x.Discrimination.DistractorClusters, MinClusters: x.Discrimination.MinClusters, Discriminates: x.Discrimination.Discriminates, Reason: x.Discrimination.Reason}
 	c := eval.Calibration{ID: x.Calibration.ID, ThresholdsID: x.Calibration.ThresholdsID, PopulationID: x.Calibration.PopulationID, ProfileID: x.ProfileID, ReferenceID: x.ReferenceID, FeatureManifestDigest: x.Calibration.Binding.ManifestDigest, WeightScheme: x.Calibration.Binding.WeightScheme, DistanceAlgorithm: x.Calibration.Binding.DistanceAlgorithm, ScoredTiers: x.Calibration.Binding.ScoredTiers, Split: x.Calibration.Split, Floor: eval.BandFloor{Confidence: x.Calibration.Confidence, Resamples: x.Calibration.Resamples, Seed: x.Calibration.Seed}, Algorithm: x.Calibration.Algorithm, Low: x.Calibration.Low, High: x.Calibration.High, Calibrated: x.Calibration.Calibrated, Reason: x.Calibration.Reason}
@@ -1253,7 +1258,7 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 		return invalidArtifact("rewrite attempt", invalidAttemptField(x))
 	}
 	return artifactTx(ctx, s, func(c *sql.Conn) error {
-		stored, err := s.loadAttempt(c, ctx, x.InvocationID, x.Index)
+		stored, err := s.loadAttempt(c, ctx, x.InvocationID, x.NodeID, x.Index)
 		if err == nil {
 			if !sameAttempt(stored, x) {
 				return ErrConflict
@@ -1282,7 +1287,7 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 			return err
 		}
 		for ordinal, identifier := range x.PreserveIdentifiers {
-			if _, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt_identifier (invocation_id,attempt_index,ordinal,identifier) VALUES (?,?,?,?)", x.InvocationID, x.Index, ordinal, identifier); err != nil {
+			if _, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt_identifier (invocation_id,node_id,attempt_index,ordinal,identifier) VALUES (?,?,?,?,?)", x.InvocationID, x.NodeID, x.Index, ordinal, identifier); err != nil {
 				return err
 			}
 		}
@@ -1291,13 +1296,13 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 }
 
 // LoadRewriteAttempt returns one stored rewrite decision record.
-func (s *Store) LoadRewriteAttempt(ctx context.Context, id string, i int) (RewriteAttempt, error) {
-	return s.loadAttempt(s.db, ctx, id, i)
+func (s *Store) LoadRewriteAttempt(ctx context.Context, id, nodeID string, i int) (RewriteAttempt, error) {
+	return s.loadAttempt(s.db, ctx, id, nodeID, i)
 }
-func (s *Store) loadAttempt(query queryer, ctx context.Context, id string, index int) (RewriteAttempt, error) {
+func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID string, index int) (RewriteAttempt, error) {
 	var x RewriteAttempt
 	var preserved, tellsComparable, accepted int
-	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection FROM rewrite_attempt WHERE invocation_id=? AND attempt_index=?", id, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection)
+	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection FROM rewrite_attempt WHERE invocation_id=? AND node_id=? AND attempt_index=?", id, nodeID, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection)
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
@@ -1307,7 +1312,7 @@ func (s *Store) loadAttempt(query queryer, ctx context.Context, id string, index
 	x.Preserved = preserved != 0
 	x.TellsComparable = tellsComparable != 0
 	x.Accepted = accepted != 0
-	rows, err := query.QueryContext(ctx, "SELECT ordinal,identifier FROM rewrite_attempt_identifier WHERE invocation_id=? AND attempt_index=? ORDER BY ordinal", id, index)
+	rows, err := query.QueryContext(ctx, "SELECT ordinal,identifier FROM rewrite_attempt_identifier WHERE invocation_id=? AND node_id=? AND attempt_index=? ORDER BY ordinal", id, nodeID, index)
 	if err != nil {
 		return x, err
 	}

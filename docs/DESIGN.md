@@ -538,6 +538,57 @@ head. An adverse one is still persisted — it is evidence — but it leaves the
 is. Otherwise a rerun against a worse distractor pool silently retracts a release that was
 fine, which is an activation policy nobody chose.
 
+### `rewrite` plans before it spends anything
+
+B1 builds everything `hapax rewrite` decides before a provider is involved, and exposes no
+command: `Plan` is on the runner and deliberately not on `Service`, which is the only seam
+`cli` can reach. The alternative — shipping a command that reports targets it cannot rewrite —
+would promise an action it cannot perform.
+
+**The draft is indexed, because the audit record cannot reference anything else.**
+`store.PutRewriteAttempt` refuses a `node_id` that is not in the `node` table, and a draft had
+never been in the store: `hapax score` reads the file and persists nothing. So every attempt
+of every rewrite would have been refused as an invalid artifact — after the provider had
+already been paid. This section of DESIGN anticipated it ("a rewrite operates on *draft* nodes
+that need not belong to the profile's own snapshot") and nothing implemented it. The draft is
+now a one-document `corpus.Draft` snapshot written in `IndexSnapshotOnly` mode, which does not
+prune, and the *n*th vector-bearing node in ordinal order is the *n*th `score.Segment`.
+
+**Indexed whenever the plan reports segments, and not otherwise.** Every segment carries a
+node, so a plan that reports segments must have somewhere for those nodes to live — including
+a `nothing-to-change` plan, which still reports what it measured. `insufficient-evidence`
+reports no segments and writes nothing at all: there is no node any audit record could point
+at. That refusal keeps its resolved profile, reference and release, because it is the one
+refusal that is not a fact about the store — everything resolved, and it is the draft that
+cannot be measured. Telling that reader "no profile" would send them to index one, which would
+not help them.
+
+**An attempt is identified by its invocation and its paragraph.** `rewrite.Loop.Rewrite` is
+per-segment and numbers attempts from zero within each, so one invocation over two paragraphs
+wrote one key twice. `rewrite_attempt` is therefore keyed `(invocation_id, node_id,
+attempt_index)`. The alternative — renumbering the loop's index into a run-global ordinal so
+the old key stayed unique — was rejected: `Attempt.Index` means "attempt number within this
+paragraph", and storing anything else under `attempt_index` is a false statement in the one
+record whose whole value is being trustworthy.
+
+**Exemplars are selected from metadata and only then rehydrated.** The required set must be
+fixed before rehydration is attempted, with no silent substitution or reduction, or which
+exemplars an author gets depends on which of their files happen to be readable today.
+`exemplar.Select` never reads a candidate's text — density, strata and medoids come from the
+vectors — so the selection is computable from the persisted snapshot alone, and is persisted
+before anything is read from disk. Three rehydrations, not seven hundred. `Select` takes
+`profile.Fitted` rather than the build artifact for the same reason `deviation.Standardize`
+does: it read only the ID and the projection, and taking the artifact forced every caller
+holding a stored profile to reconstruct one it does not have.
+
+**Dispositions are decided band first.** A paragraph `assemble` cannot splice — one whose leaf
+span holds bytes its run text drops, which is inline code or a footnote reference — is
+`contains-excisions` only if it would otherwise have been a target. An in-range paragraph with
+inline code stays in-range: it was never going to be rewritten, and saying otherwise tells the
+reader hapax was blocked when it was not interested. That disposition is deliberately not a
+`rewrite.RejectionCode`, because no attempt happened and recording one would put a provider
+candidate that never existed into the audit record.
+
 ### Exit codes, and the split that produced them
 
 Row 12 originally said `cli` should be built **early**, against stub interfaces, so that
@@ -2110,7 +2161,7 @@ stays as files the user owns — **hapax is never the system of record for anyon
 | `exemplar` | Profile plus leaf reference | **A span reference only** |
 | `threshold` | Profile plus distractor-pool plus calibration-protocol identity | `t_low`, `t_high`, achieved rates, intervals, or the pair-incompatible verdict |
 | `eval_result` | All of the above, hashed | Discrimination and band figures with provenance |
-| `rewrite_attempt` | Invocation plus attempt index | The audit whitelist `rewrite.Attempt` declares: hashes, span reference, distances, bands, verdicts and a rejection code. **No prose** |
+| `rewrite_attempt` | Invocation, node and attempt index | The audit whitelist `rewrite.Attempt` declares: hashes, span reference, distances, bands, verdicts and a rejection code. **No prose** |
 
 That last row was missing. `rewrite.Store.RecordAttempt` has existed since the rewrite slice
 and the artifact table never named what it writes, which is exactly how an audit record ends
@@ -2404,7 +2455,7 @@ in this schema, which is the property the allowlist test asserts.
 | `exemplar_selection` | `id` hex | `profile_id` hex, `n` int, `certificate_id` hex, and ordered member `node_id`s |
 | `threshold` | `id` hex | `profile_id` hex, `reference_id` hex, `population_id` hex, `t_low` num, `t_high` num, achieved rates num, interval bounds num, `verdict` enum |
 | `eval_result` | `id` hex | `profile_id` hex, `reference_id` hex, `auc` num, `lower_bound` num, `cap` num, cluster and segment counts int, `discriminates` bool, `calibrated` bool, `shippable` bool, `reason` enum |
-| `rewrite_attempt` | `invocation_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `node_id`, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
+| `rewrite_attempt` | `invocation_id` hex + `node_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
 
 The `snapshot` identity is **verified, not trusted**. `corpus` computes it, but `store` has to
 be able to recompute it or the read-integrity rule is unenforceable for the one artifact
@@ -2494,7 +2545,18 @@ contradict and `Band` consults every one of them:
   distance that contradicts any of it
 
 `scored_tiers` is a sorted, duplicate-free list of `features.Tier`. It cannot borrow
-`node.containers`' grammar, which admits lower case only, and tiers are upper case.
+`node.containers`' grammar, which admits lower case and the pipe that separates its members,
+and tiers are upper case.
+
+**That grammar omitted its own separator for twelve slices (#69).** `joinContainers` joins
+with `|`, and the column's character class admitted only lower case and hyphen — while the
+three clauses after it existed precisely to constrain how `|` may appear. So every leaf with
+two or more containers was unstorable, which is every paragraph inside a list, a block quote,
+a table cell, a footnote or a definition list: `hapax index` failed on most real Markdown with
+a constraint error rather than a refusal. Nothing caught it because every corpus fixture in
+the repository is plain top-level paragraphs, whose only container is `document` — one value,
+no separator. A grammar that is written down is not thereby exercised, and the fixtures that
+exercise it have to contain the shapes the parser can actually produce.
 
 **Every read is validated.** Unknown enum values, non-finite floats and rows whose `(kind, id)`
 disagrees with where they were found are all `ErrCorrupt`, as is an artifact that names a
