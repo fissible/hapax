@@ -270,20 +270,8 @@ func (s *Store) PutProfile(ctx context.Context, p Profile, h HeadPolicy) error {
 		} else if !errors.Is(err, ErrNotFound) {
 			return err
 		} else {
-			exists, err := one(c, ctx, "SELECT count(*) FROM snapshot WHERE id=?", p.SnapshotID)
-			if err != nil {
+			if err = s.putProfileConn(ctx, c, p, false); err != nil {
 				return err
-			}
-			if !exists {
-				return invalidArtifact("profile", "snapshot id")
-			}
-			if _, err = c.ExecContext(ctx, "INSERT INTO profile (id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens,production_ready,not_ready_reason) VALUES (?,?,?,?,?,?,?,?,?,?)", p.ID, p.SnapshotID, p.Register, p.Unit, p.VarianceConvention, p.ManifestDigest, p.FeatureSetVersion, p.MinParagraphLexicalTokens, boolInt(p.ProductionReady), p.NotReadyReason); err != nil {
-				return err
-			}
-			for _, statistic := range p.Stats {
-				if _, err = c.ExecContext(ctx, "INSERT INTO profile_stat (profile_id,feature,n,mean,variance,defined,variance_defined,min_observations) VALUES (?,?,?,?,?,?,?,?)", p.ID, statistic.Feature, statistic.N, statistic.Mean, statistic.Variance, boolInt(statistic.Defined), boolInt(statistic.VarianceDefined), statistic.MinObservations); err != nil {
-					return err
-				}
 			}
 		}
 		if h {
@@ -405,24 +393,7 @@ func (s *Store) PutReference(ctx context.Context, r Reference) error {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		exists, err := one(c, ctx, "SELECT count(*) FROM profile WHERE id=?", r.ProfileID)
-		if err != nil {
-			return err
-		}
-		if !exists {
-			return invalidArtifact("reference", "profile id")
-		}
-		if _, err = c.ExecContext(ctx, "INSERT INTO reference (id,profile_id,split,min_segments,manifest_digest) VALUES (?,?,?,?,?)", r.ID, r.ProfileID, r.Split, r.MinSegments, r.ManifestDigest); err != nil {
-			return err
-		}
-		for feature, values := range r.Values {
-			for ordinal, value := range values {
-				if _, err = c.ExecContext(ctx, "INSERT INTO reference_value (reference_id,feature,ordinal,value) VALUES (?,?,?,?)", r.ID, feature, ordinal, value); err != nil {
-					return err
-				}
-			}
-		}
-		return nil
+		return s.putReferenceConn(ctx, c, r)
 	})
 }
 

@@ -115,18 +115,14 @@ func open(path, driverName string, d deps) (*Store, error) {
 			db.Close()
 			return nil, err
 		}
-		for version := installed; version < len(migrations); version++ {
-			if err := s.applyMigration(context.Background(), version, migrations[version]); err != nil {
-				db.Close()
-				return nil, err
-			}
+		if err := s.applyMigrations(context.Background(), installed); err != nil {
+			db.Close()
+			return nil, err
 		}
 	} else {
-		for version, ddl := range migrations {
-			if err := s.applyMigration(context.Background(), version, ddl); err != nil {
-				db.Close()
-				return nil, err
-			}
+		if err := s.applyMigrations(context.Background(), 0); err != nil {
+			db.Close()
+			return nil, err
 		}
 	}
 	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
@@ -178,21 +174,37 @@ func (s *Store) checkLedger(ctx context.Context) error {
 }
 
 func (s *Store) applyMigration(ctx context.Context, version int, ddl string) error {
+	return s.applyMigrationBatch(ctx, version, []string{ddl})
+}
+
+func (s *Store) applyMigrations(ctx context.Context, version int) error {
+	return s.applyMigrationBatch(ctx, version, migrations[version:])
+}
+
+func (s *Store) applyMigrationBatch(ctx context.Context, version int, ddls []string) error {
+	if len(ddls) == 0 {
+		return nil
+	}
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
 	}
 	defer conn.Close()
-	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
-		return err
-	}
-	defer conn.ExecContext(context.Background(), "PRAGMA foreign_keys=ON")
+	// The Open DSN keeps foreign keys enforced throughout these migrations. If a
+	// future migration needs a SQLite table rebuild, scope its temporary
+	// foreign-key toggle and foreign_key_check to that migration.
 	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
-	if _, err = tx.ExecContext(ctx, ddl); err == nil {
-		_, err = tx.ExecContext(ctx, "INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, ?)", version, identity.HashBytes([]byte(ddl)), s.deps.Now().UTC().Format(time.RFC3339))
+	for _, ddl := range ddls {
+		if _, err = tx.ExecContext(ctx, ddl); err != nil {
+			break
+		}
+		if _, err = tx.ExecContext(ctx, "INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, ?)", version, identity.HashBytes([]byte(ddl)), s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
+			break
+		}
+		version++
 	}
 	if err != nil {
 		_ = tx.Rollback()
@@ -235,29 +247,8 @@ func (s *Store) PutSnapshot(ctx context.Context, w SnapshotWrite) error {
 	if validationErr != nil {
 		return validationErr
 	}
-	if _, err = conn.ExecContext(ctx, "INSERT INTO snapshot (id,policy_digest,created_at) VALUES (?,?,?)", w.ID, w.PolicyDigest, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
+	if err = s.putSnapshotConn(ctx, conn, w); err != nil {
 		return err
-	}
-	for _, d := range w.Documents {
-		if _, err = conn.ExecContext(ctx, "INSERT INTO document (document_id,snapshot_id,path,content_hash,register,split,admission,language,unavailable_at) VALUES (?,?,?,?,?,?,?,?,NULL)", d.ID, w.ID, d.Path, d.ContentHash, d.Register, d.Split, d.Admission, d.Language); err != nil {
-			return err
-		}
-		for _, n := range d.Nodes {
-			if _, err = conn.ExecContext(ctx, "INSERT INTO node (node_id,document_id,ordinal,kind,role,containers,offset,length,included,exclusion) VALUES (?,?,?,?,?,?,?,?,?,?)", n.ID, d.ID, n.Ordinal, n.Kind, n.Role, joinContainers(n.Containers), n.Offset, n.Length, boolInt(n.Included), n.Exclusion); err != nil {
-				return err
-			}
-			if n.Vector != nil {
-				md := features.ManifestDigest()
-				if _, err = conn.ExecContext(ctx, "INSERT INTO feature_vector (node_id,manifest_digest,set_version,tokens,lexical_tokens) VALUES (?,?,?,?,?)", n.ID, md, n.Vector.SetVersion, n.Vector.Tokens, n.Vector.LexicalTokens); err != nil {
-					return err
-				}
-				for _, v := range n.Vector.Values {
-					if _, err = conn.ExecContext(ctx, "INSERT INTO feature_value (node_id,manifest_digest,feature,value,defined,sampling_variance,sampling_variance_defined) VALUES (?,?,?,?,?,?,?)", n.ID, md, v.ID, v.Value, boolInt(v.Defined), v.SamplingVariance, boolInt(v.SamplingVarianceDefined)); err != nil {
-						return err
-					}
-				}
-			}
-		}
 	}
 	_, err = conn.ExecContext(ctx, "COMMIT")
 	return err

@@ -58,7 +58,11 @@ func (s *Store) Index(ctx context.Context, w IndexWrite) (Indexed, error) {
 	}
 	result := Indexed{Snapshot: w.Snapshot}
 	if w.Mode != IndexSnapshotOnly {
-		if result.Pruned, err = s.pruneHeadsConn(ctx, conn); err != nil {
+		keepProfiles, err := profileHeadsConn(ctx, conn)
+		if err != nil {
+			return Indexed{}, err
+		}
+		if result.Pruned, err = pruneConn(ctx, conn, keepProfiles); err != nil {
 			return Indexed{}, err
 		}
 	}
@@ -114,6 +118,13 @@ func (s *Store) putSnapshotConn(ctx context.Context, c *sql.Conn, w SnapshotWrit
 	return nil
 }
 func (s *Store) putProfileConn(ctx context.Context, c *sql.Conn, p Profile, head bool) error {
+	exists, err := one(c, ctx, "SELECT count(*) FROM snapshot WHERE id=?", p.SnapshotID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return invalidArtifact("profile", "snapshot id")
+	}
 	if _, err := c.ExecContext(ctx, "INSERT INTO profile (id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens,production_ready,not_ready_reason) VALUES (?,?,?,?,?,?,?,?,?,?)", p.ID, p.SnapshotID, p.Register, p.Unit, p.VarianceConvention, p.ManifestDigest, p.FeatureSetVersion, p.MinParagraphLexicalTokens, boolInt(p.ProductionReady), p.NotReadyReason); err != nil {
 		return err
 	}
@@ -129,6 +140,13 @@ func (s *Store) putProfileConn(ctx context.Context, c *sql.Conn, p Profile, head
 	return nil
 }
 func (s *Store) putReferenceConn(ctx context.Context, c *sql.Conn, r Reference) error {
+	exists, err := one(c, ctx, "SELECT count(*) FROM profile WHERE id=?", r.ProfileID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return invalidArtifact("reference", "profile id")
+	}
 	if _, err := c.ExecContext(ctx, "INSERT INTO reference (id,profile_id,split,min_segments,manifest_digest) VALUES (?,?,?,?,?)", r.ID, r.ProfileID, r.Split, r.MinSegments, r.ManifestDigest); err != nil {
 		return err
 	}
@@ -141,13 +159,19 @@ func (s *Store) putReferenceConn(ctx context.Context, c *sql.Conn, r Reference) 
 	}
 	return nil
 }
-func (s *Store) pruneHeadsConn(ctx context.Context, c *sql.Conn) (Pruned, error) {
-	var p Pruned
-	if err := c.QueryRowContext(ctx, "SELECT count(*) FROM profile WHERE id NOT IN (SELECT profile_id FROM profile_head) AND id NOT IN (SELECT profile_id FROM eval_result) AND id NOT IN (SELECT profile_id FROM rewrite_attempt)").Scan(&p.Profiles); err != nil {
-		return p, err
+func profileHeadsConn(ctx context.Context, c *sql.Conn) ([]string, error) {
+	rows, err := c.QueryContext(ctx, "SELECT profile_id FROM profile_head")
+	if err != nil {
+		return nil, err
 	}
-	if _, err := c.ExecContext(ctx, "DELETE FROM profile WHERE id NOT IN (SELECT profile_id FROM profile_head) AND id NOT IN (SELECT profile_id FROM eval_result) AND id NOT IN (SELECT profile_id FROM rewrite_attempt)"); err != nil {
-		return p, err
+	defer rows.Close()
+	var heads []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		heads = append(heads, id)
 	}
-	return p, nil
+	return heads, rows.Err()
 }
