@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
@@ -43,17 +45,10 @@ func mixedCorpusOf(t *testing.T, n int) string {
 func writeCorpus(t *testing.T, documents, long, short int) string {
 	t.Helper()
 	root := t.TempDir()
-	for i := 0; i < documents; i++ {
-		body := ""
-		for p := 0; p < long; p++ {
-			body += fmt.Sprintf(longParagraph, i, p, i*100+p)
-		}
-		for p := 0; p < short; p++ {
-			body += fmt.Sprintf(shortParagraph, i*100+p, i*100+p)
-		}
-		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("doc%03d.md", i)), []byte(body), 0o644); err != nil {
-			t.Fatalf("write: %v", err)
-		}
+	// Shared with the template builder, so a corpus written for one test and the
+	// corpus the template indexed cannot drift apart.
+	if err := writeCorpusInto(root, documents, long, short); err != nil {
+		t.Fatalf("write: %v", err)
 	}
 	return root
 }
@@ -244,13 +239,56 @@ func evalRequest(root, distractors string) workflow.EvalRequest {
 	}
 }
 
+// evaluated runs with a CHEAP bootstrap. The declared spec is 2000 resamples,
+// and running it per test was most of what remained of this package's race time
+// after the corpus template.
+//
+// It would be wrong to call this "precision only". A coarser bootstrap is not
+// merely fuzzier: at twenty-four samples the discrimination bound reads the
+// second-smallest resample and band calibration reads the second-largest, and
+// the latter can be LESS conservative than the declared two thousand — so a band
+// could be emitted here that would not be in production. That is a decision, not
+// a rounding error.
+//
+// What makes it safe is the narrowness of what these tests assert: modes,
+// identities, pool membership, cluster counts, and the cap, which is arithmetic
+// rather than resampling. Tests comparing two runs to each other are unaffected
+// because both use the same spec. Anything whose OUTCOME could turn on a
+// resample belongs either at the declared spec here or in internal/eval, which
+// tests those decisions directly over crafted populations — at the boundary,
+// one short of it, and crowded — without needing a seven-hundred-document
+// corpus to reach them.
 func evaluated(t *testing.T, request workflow.EvalRequest) workflow.EvalResult {
+	t.Helper()
+	result, err := cheapRunner().Eval(ctx(), request)
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	return result
+}
+
+// evaluatedAtTheDeclaredSpec runs the real 2000-resample bootstrap, so the
+// declared configuration is exercised end to end at least once rather than only
+// asserted as a field value.
+func evaluatedAtTheDeclaredSpec(t *testing.T, request workflow.EvalRequest) workflow.EvalResult {
 	t.Helper()
 	result, err := workflow.Default().Eval(ctx(), request)
 	if err != nil {
 		t.Fatalf("Eval: %v", err)
 	}
 	return result
+}
+
+// cheapRunner differs from Default ONLY in the resample counts. Everything that
+// decides an outcome — the requirements, the reference minimum, the floor, the
+// targets — is the declared value, so a test cannot pass here and fail in
+// production because the fixture relaxed a gate.
+func cheapRunner() *workflow.Runner {
+	runner := workflow.Default()
+	runner.Discrimination.Resamples = 24
+	runner.BandFloor.Resamples = 24
+	runner.Bootstrap.Resamples = 24
+	return runner
 }
 
 func releaseHead(t *testing.T, path, profileID string) string {
@@ -309,4 +347,132 @@ func installReleaseHead(t *testing.T, path, releaseID string) {
 	if err := opened.PutEvalResult(ctx(), stored, store.AdvanceHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// One indexed corpus, copied
+// ---------------------------------------------------------------------------
+
+// Most eval tests index a sixty-document corpus as SETUP and then measure
+// something else. Under the race detector that setup was most of the package's
+// wall time: internal/workflow took 211s, over half the CI race suite, and it is
+// the same corpus every time.
+//
+// So it is built ONCE and copied. Copied, not shared: each test gets its own
+// directory and its own database file, so nothing one test writes can reach
+// another and test order still cannot matter. That is the whole reason this is
+// a copy rather than a shared handle — a shared store would trade minutes for
+// the kind of inter-test coupling that makes a suite stop being believed.
+//
+// It is used ONLY where indexing is setup. index's own tests, and the
+// concurrency tests, still index for real: a fixture that pre-indexed for the
+// tests of indexing would be testing the fixture.
+var indexedTemplate = sync.OnceValues(func() (string, error) { return buildTemplate("essays") })
+
+// Some tests need a store holding SEVERAL registers — the selection table asks
+// what happens when more than one head exists — and indexing the same corpus
+// twice per case was the single most expensive thing left in this package at
+// nearly thirty-two seconds under race. One template, two registers, copied.
+var twoRegisterTemplate = sync.OnceValues(func() (string, error) { return buildTemplate("essays", "letters") })
+
+func buildTemplate(registers ...string) (string, error) {
+	root, err := os.MkdirTemp("", "hapax-indexed-template")
+	if err != nil {
+		return "", err
+	}
+	if err := writeCorpusInto(root, 60, 10, 0); err != nil {
+		return "", err
+	}
+	for _, register := range registers {
+		if _, err := workflow.Default().Index(context.Background(), workflow.IndexRequest{
+			CorpusRoot: root, Register: register,
+		}); err != nil {
+			return "", err
+		}
+	}
+	return root, nil
+}
+
+// indexedCorpus is a fresh copy of that template: a corpus root whose .hapax
+// database is already populated, owned entirely by this test.
+func indexedCorpus(t *testing.T) string {
+	t.Helper()
+	return copyOfTemplate(t, indexedTemplate, "essays")
+}
+
+// twoRegisterCorpus is a copy of a store where both essays and letters have
+// heads.
+func twoRegisterCorpus(t *testing.T) string {
+	t.Helper()
+	return copyOfTemplate(t, twoRegisterTemplate, "essays", "letters")
+}
+
+func copyOfTemplate(t *testing.T, build func() (string, error), registers ...string) string {
+	t.Helper()
+	template, err := build()
+	if err != nil {
+		t.Fatalf("building the indexed template: %v", err)
+	}
+	destination := t.TempDir()
+	if err := copyTree(template, destination); err != nil {
+		t.Fatalf("copying the indexed template: %v", err)
+	}
+	// The copy is only worth having if it is a working store. A tree that
+	// copied the corpus and left the database behind — or copied a database
+	// mid-write — would send every test that uses it down the not-indexed path
+	// while still looking like setup.
+	opened := openStore(t, defaultStorePath(destination))
+	heads, err := opened.ProfileHeads(ctx())
+	if err != nil {
+		t.Fatalf("the copied store does not open: %v", err)
+	}
+	for _, register := range registers {
+		if heads[register] == "" {
+			t.Fatalf("the copied store has no head for %q; the copy is not the template", register)
+		}
+	}
+	if len(heads) != len(registers) {
+		t.Fatalf("the copied store holds %d heads, and the template indexed %d", len(heads), len(registers))
+	}
+	return destination
+}
+
+func copyTree(from, to string) error {
+	return filepath.WalkDir(from, func(path string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(from, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(to, relative)
+		if entry.IsDir() {
+			if relative == "." {
+				return nil
+			}
+			return os.MkdirAll(target, 0o755)
+		}
+		body, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(target, body, 0o644)
+	})
+}
+
+func writeCorpusInto(root string, documents, long, short int) error {
+	for i := 0; i < documents; i++ {
+		body := ""
+		for p := 0; p < long; p++ {
+			body += fmt.Sprintf(longParagraph, i, p, i*100+p)
+		}
+		for p := 0; p < short; p++ {
+			body += fmt.Sprintf(shortParagraph, i*100+p, i*100+p)
+		}
+		if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("doc%03d.md", i)), []byte(body), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
 }

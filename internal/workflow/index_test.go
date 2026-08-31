@@ -8,6 +8,7 @@ import (
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
+	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/workflow"
 )
@@ -387,4 +388,34 @@ func contains[T comparable](values []T, wanted T) bool {
 		}
 	}
 	return false
+}
+
+// The declared bootstrap is what a real invocation uses. Most tests here run a
+// cheap one, so without this the suite would be measuring its own convenience:
+// a Default that quietly resampled twenty-four times would satisfy every other
+// assertion in the package.
+func TestTheDefaultRunnerUsesTheDeclaredBootstrap(t *testing.T) {
+	runner := workflow.Default()
+	if runner.Discrimination != eval.DefaultDiscrimination() {
+		t.Errorf("discrimination spec = %+v, want %+v", runner.Discrimination, eval.DefaultDiscrimination())
+	}
+	if runner.BandFloor != eval.DefaultBandFloor() {
+		t.Errorf("band floor = %+v, want %+v", runner.BandFloor, eval.DefaultBandFloor())
+	}
+	if runner.Bootstrap != eval.DefaultBootstrap() {
+		t.Errorf("bootstrap = %+v, want %+v", runner.Bootstrap, eval.DefaultBootstrap())
+	}
+	// And the cheap runner the harness uses differs in the resample counts and
+	// in NOTHING else, or a test passing here would say nothing about a real run.
+	cheap := cheapRunner()
+	if cheap.Requirements != runner.Requirements || cheap.MinSegments != runner.MinSegments {
+		t.Error("the cheap runner relaxed something other than the resample count")
+	}
+	cheap.Discrimination.Resamples = runner.Discrimination.Resamples
+	cheap.BandFloor.Resamples = runner.BandFloor.Resamples
+	cheap.Bootstrap.Resamples = runner.Bootstrap.Resamples
+	if cheap.Discrimination != runner.Discrimination || cheap.BandFloor != runner.BandFloor ||
+		cheap.Bootstrap != runner.Bootstrap {
+		t.Error("the cheap runner changed a spec field other than Resamples")
+	}
 }

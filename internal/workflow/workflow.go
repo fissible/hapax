@@ -290,7 +290,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	discrimination, err := eval.Discriminate(test, eval.DefaultDiscrimination())
+	discrimination, err := eval.Discriminate(test, r.Discrimination)
 	if err != nil {
 		return EvalResult{}, err
 	}
@@ -300,19 +300,27 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 		if !errors.Is(err, eval.ErrNoQualifyingThreshold) {
 			return EvalResult{}, err
 		}
-		calibration = uncalibratedCalibration(discrimination, pool.ID)
+		calibration = uncalibratedCalibration(discrimination, pool.ID, r.BandFloor, r.Bootstrap)
 		if err = s.PutThreshold(ctx, store.Threshold{ID: calibration.ThresholdsID, ProfileID: calibration.ProfileID, ReferenceID: calibration.ReferenceID, PopulationID: calibration.PopulationID, Verdict: eval.VerdictPairIncompatible}); err != nil {
 			return EvalResult{}, err
 		}
 	} else {
-		intervals, err := threshold.Bootstrap(calibrationDistances, eval.DefaultBootstrap())
+		intervals, err := threshold.Bootstrap(calibrationDistances, r.Bootstrap)
 		if err != nil {
 			return EvalResult{}, err
 		}
-		calibration, err = threshold.CalibrateBands(test, eval.DefaultBandFloor())
+		calibration, err = threshold.CalibrateBands(test, r.BandFloor)
 		if err != nil {
 			return EvalResult{}, err
 		}
+		// The interval is part of the release evidence: its declared bootstrap
+		// controls whether the calibrated thresholds are shippable. Bind its
+		// identity into the calibration artifact so two runs that differ only in
+		// that procedure cannot name the same release.
+		calibration.ID = identity.HashInputs(map[string]string{
+			"band-calibration-id": calibration.ID,
+			"intervals-id":        intervals.ID,
+		})
 		if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: intervals.ID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: intervals.Low, IntervalHigh: intervals.High, Verdict: func() eval.ThresholdVerdict {
 			if intervals.Shippable {
 				return eval.VerdictSeparated
@@ -347,8 +355,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 // bands: a made-up threshold would turn insufficient calibration evidence into
 // a label. The release remains auditable and, because Calibrated is false,
 // cannot advance the head.
-func uncalibratedCalibration(discrimination eval.Discrimination, poolID string) eval.Calibration {
-	floor := eval.DefaultBandFloor()
+func uncalibratedCalibration(discrimination eval.Discrimination, poolID string, floor eval.BandFloor, bootstrap eval.BootstrapSpec) eval.Calibration {
 	thresholdsID := identity.HashInputs(map[string]string{"kind": "no-qualifying-threshold", "pool": poolID, "population": discrimination.PopulationID})
 	calibration := eval.Calibration{
 		ThresholdsID: thresholdsID, PopulationID: discrimination.PopulationID,
@@ -363,7 +370,13 @@ func uncalibratedCalibration(discrimination eval.Discrimination, poolID string) 
 		},
 		Reason: "no-claiming-band-emitted",
 	}
-	calibration.ID = identity.HashInputs(map[string]string{"kind": "uncalibrated-calibration", "pool": poolID, "population": calibration.PopulationID, "thresholds": calibration.ThresholdsID})
+	calibration.ID = identity.HashInputs(map[string]string{
+		"bootstrap":  fmt.Sprintf("%g,%d,%d,%g", bootstrap.Confidence, bootstrap.Resamples, bootstrap.Seed, bootstrap.MinQualified),
+		"kind":       "uncalibrated-calibration",
+		"pool":       poolID,
+		"population": calibration.PopulationID,
+		"thresholds": calibration.ThresholdsID,
+	})
 	return calibration
 }
 
@@ -436,13 +449,22 @@ func calibrationReport(x eval.Calibration) CalibrationReport {
 }
 
 type Runner struct {
-	Requirements profile.Requirements
-	MinSegments  int
+	Requirements   profile.Requirements
+	MinSegments    int
+	Discrimination eval.DiscriminationSpec
+	BandFloor      eval.BandFloor
+	Bootstrap      eval.BootstrapSpec
 }
 
 func Default() *Runner { return New(profile.DefaultRequirements(), deviation.DefaultMinSegments()) }
 func New(requirements profile.Requirements, minSegments int) *Runner {
-	return &Runner{Requirements: requirements, MinSegments: minSegments}
+	return &Runner{
+		Requirements:   requirements,
+		MinSegments:    minSegments,
+		Discrimination: eval.DefaultDiscrimination(),
+		BandFloor:      eval.DefaultBandFloor(),
+		Bootstrap:      eval.DefaultBootstrap(),
+	}
 }
 
 func (r *Runner) Index(ctx context.Context, request IndexRequest) (IndexResult, error) {
