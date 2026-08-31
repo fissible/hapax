@@ -60,6 +60,32 @@ func TestScorePassesItsFlagsThrough(t *testing.T) {
 	}
 }
 
+// An ambiguous or unknown register is exit 2 with the registers listed, the same
+// correctable invocation profile makes — not a refusal, and not a guess.
+func TestScoreSelectionProblemsAreInvalidInvocations(t *testing.T) {
+	for _, selection := range []workflow.Selection{
+		workflow.SelectionAmbiguous, workflow.SelectionUnknownRegister,
+	} {
+		t.Run(string(selection), func(t *testing.T) {
+			result := refusedScore("")
+			result.Selection = selection
+			result.Available = []string{"essays", "letters"}
+			got := runWith(t, &fakeService{scoreResult: result}, "--json", "score", "draft.md")
+			if got.code != 2 {
+				t.Errorf("code = %d, want 2", got.code)
+			}
+			if got.stdout != "" {
+				t.Errorf("an invalid invocation emitted a result document: %q", got.stdout)
+			}
+			for _, register := range result.Available {
+				if !strings.Contains(got.stderr, register) {
+					t.Errorf("the diagnostic does not name %q: %q", register, got.stderr)
+				}
+			}
+		})
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Exit codes
 // ---------------------------------------------------------------------------
@@ -174,8 +200,14 @@ func TestTheScorePayloadCarriesTheWholeAnswer(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			got := runWith(t, &fakeService{scoreResult: c.result}, "--json", "score", "draft.md")
 			var payload struct {
-				Path     string `json:"path"`
-				Segments []struct {
+				Path                 string  `json:"path"`
+				Store                string  `json:"store"`
+				ProfileID            *string `json:"profile_id"`
+				ReferenceID          *string `json:"reference_id"`
+				ReleaseID            *string `json:"release_id"`
+				Calibrated           bool    `json:"calibrated"`
+				ParagraphsBelowFloor int     `json:"paragraphs_below_floor"`
+				Segments             []struct {
 					Index         int `json:"index"`
 					LexicalTokens int `json:"lexical_tokens"`
 					Distance      struct {

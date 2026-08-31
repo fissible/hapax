@@ -38,6 +38,8 @@ const (
 	ReasonStaleExemplars           Reason = "stale-exemplars"
 	ReasonLocalOnlyForbidsProvider Reason = "local-only-forbids-provider"
 	ReasonNoProfile                Reason = "no-profile"
+	ReasonNoReference              Reason = "no-reference"
+	ReasonAmbiguousReference       Reason = "ambiguous-reference"
 )
 
 var statuses = []Status{StatusOK, StatusAdverse, StatusRefused}
@@ -47,8 +49,9 @@ var reasons = []Reason{
 	ReasonStaleExemplars,
 	ReasonLocalOnlyForbidsProvider,
 	ReasonNoProfile,
+	ReasonNoReference, ReasonAmbiguousReference,
 }
-var commands = []string{"eval", "index", "profile", "tells"}
+var commands = []string{"eval", "index", "profile", "score", "tells"}
 
 // Reasons returns the closed refusal vocabulary.
 func Reasons() []Reason { return append([]Reason(nil), reasons...) }
@@ -167,9 +170,47 @@ func (d Document) valid() error {
 			return errors.New("incoherent document result")
 		}
 		return validEvalResult(d.Status, d.Reason, result)
+	case ScoreResult:
+		if d.Command != "score" {
+			return errors.New("incoherent document result")
+		}
+		return validScoreResult(d.Status, d.Reason, result)
 	default:
 		return errors.New("incoherent document result")
 	}
+}
+
+func validScoreResult(status Status, reason Reason, r ScoreResult) error {
+	if r.Calibrated != (r.ReleaseID != nil) {
+		return errors.New("incoherent score calibration")
+	}
+	if status == StatusRefused && reason != ReasonUncalibrated && len(r.Segments) != 0 {
+		return errors.New("incoherent score refusal")
+	}
+	if reason == ReasonInsufficientEvidence && len(r.Segments) != 0 {
+		return errors.New("incoherent score refusal")
+	}
+	if reason == ReasonUncalibrated && (r.Calibrated || len(r.Segments) == 0) {
+		return errors.New("incoherent score refusal")
+	}
+	adverse := false
+	for _, s := range r.Segments {
+		if s.Band.Defined && (!r.Calibrated || !contains(workflow.Bands(), s.Band.Band)) {
+			return errors.New("incoherent score band")
+		}
+		if s.Band.Band == "drifting" || s.Band.Band == "not-you" {
+			adverse = true
+		}
+		for _, d := range s.Features {
+			if d.Direction != "" && !contains([]string{"above", "below", "typical"}, d.Direction) {
+				return errors.New("incoherent score delta")
+			}
+		}
+	}
+	if (status == StatusAdverse) != adverse {
+		return errors.New("incoherent score adversity")
+	}
+	return nil
 }
 
 func validIndexResult(status Status, result IndexResult) error {
@@ -347,6 +388,9 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 	if parsed.command == "eval" {
 		return runEval(ctx, parsed, deps)
 	}
+	if parsed.command == "score" {
+		return runScore(ctx, parsed, deps)
+	}
 	raw, err := deps.ReadFile(parsed.path)
 	if err != nil {
 		diagnostic(deps.Stderr, fmt.Sprintf("cannot read draft %q: %q", parsed.path, err.Error()))
@@ -458,6 +502,13 @@ func parse(args []string) (invocation, error) {
 		}
 		return result, nil
 	}
+	if result.command == "score" {
+		if len(positional) != 2 {
+			return invocation{}, errors.New("score requires exactly one draft")
+		}
+		result.path = positional[1]
+		return result, nil
+	}
 	if len(positional) != 2 {
 		return invocation{}, errors.New("tells requires exactly one file operand")
 	}
@@ -505,6 +556,42 @@ type EvalResult struct {
 	Reason             string              `json:"reason"`
 	Discrimination     *EvalDiscrimination `json:"discrimination"`
 	Calibration        *EvalCalibration    `json:"calibration"`
+}
+type MeasuredDistance struct {
+	Value   float64 `json:"value"`
+	Defined bool    `json:"defined"`
+	Reason  string  `json:"reason"`
+	Partial bool    `json:"partial"`
+}
+type BandOutcome struct {
+	Band     string  `json:"band"`
+	Defined  bool    `json:"defined"`
+	Reason   string  `json:"reason"`
+	Distance float64 `json:"distance"`
+}
+type FeatureDelta struct {
+	Feature   string  `json:"feature"`
+	Deviation float64 `json:"deviation"`
+	Defined   bool    `json:"defined"`
+	Reason    string  `json:"reason"`
+	Direction string  `json:"direction"`
+}
+type ScoredSegment struct {
+	Index         int              `json:"index"`
+	LexicalTokens int              `json:"lexical_tokens"`
+	Distance      MeasuredDistance `json:"distance"`
+	Band          BandOutcome      `json:"band"`
+	Features      []FeatureDelta   `json:"features"`
+}
+type ScoreResult struct {
+	Path                 string          `json:"path"`
+	Store                string          `json:"store"`
+	ProfileID            *string         `json:"profile_id"`
+	ReferenceID          *string         `json:"reference_id"`
+	ReleaseID            *string         `json:"release_id"`
+	Calibrated           bool            `json:"calibrated"`
+	ParagraphsBelowFloor int             `json:"paragraphs_below_floor"`
+	Segments             []ScoredSegment `json:"segments"`
 }
 
 type EvalDiscrimination struct {
@@ -609,6 +696,17 @@ func evalResultFrom(r workflow.EvalResult) EvalResult {
 	}
 	return out
 }
+func scoreResultFrom(r workflow.ScoreResult) ScoreResult {
+	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
+	for _, s := range r.Segments {
+		x := ScoredSegment{Index: s.Index, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
+		for _, d := range s.Features {
+			x.Features = append(x.Features, FeatureDelta{Feature: d.Feature, Deviation: d.Deviation, Defined: d.Defined, Reason: d.Reason, Direction: d.Direction})
+		}
+		out.Segments = append(out.Segments, x)
+	}
+	return out
+}
 func runIndex(ctx context.Context, parsed invocation, deps Deps) int {
 	if deps.Service == nil {
 		diagnostic(deps.Stderr, "index service unavailable")
@@ -687,6 +785,34 @@ func runEval(ctx context.Context, parsed invocation, deps Deps) int {
 	}
 	return code
 }
+func runScore(ctx context.Context, parsed invocation, deps Deps) int {
+	if deps.Service == nil || deps.Getwd == nil {
+		diagnostic(deps.Stderr, "score service unavailable")
+		return 3
+	}
+	cwd, err := deps.Getwd()
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	r, err := deps.Service.Score(ctx, workflow.ScoreRequest{StartDir: cwd, StorePath: parsed.store, Register: parsed.register, Path: parsed.path})
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	status, reason, code := StatusOK, Reason(""), 0
+	if r.Refusal != "" {
+		status, code = StatusRefused, 4
+		reason = Reason(r.Refusal)
+	} else if r.Adverse {
+		status, code = StatusAdverse, 1
+	}
+	if err = (Document{Schema: Schema, Command: "score", Status: status, Reason: reason, Profile: ptr(parsed.register), Result: scoreResultFrom(r)}).Render(deps.Stdout, parsed.json); err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	return code
+}
 func humanResult(result any) string {
 	switch x := result.(type) {
 	case TellsResult:
@@ -708,6 +834,14 @@ func humanResult(result any) string {
 			result += fmt.Sprintf(" reason=%s", x.Reason)
 		}
 		return result
+	case ScoreResult:
+		bands := []string{}
+		for _, s := range x.Segments {
+			if s.Band.Band != "" {
+				bands = append(bands, s.Band.Band)
+			}
+		}
+		return fmt.Sprintf("path=%s bands=%s below-floor=%d", x.Path, strings.Join(bands, ","), x.ParagraphsBelowFloor)
 	default:
 		return ""
 	}

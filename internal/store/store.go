@@ -27,14 +27,16 @@ const defaultIndexLockWait = time.Second
 func DefaultIndexLockWait() time.Duration { return defaultIndexLockWait }
 
 var (
-	ErrNotFound         = errors.New("store: not found")
-	ErrConflict         = errors.New("store: conflict")
-	ErrCorrupt          = errors.New("store: corrupt")
-	ErrInvalid          = errors.New("store: invalid")
-	ErrSchemaAhead      = errors.New("store: schema ahead")
-	ErrSchemaChecksum   = errors.New("store: schema checksum")
-	ErrSchemaIncomplete = errors.New("store: schema incomplete")
-	ErrSchemaForeign    = errors.New("store: schema foreign")
+	ErrNotFound           = errors.New("store: not found")
+	ErrConflict           = errors.New("store: conflict")
+	ErrCorrupt            = errors.New("store: corrupt")
+	ErrNoReference        = errors.New("store: no reference")
+	ErrAmbiguousReference = errors.New("store: ambiguous reference")
+	ErrInvalid            = errors.New("store: invalid")
+	ErrSchemaAhead        = errors.New("store: schema ahead")
+	ErrSchemaChecksum     = errors.New("store: schema checksum")
+	ErrSchemaIncomplete   = errors.New("store: schema incomplete")
+	ErrSchemaForeign      = errors.New("store: schema foreign")
 )
 
 var errSnapshotIdentity = fmt.Errorf("%w: snapshot identity", ErrInvalid)

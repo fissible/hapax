@@ -84,11 +84,11 @@ func TestTheBinaryIndexesProfilesAndEvaluatesForReal(t *testing.T) {
 	if scoreResult["calibrated"] != false {
 		t.Errorf("calibrated = %v with no release", scoreResult["calibrated"])
 	}
-	segments, ok := scoreResult["segments"].([]any)
-	if !ok || len(segments) == 0 {
+	measuredSegments, ok := scoreResult["segments"].([]any)
+	if !ok || len(measuredSegments) == 0 {
 		t.Fatalf("score refused and measured nothing: %v", scoreResult["segments"])
 	}
-	for i, raw := range segments {
+	for i, raw := range measuredSegments {
 		segment, ok := raw.(map[string]any)
 		if !ok {
 			t.Fatalf("segment %d is not an object", i)

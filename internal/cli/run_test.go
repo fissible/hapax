@@ -312,7 +312,10 @@ func TestADiagnosticIsOneEscapedLineWhateverTheFilenameContains(t *testing.T) {
 // disagree about what is implemented — the list itself is pinned above.
 func TestTheUnknownCommandDiagnosticPromisesNothing(t *testing.T) {
 	h := newHarness(t, nil)
-	h.run("score", "draft.md")
+	// A name no slice will ever take. It used to be "score", which stopped
+	// being unknown the moment A2c implemented it — and the test then measured
+	// the score command's own diagnostic instead of the unknown-command one.
+	h.run("publish", "draft.md")
 	diagnostic := h.Stderr.String()
 	for _, implemented := range cli.Commands() {
 		if !strings.Contains(diagnostic, implemented) {

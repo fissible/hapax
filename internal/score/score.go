@@ -67,6 +67,28 @@ func Score(source []byte, fitted profile.Fitted, ref *deviation.Reference, relea
 	if err := validate(fitted, ref, release); err != nil {
 		return Report{}, err
 	}
+	report, err := Measure(source, fitted, ref)
+	if err != nil {
+		return Report{}, err
+	}
+	report.ReleaseID, report.Calibrated = release.ID, release.Shippable
+	for index := range report.Segments {
+		band, err := release.Band(report.Segments[index].Distance)
+		if err != nil {
+			return Report{}, fmt.Errorf("score paragraph %d: %w", index, err)
+		}
+		report.Segments[index].Band = band
+	}
+	return report, nil
+}
+
+// Measure measures every paragraph admitted under the profile's own floor.
+// It is deliberately total: without a release it reports the distance and the
+// actionable deltas, while marking every absent band uncalibrated.
+func Measure(source []byte, fitted profile.Fitted, ref *deviation.Reference) (Report, error) {
+	if err := validateMeasure(fitted, ref); err != nil {
+		return Report{}, err
+	}
 
 	doc, err := text.Admit(source)
 	if err != nil {
@@ -78,9 +100,9 @@ func Score(source []byte, fitted profile.Fitted, ref *deviation.Reference, relea
 	}
 
 	report := Report{
-		ProfileID: fitted.ID, ReferenceID: ref.ID, ReleaseID: release.ID,
+		ProfileID: fitted.ID, ReferenceID: ref.ID,
 		FeatureManifestDigest: fitted.FeatureManifestDigest, Algorithm: Algorithm,
-		Split: corpus.Draft, Calibrated: release.Shippable,
+		Split:                corpus.Draft,
 		ParagraphsBelowFloor: paragraphs.BelowFloor,
 		Segments:             make([]Segment, 0, len(paragraphs.Vectors)),
 	}
@@ -97,12 +119,9 @@ func Score(source []byte, fitted profile.Fitted, ref *deviation.Reference, relea
 		if err != nil {
 			return Report{}, fmt.Errorf("score paragraph %d: %w", index, err)
 		}
-		band, err := release.Band(distance)
-		if err != nil {
-			return Report{}, fmt.Errorf("score paragraph %d: %w", index, err)
-		}
 		report.Segments = append(report.Segments, Segment{
-			Index: index, LexicalTokens: vector.LexicalTokens, Distance: distance, Band: band,
+			Index: index, LexicalTokens: vector.LexicalTokens, Distance: distance,
+			Band:     eval.BandOutcome{Reason: eval.ReasonUncalibrated},
 			Features: featureDeltas(deviations),
 		})
 	}
@@ -110,6 +129,19 @@ func Score(source []byte, fitted profile.Fitted, ref *deviation.Reference, relea
 }
 
 func validate(fitted profile.Fitted, ref *deviation.Reference, release eval.Release) error {
+	if err := validateMeasure(fitted, ref); err != nil {
+		return err
+	}
+	if release.Discrimination.ProfileID != fitted.ID || release.Calibration.ProfileID != fitted.ID {
+		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrProfileMismatch, release.Discrimination.ProfileID, release.Calibration.ProfileID, fitted.ID)
+	}
+	if release.Discrimination.ReferenceID != ref.ID || release.Calibration.ReferenceID != ref.ID {
+		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrReferenceMismatch, release.Discrimination.ReferenceID, release.Calibration.ReferenceID, ref.ID)
+	}
+	return nil
+}
+
+func validateMeasure(fitted profile.Fitted, ref *deviation.Reference) error {
 	if ref == nil {
 		return fmt.Errorf("%w: reference", ErrMissingInput)
 	}
@@ -123,12 +155,6 @@ func validate(fitted profile.Fitted, ref *deviation.Reference, release eval.Rele
 	// digest, so matching IDs make a separate manifest-digest comparison redundant.
 	if ref.ProfileID != fitted.ID {
 		return fmt.Errorf("%w: got %q, want %q", ErrProfileMismatch, ref.ProfileID, fitted.ID)
-	}
-	if release.Discrimination.ProfileID != fitted.ID || release.Calibration.ProfileID != fitted.ID {
-		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrProfileMismatch, release.Discrimination.ProfileID, release.Calibration.ProfileID, fitted.ID)
-	}
-	if release.Discrimination.ReferenceID != ref.ID || release.Calibration.ReferenceID != ref.ID {
-		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrReferenceMismatch, release.Discrimination.ReferenceID, release.Calibration.ReferenceID, ref.ID)
 	}
 	return nil
 }

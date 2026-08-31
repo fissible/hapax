@@ -3,7 +3,6 @@ package store_test
 import (
 	"math"
 	"reflect"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -416,5 +415,3 @@ func seedProfileAndTwoReferences(t *testing.T, s *store.Store) seededIDs {
 	mustPutReference(t, s, second)
 	return ids
 }
-
-

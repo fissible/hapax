@@ -200,6 +200,65 @@ func TestAMissingDraftIsAFailure(t *testing.T) {
 	}
 }
 
+// score with no --profile resolves the SOLE head, exactly as profile does.
+// Found by running the binary: every test here passed a register explicitly, so
+// nothing exercised resolution, and `hapax score draft.md` came back no-profile
+// against a store that had one — it was looking up the empty register.
+func TestScoreWithNoRegisterSelectsTheSoleHead(t *testing.T) {
+	root, _ := calibratedStore(t)
+	draft := writeDraft(t, root, authorLikeDraft)
+
+	request := scoreRequest(root, draft)
+	request.Register = ""
+	result := scored(t, request)
+
+	if result.Refusal != "" {
+		t.Fatalf("refused with %q against a store holding one profile", result.Refusal)
+	}
+	if result.Selection != workflow.SelectedSoleHead {
+		t.Errorf("selection = %q, want %q", result.Selection, workflow.SelectedSoleHead)
+	}
+	if !result.Calibrated {
+		t.Error("resolved the head and did not score against its release")
+	}
+}
+
+// And with several heads and none named it is the same correctable invocation
+// profile makes, not a refusal and not a guess.
+func TestScoreWithSeveralHeadsAndNoneNamedIsAmbiguous(t *testing.T) {
+	root := twoRegisterCorpus(t)
+	draft := writeDraft(t, root, authorLikeDraft)
+
+	request := scoreRequest(root, draft)
+	request.Register = ""
+	result := scored(t, request)
+
+	if result.Selection != workflow.SelectionAmbiguous {
+		t.Errorf("selection = %q, want %q", result.Selection, workflow.SelectionAmbiguous)
+	}
+	if len(result.Available) != 2 {
+		t.Errorf("available = %v, want the two registers", result.Available)
+	}
+	if len(result.Segments) != 0 {
+		t.Error("measured against a profile it had not chosen")
+	}
+}
+
+// A register that does not exist is the same correctable invocation too.
+func TestScoreWithAnUnknownRegisterListsWhatThereIs(t *testing.T) {
+	root, _ := calibratedStore(t)
+	request := scoreRequest(root, writeDraft(t, root, authorLikeDraft))
+	request.Register = "reviews"
+	result := scored(t, request)
+
+	if result.Selection != workflow.SelectionUnknownRegister {
+		t.Errorf("selection = %q, want %q", result.Selection, workflow.SelectionUnknownRegister)
+	}
+	if len(result.Available) == 0 {
+		t.Error("asked for a register that does not exist and offered none that do")
+	}
+}
+
 // score takes a draft operand but no corpus, so like profile and eval it finds
 // the store rather than being told where it is.
 func TestScoreDiscoversTheStore(t *testing.T) {

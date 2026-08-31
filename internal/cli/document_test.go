@@ -38,8 +38,10 @@ func TestTheRefusalVocabularyIsTheDeclaredSet(t *testing.T) {
 	}
 	sort.Strings(got)
 	want := []string{
-		"insufficient-evidence", "local-only-forbids-provider",
-		"no-profile", "stale-exemplars", "uncalibrated",
+		// A2c added the two a raw score can hit: nothing to transform against,
+		// and several references with no release to designate one — #62.
+		"ambiguous-reference", "insufficient-evidence", "local-only-forbids-provider",
+		"no-profile", "no-reference", "stale-exemplars", "uncalibrated",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("reasons =\n%v\nwant\n%v", got, want)
