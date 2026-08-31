@@ -441,6 +441,56 @@ exist and none was named — a correctable invocation, not a refusal. **No store
 with no head at all, is the `no-profile` refusal, exit 4**, which is what that reason was added
 for.
 
+### `eval` and `score`: the calibration gate at the command surface
+
+**`score` refuses the band, not the measurement.** DESIGN's exit table and ADR 0005 read as
+opposed — the table says an uncalibrated profile makes `score` exit 4, the ADR says `score`
+still emits raw distance and per-feature deltas. Both hold, because a refusal carries a
+document: `status: refused`, `reason: uncalibrated`, exit 4, and a payload with the distance
+and the deltas and no band. Exit 4 means the calibrated classification was refused, not that
+there is no answer. Omitting `--distractors` is the same shape — a declared outcome rather
+than a usage error, so `eval` completes and reports `uncalibrated` at exit 1.
+
+**`profile.Fitted` is what scoring takes.** `store` cannot return a whole `profile.Profile`:
+it persists six of its fields and nothing would fill `Documents`, `ParagraphFloorDerived` or
+the rest, so a value that looked complete would carry zeroes where facts belong — the shape
+of trap #50 and #53 both were. `profile` declares the projection scoring actually needs (the
+identity, the paragraph unit, the manifest and set version, the lexical floor and the
+per-feature statistics), `Profile.Fitted()` produces it, and **`deviation.Standardize` takes
+it too**. Narrowing `score` alone would leave `Standardize` as the hole the broad artifact
+keeps coming through.
+
+**`eval` reads the persisted graph, not the corpus.** The held-out author segments are
+already in the graph `index` wrote, so evaluating re-walked files would measure whatever is
+on disk now rather than what the profile was fitted against. `eval` needs the corpus root for
+nothing; it needs `--distractors` for the other population.
+
+**Reconstructing a segment is not reading an ordinal.** `eval.Segment.Index` is the position
+among paragraphs *that cleared the floor*, and the persisted node ordinal counts every leaf
+including those below it. Deriving one from the other is silently wrong. The index is
+assigned consecutively from zero over the vector-bearing paragraph leaves of a document in
+stable ordinal order, with **vector presence as the membership evidence** rather than the
+floor recomputed — guarded on leaf kind, document ownership, manifest match, and one vector
+per leaf.
+
+**The distractor pool has no path representation at all.** Not a path, not a commitment to
+one. Its identity is over the policy digest and its members' sorted admitted-content hashes,
+and the manifest persists the pool ID, the member count and those hashes. The author's
+corpus may hold root-relative paths because Hapax is its system of record; a pool of other
+people's writing is not the same category, and a filename can carry a name, a correspondent
+or a publication. This drops the only leg that made the three requirements contradictory —
+identity over raw paths — and keeps location independence, change detection, and
+revalidation against the files themselves. What it gives up is asking the database which
+member a segment came from, which a population does not need. Duplicate admitted content is
+refused, as it already is for the author's corpus, because otherwise the content hash cannot
+serve as the per-document clustering key the bootstrap needs.
+
+**A failed evaluation does not withdraw a good release.** A shippable release advances
+`release_head` in the same transaction that writes it, and `score` resolves through that
+head. An adverse one is still persisted — it is evidence — but it leaves the head where it
+is. Otherwise a rerun against a worse distractor pool silently retracts a release that was
+fine, which is an activation policy nobody chose.
+
 ### Exit codes, and the split that produced them
 
 Row 12 originally said `cli` should be built **early**, against stub interfaces, so that
