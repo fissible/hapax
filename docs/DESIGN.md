@@ -2084,6 +2084,16 @@ merged: a version newer than the binary knows, a checksum that differs from the 
 migration of that version, and a schema with no ledger at all — the last being a
 pre-ledger or externally-created database, which is refused rather than adopted.
 
+**The document row holds a language VERDICT, not a tag.** The artifact table above always
+said verdict; slice 1 implemented `validLanguage` as a BCP-47-ish tag accepting `en`, which
+`corpus` cannot supply because it performs no language detection — its `Language` is a
+`CheckStatus`. Nothing caught it until `index` tried to write a real corpus. Issue #53.
+
+**And `ok` from `index` cannot mean a clean corpus.** `corpus.Walk` leaves contamination,
+language, structure, git provenance and near-duplicate detection at `not-performed`, so the
+strongest honest claim is "indexed, qualification not performed". The result document says
+which; the exit code does not pretend to.
+
 **Rehydration is given a root.** Snapshot identity is deliberately location-independent, so
 the reference cannot name a directory; the caller passes the corpus root it wants read. The
 outcome vocabulary maps to causes explicitly: a path that does not resolve is `missing`; an OS

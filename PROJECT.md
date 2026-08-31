@@ -32,7 +32,7 @@ model, then review.
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
-| 13 | `cli` | **partial** | A1 shipped (#51). A2 — `index`, `profile`, `eval`, `score` — is next and unblocked |
+| 13 | `cli` | **partial** | A1 shipped (#51). A2 blocked on #53; a 14th component, `ingest`, is proposed there |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -44,6 +44,7 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 |---|---|---|
 | [#1](https://github.com/fissible/hapax/issues/1) | Vendored public fixtures and end-to-end CI corpus | `score` and `eval` are built; actionable once `cli` can drive them |
 | [#3](https://github.com/fissible/hapax/issues/3) | Incremental corpus indexing and derived-artifact cache | `store` is complete; needs `cli` to drive reindexing |
+| [#53](https://github.com/fissible/hapax/issues/53) | Make `hapax index` possible — four gaps between corpus, profile and store | nothing — blocks all remaining `cli` work |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
