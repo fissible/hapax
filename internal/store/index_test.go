@@ -448,6 +448,67 @@ func TestMigrationTwoBackfillsTheReadinessProfilesAlwaysHad(t *testing.T) {
 	}
 }
 
+// The prune inside an index has to BE Prune, not a smaller sweep that happens
+// to remove a profile. Two stores are built identically; one is indexed, the
+// other has the same writes made through the public writers and is then pruned
+// to the heads that result. The counts must agree — and the descendant counts
+// must not agree at zero, because a sweep that reclaimed only the orphan
+// profile would satisfy an equality check while leaving its snapshot, its
+// documents and its nodes in the database forever.
+func TestAnIndexPrunesExactlyAsPruneDoes(t *testing.T) {
+	seed := func(t *testing.T) (*store.Store, store.IndexWrite) {
+		t.Helper()
+		s := newStore(t)
+		orphanSnapshot := storedGraph(t, s)
+		orphan := profileFixture(orphanSnapshot.ID)
+		orphan.ID, orphan.Register = fakeID("profile", "orphan"), "orphan"
+		mustPutProfile(t, s, orphan)
+		return s, indexWrite(t, s, store.IndexProfileAndReference)
+	}
+
+	indexedStore, write := seed(t)
+	indexed, err := indexedStore.Index(ctx(), write)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+
+	// The same writes, made separately, then pruned to the heads they leave.
+	separateStore, separateWrite := seed(t)
+	mustPutSnapshot(t, separateStore, separateWrite.Snapshot)
+	if err := separateStore.PutProfile(ctx(), separateWrite.Profile, store.AdvanceHead); err != nil {
+		t.Fatalf("PutProfile: %v", err)
+	}
+	mustPutReference(t, separateStore, separateWrite.Reference)
+	heads, err := separateStore.ProfileHeads(ctx())
+	if err != nil {
+		t.Fatalf("ProfileHeads: %v", err)
+	}
+	keep := make([]string, 0, len(heads))
+	for _, id := range heads {
+		keep = append(keep, id)
+	}
+	sort.Strings(keep)
+	separate, err := separateStore.Prune(ctx(), keep)
+	if err != nil {
+		t.Fatalf("Prune: %v", err)
+	}
+
+	if indexed.Pruned != separate {
+		t.Errorf("Index pruned %+v, Prune pruned %+v", indexed.Pruned, separate)
+	}
+	if indexed.Pruned.Snapshots == 0 || indexed.Pruned.Documents == 0 || indexed.Pruned.Nodes == 0 {
+		t.Errorf("the orphan profile went but its graph stayed: %+v", indexed.Pruned)
+	}
+	// The counts are the report; the rows are the fact. An index that reported
+	// a descendant sweep it did not perform would pass everything above.
+	indexedRaw, separateRaw := openRaw(t, indexedStore), openRaw(t, separateStore)
+	for _, table := range []string{"snapshot", "document", "node"} {
+		if got, want := rowsIn(t, indexedRaw, table), rowsIn(t, separateRaw, table); got != want {
+			t.Errorf("%s has %d rows after an index and %d after a prune", table, got, want)
+		}
+	}
+}
+
 // The profile mode advances a head too, so it prunes as well — the distinction
 // that matters is whether a head moved, not whether a reference was written.
 func TestTheProfileModeAlsoPrunes(t *testing.T) {
