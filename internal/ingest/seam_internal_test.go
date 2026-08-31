@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
+	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -47,10 +48,12 @@ func TestEachDocumentsTreeIsBuiltExactlyOnce(t *testing.T) {
 	}
 }
 
-// And the standardizations come from that same pass rather than a second one.
-func TestStandardizationsDoNotRebuildTheTrees(t *testing.T) {
+// And CalibrateStandardizations builds each document's tree once too. The
+// previous version of this test never called it, so an implementation that
+// rebuilt every tree there passed.
+func TestStandardizationsBuildEachTreeOnce(t *testing.T) {
 	root := t.TempDir()
-	for _, name := range []string{"a.md", "b.md", "c.md", "d.md"} {
+	for _, name := range []string{"a.md", "b.md", "c.md", "d.md", "e.md", "f.md"} {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(seamProse), 0o644); err != nil {
 			t.Fatalf("write: %v", err)
 		}
@@ -59,12 +62,31 @@ func TestStandardizationsDoNotRebuildTheTrees(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
-	counter := &treeCounter{}
-	if _, err := snapshotWith(root, snapshot, deps{ReadFile: os.ReadFile, Structure: counter.structure}); err != nil {
-		t.Fatalf("snapshotWith: %v", err)
+	requirements := profile.DefaultRequirements()
+	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1
+	built, err := profile.Build(root, snapshot, requirements)
+	if err != nil {
+		t.Skipf("this corpus cannot fit a profile: %v", err)
 	}
-	if got, eligible := counter.count(), len(snapshot.Eligible()); got != eligible {
-		t.Fatalf("%d trees for %d documents", got, eligible)
+
+	calibrate := 0
+	for _, document := range snapshot.Eligible() {
+		if document.Split == corpus.Calibrate {
+			calibrate++
+		}
+	}
+	if calibrate == 0 {
+		t.Skip("the split assigned no calibrate documents")
+	}
+
+	counter := &treeCounter{}
+	if _, err := calibrateStandardizationsWith(root, snapshot, built, deps{
+		ReadFile: os.ReadFile, Structure: counter.structure,
+	}); err != nil {
+		t.Fatalf("calibrateStandardizationsWith: %v", err)
+	}
+	if got := counter.count(); got != calibrate {
+		t.Errorf("%d trees built for %d calibrate documents", got, calibrate)
 	}
 }
 
@@ -101,11 +123,8 @@ func TestIngestCannotReachAroundItsSeam(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing: %v", err)
 	}
-	forbidden := map[string][]string{
-		"os":   {"ReadFile", "Open", "OpenFile", "ReadDir"},
-		"text": {},
-	}
-	scanned := 0
+	forbidden := map[string][]string{"os": {"ReadFile", "Open", "OpenFile", "ReadDir"}}
+	scanned, structures := 0, 0
 	for _, pkg := range packages {
 		for name, file := range pkg.Files {
 			scanned++
@@ -114,8 +133,11 @@ func TestIngestCannotReachAroundItsSeam(t *testing.T) {
 				if !ok {
 					return true
 				}
-				if selector.Sel.Name == "Structure" && enclosing(file, selector.Pos()) != "realDeps" {
-					t.Errorf("%s builds a tree outside realDeps; the one-tree count would be meaningless", name)
+				if selector.Sel.Name == "Structure" {
+					structures++
+					if enclosing(file, selector.Pos()) != "realDeps" {
+						t.Errorf("%s builds a tree outside realDeps; the one-tree count would be meaningless", name)
+					}
 				}
 				ident, ok := selector.X.(*ast.Ident)
 				if !ok {
@@ -132,6 +154,11 @@ func TestIngestCannotReachAroundItsSeam(t *testing.T) {
 	}
 	if scanned == 0 {
 		t.Fatal("no non-test source was scanned; this guard is vacuous")
+	}
+	// EXACTLY one, not merely "all of them inside realDeps": a second call in
+	// realDeps would build a tree the injected counter never sees.
+	if structures != 1 {
+		t.Errorf("the package builds %d trees; there is one seam and it is used once", structures)
 	}
 }
 

@@ -447,10 +447,16 @@ func (f *rowFaults) noteOpened(query string) {
 // AFTER whatever the transaction did — so a graph that is unchanged afterwards
 // was restored by a rollback rather than never touched. Faulting the nth Exec
 // instead would have assumed a statement count Prune is free to choose.
-func (f *rowFaults) armCommit() {
+func (f *rowFaults) armCommit() { f.armCommitAfter(0) }
+
+// armCommitAfter lets n commits through and fails the next. Faulting the FIRST
+// commit cannot tell one transaction from four composed ones: at that point
+// neither has persisted anything. Letting one through and failing the next is
+// what separates them.
+func (f *rowFaults) armCommitAfter(n int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.armed, f.onCommit = true, true
+	f.armed, f.onCommit, f.remaining = true, true, n
 }
 
 func (f *rowFaults) disarm() {
@@ -462,7 +468,14 @@ func (f *rowFaults) disarm() {
 func (f *rowFaults) failsCommit() bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.armed && f.onCommit
+	if !f.armed || !f.onCommit {
+		return false
+	}
+	if f.remaining > 0 {
+		f.remaining--
+		return false
+	}
+	return true
 }
 
 // failsRowAt reports whether the nth read OF ONE STREAM should fail. Counting
@@ -830,12 +843,16 @@ func requireNoIndirection(t *testing.T, s *Store, table string) {
 	}
 }
 
-// Index is ONE transaction, not four writers composed. Composing PutSnapshot,
-// PutProfile, PutReference and Prune would leave three windows in which another
-// indexer's not-yet-headed write can be pruned — and a failure part way through
-// would commit some of it. The fault on the commit proves the boundary: nothing
-// it wrote survives, and nothing it would have pruned is gone.
-func TestAnIndexThatFailsToCommitChangesNothing(t *testing.T) {
+// Index is ONE transaction, not four writers composed. Faulting its FIRST
+// commit proves nothing — neither shape has persisted anything yet. So one
+// commit is let through and the next is failed: a single-transaction Index has
+// only one commit, never reaches the fault, and completes; a composed Index
+// commits its snapshot and then fails, leaving a graph that is neither what it
+// was nor what it should be.
+//
+// The assertion is therefore the property itself: afterwards the store is
+// EITHER fully indexed OR exactly as it was, and never in between.
+func TestAnIndexIsAllOrNothing(t *testing.T) {
 	faults := &rowFaults{}
 	name := registerFaultDriver(t, faults)
 	s, ids := seededSeamStore(t, name)
@@ -843,23 +860,27 @@ func TestAnIndexThatFailsToCommitChangesNothing(t *testing.T) {
 
 	root := t.TempDir()
 	write := seamSnapshot(seamDocument(t, root, "indexed/a.md", text.Span{Offset: 0, Length: 31}))
-	profile := seamProfile(write.ID)
-	profile.Register = "indexed"
+	indexed := seamProfile(write.ID)
 
-	faults.armCommit()
+	faults.armCommitAfter(1)
 	_, err := s.Index(context.Background(), IndexWrite{
-		Mode: IndexProfile, Snapshot: write, Profile: profile,
+		Mode: IndexProfile, Snapshot: write, Profile: indexed,
 	})
 	faults.disarm()
-	if !errors.Is(err, errInjectedRowFault) {
-		t.Fatalf("error = %v, want the fault injected into Index's commit", err)
-	}
 
-	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
-		t.Errorf("a failed index left the graph as\n%v\nwant\n%v", after, before)
+	after := graphCensus(t, s)
+	if err == nil {
+		// One transaction: it never reached the fault, so it committed whole.
+		if _, err := s.Snapshot(context.Background(), write.ID); err != nil {
+			t.Errorf("Index reported success without its snapshot: %v", err)
+		}
+		if _, err := s.LoadProfile(context.Background(), indexed.ID); err != nil {
+			t.Errorf("Index reported success without its profile: %v", err)
+		}
+		return
 	}
-	if _, err := s.Snapshot(context.Background(), write.ID); !errors.Is(err, ErrNotFound) {
-		t.Errorf("the snapshot survived a failed index: %v", err)
+	if !reflect.DeepEqual(after, before) {
+		t.Errorf("a failed index left the graph part way:\n%v\nwant\n%v", after, before)
 	}
 	if _, err := s.LoadProfile(context.Background(), ids.Orphan); err != nil {
 		t.Errorf("a failed index pruned the orphan anyway: %v", err)

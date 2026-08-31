@@ -453,45 +453,141 @@ func TestTheProfileModeAlsoPrunes(t *testing.T) {
 	}
 }
 
-// Migration 2 corrects two columns. It must not lose the rest of the graph:
-// a table rebuild that dropped children, heads or the release would satisfy
-// every assertion about language and readiness while destroying the store.
+// Migration 2 corrects two columns. It must not lose the rest of the graph: a
+// table rebuild that dropped children, heads or the release would satisfy every
+// assertion about language and readiness while destroying the store.
+//
+// The database has to be seeded at migration 1 and then opened THROUGH 2.
+// Opening a current-schema store and reopening it runs no migration at all, and
+// a destructive migration 2 would pass.
 func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
+	migrations := store.Migrations()
 	path := filepath.Join(t.TempDir(), "hapax.db")
-	first, err := store.Open(path)
+	db, err := sql.Open("sqlite", path)
 	if err != nil {
-		t.Fatalf("Open: %v", err)
+		t.Fatalf("open: %v", err)
 	}
-	ids := seedEveryArtifact(t, first)
-	before := map[string]int{}
-	raw := openRaw(t, first)
-	for _, table := range []string{
-		"snapshot", "document", "node", "feature_vector", "feature_value",
-		"profile", "profile_stat", "profile_head", "reference", "reference_value",
-		"threshold", "eval_result", "calibration_band", "release_head",
-		"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
-	} {
-		before[table] = rowsIn(t, raw, table)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close: %v", err)
-	}
-
-	second, err := store.Open(path)
-	if err != nil {
-		t.Fatalf("reopen: %v", err)
-	}
-	defer second.Close()
-	reopened := openRaw(t, second)
-	for table, want := range before {
-		if got := rowsIn(t, reopened, table); got != want {
-			t.Errorf("%s has %d rows after reopening, had %d", table, got, want)
+	for version := 0; version < 2; version++ {
+		if _, err := db.Exec(migrations[version]); err != nil {
+			t.Fatalf("applying migration %d: %v", version, err)
+		}
+		if _, err := db.Exec(
+			"INSERT INTO migration (version, checksum, applied_at) VALUES (?, ?, '2026-01-01T00:00:00Z')",
+			version, identity.HashBytes([]byte(migrations[version]))); err != nil {
+			t.Fatalf("ledger %d: %v", version, err)
 		}
 	}
-	if _, err := second.Snapshot(ctx(), ids.Snapshot); err != nil {
-		t.Errorf("the snapshot no longer reads: %v", err)
+	// A graph with a row in every table, written directly at version 1.
+	seedVersionOneGraph(t, db)
+	before := map[string]int{}
+	for _, table := range preservedTables {
+		before[table] = countIn(t, db, table)
 	}
-	if _, err := second.LoadEvalResult(ctx(), ids.EvalResult); err != nil {
-		t.Errorf("the release no longer reads: %v", err)
+	for _, table := range preservedTables {
+		if before[table] == 0 {
+			t.Fatalf("%s is empty at version 1; its preservation would be vacuous", table)
+		}
+	}
+	if err := db.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+
+	s, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open through migration 2: %v", err)
+	}
+	defer s.Close()
+	raw := openRaw(t, s)
+	for _, table := range preservedTables {
+		if got := rowsIn(t, raw, table); got != before[table] {
+			t.Errorf("%s has %d rows after migration 2, had %d", table, got, before[table])
+		}
+	}
+}
+
+var preservedTables = []string{
+	"snapshot", "document", "node", "feature_vector", "feature_value",
+	"profile", "profile_stat", "profile_head", "reference", "reference_value",
+	"threshold", "eval_result", "calibration_band", "release_head",
+	"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
+}
+
+func countIn(t *testing.T, db *sql.DB, table string) int {
+	t.Helper()
+	var count int
+	if err := db.QueryRow("SELECT count(*) FROM " + table).Scan(&count); err != nil {
+		t.Fatalf("counting %s: %v", table, err)
+	}
+	return count
+}
+
+// seedVersionOneGraph writes one row into every table a version-1 database has,
+// by raw SQL, so migration 2 has something in each to preserve. Foreign keys
+// are off on this connection, so the identities only have to be well formed.
+func seedVersionOneGraph(t *testing.T, db *sql.DB) {
+	t.Helper()
+	id := func(name string) string { return identity.HashBytes([]byte(name)) }
+	snapshotID, documentID, nodeID := id("snapshot"), id("document"), id("node")
+	profileID, referenceID, evalID := id("profile"), id("reference"), id("eval")
+	selectionID, invocationID := id("selection"), id("invocation")
+	digest, when := id("manifest"), "2026-01-01T00:00:00Z"
+
+	for _, statement := range []struct {
+		sql  string
+		args []any
+	}{
+		{"INSERT INTO snapshot (id,policy_digest,created_at) VALUES (?,?,?)", []any{snapshotID, id("policy"), when}},
+		{`INSERT INTO document (document_id,snapshot_id,path,content_hash,register,split,admission,language,unavailable_at)
+		  VALUES (?,?,'essays/a.md',?,'essays','train','eligible','en',NULL)`, []any{documentID, snapshotID, id("content")}},
+		{`INSERT INTO node (node_id,document_id,ordinal,kind,role,containers,offset,length,included,exclusion)
+		  VALUES (?,?,0,'leaf','paragraph','document',0,12,1,'')`, []any{nodeID, documentID}},
+		{`INSERT INTO feature_vector (node_id,manifest_digest,set_version,tokens,lexical_tokens)
+		  VALUES (?,?,0,9,7)`, []any{nodeID, digest}},
+		{`INSERT INTO feature_value (node_id,manifest_digest,feature,value,defined,sampling_variance,sampling_variance_defined)
+		  VALUES (?,?,'word_length_mean',1.0,1,0.25,1)`, []any{nodeID, digest}},
+		{`INSERT INTO profile (id,snapshot_id,register,unit,variance_convention,manifest_digest,feature_set_version,min_paragraph_lexical_tokens)
+		  VALUES (?,?,'essays','paragraph','sample',?,0,40)`, []any{profileID, snapshotID, digest}},
+		{`INSERT INTO profile_stat (profile_id,feature,n,mean,variance,defined,variance_defined,min_observations)
+		  VALUES (?,'word_length_mean',40,1.0,0.5,1,1,30)`, []any{profileID}},
+		{"INSERT INTO profile_head (register,profile_id,updated_at) VALUES ('essays',?,?)", []any{profileID, when}},
+		{`INSERT INTO reference (id,profile_id,split,min_segments,manifest_digest) VALUES (?,?,'calibrate',30,?)`,
+			[]any{referenceID, profileID, digest}},
+		{"INSERT INTO reference_value (reference_id,feature,ordinal,value) VALUES (?,'word_length_mean',0,0.5)", []any{referenceID}},
+		{`INSERT INTO threshold (id,profile_id,reference_id,population_id,t_low,t_high,achieved_author,achieved_distractor,
+		  interval_low_lower,interval_low_upper,interval_high_lower,interval_high_upper,verdict)
+		  VALUES (?,?,?,?,0.4,0.9,0.05,0.1,0.35,0.45,0.85,0.95,'separated')`,
+			[]any{id("threshold"), profileID, referenceID, id("population")}},
+		{`INSERT INTO eval_result (id,profile_id,reference_id,shippable,reason,
+		  discrimination_id,discrimination_population_id,discrimination_manifest_digest,discrimination_weight_scheme,
+		  discrimination_distance_algorithm,discrimination_scored_tiers,discrimination_split,discrimination_algorithm,
+		  discrimination_clustering,discrimination_floor,discrimination_confidence,discrimination_resamples,discrimination_seed,
+		  auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,min_clusters,
+		  discriminates,discrimination_reason,
+		  calibration_id,calibration_thresholds_id,calibration_population_id,calibration_manifest_digest,
+		  calibration_weight_scheme,calibration_distance_algorithm,calibration_scored_tiers,calibration_split,
+		  calibration_algorithm,calibration_low,calibration_high,calibration_confidence,calibration_resamples,
+		  calibration_seed,calibrated,calibration_reason)
+		  VALUES (?,?,?,1,'',?,?,?,'uniform-v1','distance-uniform-mean-v1','A','test','clustered-auc-lower-bound-v1',
+		  'document',0.65,0.95,2000,7,0.82,0.71,2.5,120,140,12,14,10,1,'',
+		  ?,?,?,?,'uniform-v1','distance-uniform-mean-v1','A','test','band-error-bound-v1',0.4,0.9,0.95,2000,11,1,'')`,
+			[]any{evalID, profileID, referenceID, id("discrimination"), id("population"), digest,
+				id("calibration"), id("threshold"), id("population"), digest}},
+		{`INSERT INTO calibration_band (eval_result_id,band,claims,target,error_rate,error_bound,
+		  class_segments,class_clusters,min_class_clusters,author_segments,distractor_segments,emitted,reason)
+		  VALUES (?,'drifting','',0,0,0,0,0,0,20,40,1,'')`, []any{evalID}},
+		{"INSERT INTO release_head (profile_id,eval_result_id,updated_at) VALUES (?,?,?)", []any{profileID, evalID, when}},
+		{"INSERT INTO exemplar_selection (id,profile_id,n,certificate_id) VALUES (?,?,1,?)",
+			[]any{selectionID, profileID, id("certificate")}},
+		{"INSERT INTO exemplar_member (selection_id,ordinal,node_id) VALUES (?,0,?)", []any{selectionID, nodeID}},
+		{`INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,
+		  current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection)
+		  VALUES (?,0,?,'ollama',?,?,?,1.2,1.4,'drifting','not-you',0,2,1,0,'not-preserved')`,
+			[]any{invocationID, profileID, nodeID, id("current"), id("candidate")}},
+		{`INSERT INTO rewrite_attempt_identifier (invocation_id,attempt_index,ordinal,identifier)
+		  VALUES (?,0,0,'preserve-v1:number:lost:0123456789abcdef')`, []any{invocationID}},
+	} {
+		if _, err := db.Exec(statement.sql, statement.args...); err != nil {
+			t.Fatalf("seeding: %v\n%s", err, statement.sql)
+		}
 	}
 }
