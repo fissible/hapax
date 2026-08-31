@@ -55,11 +55,35 @@ var declaredSchema = map[string][]string{
 		"interval_low_lower", "interval_low_upper",
 		"interval_high_lower", "interval_high_upper", "verdict",
 	},
+	// eval_result holds a RELEASE. It once held figures without the binding or
+	// the band reports that make them mean anything, so score had nothing to
+	// load; the columns below are what reconstructing eval.Release needs.
 	"eval_result": {
-		"id", "profile_id", "reference_id", "auc", "lower_bound", "cap",
-		"author_segments", "distractor_segments", "author_clusters", "distractor_clusters",
-		"discriminates", "calibrated", "shippable", "reason",
+		"id", "profile_id", "reference_id", "shippable", "reason",
+		"discrimination_id", "discrimination_population_id",
+		"discrimination_manifest_digest", "discrimination_weight_scheme",
+		"discrimination_distance_algorithm", "discrimination_scored_tiers",
+		"discrimination_split", "discrimination_algorithm", "discrimination_clustering",
+		"discrimination_floor", "discrimination_confidence",
+		"discrimination_resamples", "discrimination_seed",
+		"auc", "lower_bound", "cap",
+		"author_segments", "distractor_segments",
+		"author_clusters", "distractor_clusters", "min_clusters",
+		"discriminates", "discrimination_reason",
+		"calibration_id", "calibration_thresholds_id", "calibration_population_id",
+		"calibration_manifest_digest", "calibration_weight_scheme",
+		"calibration_distance_algorithm", "calibration_scored_tiers",
+		"calibration_split", "calibration_algorithm",
+		"calibration_low", "calibration_high",
+		"calibration_confidence", "calibration_resamples", "calibration_seed",
+		"calibrated", "calibration_reason",
 	},
+	"calibration_band": {
+		"eval_result_id", "band", "claims", "target", "error_rate", "error_bound",
+		"class_segments", "class_clusters", "min_class_clusters",
+		"author_segments", "distractor_segments", "emitted", "reason",
+	},
+	"release_head":       {"profile_id", "eval_result_id", "updated_at"},
 	"exemplar_selection": {"id", "profile_id", "n", "certificate_id"},
 	"exemplar_member":    {"selection_id", "ordinal", "node_id"},
 	"rewrite_attempt": {
@@ -253,6 +277,16 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"reference":          {{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"}},
 			"reference_value":    {{Parent: "reference", Columns: []column{{"reference_id", "id"}}, OnDelete: "CASCADE"}},
 			"exemplar_selection": {{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"}},
+			"calibration_band": {{
+				Parent: "eval_result", Columns: []column{{"eval_result_id", "id"}}, OnDelete: "CASCADE",
+			}},
+			// Two independent keys would permit a head whose profile and whose
+			// result belong to different profiles; that relationship is enforced
+			// on write and on read, not by these.
+			"release_head": {
+				{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"},
+				{Parent: "eval_result", Columns: []column{{"eval_result_id", "id"}}, OnDelete: "CASCADE"},
+			},
 			"threshold": {
 				{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"},
 				{Parent: "reference", Columns: []column{{"reference_id", "id"}}, OnDelete: "CASCADE"},
@@ -373,7 +407,16 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"eval_result": {
 				"id", "profile_id", "reference_id", "reason",
 				"author_segments", "distractor_segments", "author_clusters", "distractor_clusters",
+				"discrimination_id", "discrimination_population_id", "discrimination_split",
+				"discrimination_clustering", "discrimination_reason", "min_clusters",
+				"calibration_id", "calibration_thresholds_id", "calibration_population_id",
+				"calibration_split", "calibration_reason", "calibrated",
 			},
+			"calibration_band": {
+				"eval_result_id", "band", "claims", "reason",
+				"class_segments", "class_clusters", "min_class_clusters", "emitted",
+			},
+			"release_head":       {"profile_id", "eval_result_id"},
 			"exemplar_selection": {"id", "profile_id", "certificate_id", "n"},
 			"exemplar_member":    {"selection_id", "node_id", "ordinal"},
 			"rewrite_attempt": {
@@ -419,6 +462,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"profile_head": {"register"}, "reference": {"id"},
 			"reference_value": {"reference_id", "feature", "ordinal"},
 			"threshold":       {"id"}, "eval_result": {"id"},
+			"calibration_band": {"eval_result_id", "band"}, "release_head": {"profile_id"},
 			"exemplar_selection": {"id"}, "exemplar_member": {"selection_id", "ordinal"},
 			"rewrite_attempt":            {"invocation_id", "attempt_index"},
 			"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal"},

@@ -40,6 +40,8 @@ const (
 	SamplingMean    Sampling = "mean"
 )
 
+func Tiers() []Tier { return []Tier{TierA} }
+
 // SamplingModel records the versioned assumptions shared by sampling families.
 type SamplingModel struct {
 	Version           string

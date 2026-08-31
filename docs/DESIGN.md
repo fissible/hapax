@@ -2072,6 +2072,11 @@ recorded checksum differs from the migration this binary carries), `ErrSchemaInc
 gap, or a ledger missing a version this binary has), and `ErrSchemaForeign` (a database with
 tables but no ledger at all). Every one of them leaves the file and its sidecars byte-identical.
 
+**A valid prefix is migrated forward, not refused.** A ledger recording versions 0..n for an
+n below what this binary carries is a database written by an older build, and applying the
+remaining migrations in order is the whole point of having them. `ErrSchemaIncomplete` is for
+a ledger with a **gap**, or one with no rows at all — not for one that is merely behind.
+
 **The migration ledger is the only authority on version.** Versions are contiguous from zero;
 the checksum is over the exact migration bytes the binary carries; and the ledger, not the
 schema, answers "what version is this". Three disagreements are distinguished rather than
@@ -2205,18 +2210,70 @@ user names — both are strings that would otherwise be free text by another nam
 `preserve_identifiers` is validated against `preserve.ValidIdentifier` on the way in, because
 that column is the one that already held prose once.
 
-**A stored `eval_result` does not reconstruct a release, and `score` needs one.** The
-artifact table above says it holds "discrimination and band figures with provenance"; the
-columns carry neither. `eval.Calibration.Band` consults each band report's `Emitted` flag —
-a band that calibrated but was not emitted is downgraded to `drifting` — and
-`sameBandCalibrationBinding` requires the feature manifest digest, weight scheme, distance
-algorithm and scored tiers. None of those is persisted. Since `hapax score` is a separate
-invocation from `hapax eval`, it has nothing to load, and no read-model design fixes that:
-the artifact is not there. Persisting a complete release — the calibration's thresholds,
-floor, band reports and binding, and the discrimination's population, protocol and metrics —
-is its own slice, along with the explicit rule for which release a profile's `score` uses,
-since a profile may have several. Nothing caught this until a component first tried to read a
-release back, which is the argument for building the composition root early rather than last.
+**`eval_result` holds a release, because that is what it always was.** It once said it held
+"discrimination and band figures with provenance" while carrying neither, so `hapax score` —
+a separate invocation from `hapax eval` — had nothing to load. `eval.Release.ID` is already
+what `eval_result.id` carries, so the fix is to widen the row rather than add a second
+artifact whose ID equals the first's.
+
+It now holds both gates' complete runtime binding — feature manifest digest, weight scheme,
+distance algorithm, scored tiers — their protocol parameters and population, and the
+calibration's **band reports** in a `calibration_band` child. The reports are the point:
+`Calibration.Band` downgrades a band to `drifting` only when it FINDS a report saying that
+band was not emitted, so an omitted report silently restores a claim the calibration refused
+to make. There are exactly three, one per band, and `drifting` is the special one — always
+emitted, no claiming class, no error gate — because it is what a distance falls into when
+neither claim holds.
+
+**Migration 1 deletes every pre-existing `eval_result`.** A row from before this contract
+cannot reconstruct a release, and a nullable default would make a corrupted release look
+valid, which is what the read rules exist to prevent. An `eval_result` is derived: one
+`hapax eval` rebuilds it, and the corpus, which hapax is never the system of record for, is
+untouched. Migration 0 is not amended — its checksum is ledger-verified, and unlike the
+earlier store slices there are databases in existence by now.
+
+**`release_head` maps a profile to the release its `score` uses**, written in the same
+transaction as the release it names, so no head names a result that does not exist. Keyed by
+profile rather than register: a release belongs to a profile, and when the profile head
+advances the old release head is unreachable rather than stale. Two independent foreign keys
+would permit a head whose profile and whose result disagree, so `release_head.profile_id`
+must equal `eval_result.profile_id` on write and on read. Like `profile_head` it is not a
+`Prune` root. The resolution chain then contains no arbitrary row:
+`register → profile_head → profile → release_head → eval_result → reference`.
+
+**What a stored release is checked against.** Verified: the release ID is recomputed by
+`eval.NewRelease` from the two component IDs, and `Shippable` and `Reason` are derived from
+the records. Carried: the calibration and discrimination IDs themselves, whose
+membership preimages are not stored — recomputing the release ID catches a tampered release
+ID, not a tampered component ID, and claiming otherwise would repeat the mistake this
+paragraph exists to correct. Enforced on read, because each is something a tampered row could
+contradict and `Band` consults every one of them:
+
+- `Discriminates` equals `LowerBound ≥ Floor`, and the discrimination reason is empty exactly
+  when it discriminates and `lower-bound-below-floor` otherwise. This one was missing from the
+  first draft of the list and codex found it by enforcing it: it is the discrimination-side
+  mirror of the rule below, and a row claiming otherwise ships a release on evidence that
+  never reached the floor
+- `Calibrated` equals `in-range.Emitted || not-you.Emitted`, and the calibration reason is
+  empty exactly when calibrated and `no-claiming-band-emitted` otherwise
+- for each claiming report, `Emitted` equals `ErrorBound ≤ Target`, with `Target` in `(0,1)` —
+  which is load-bearing, not tidy: an empty error class returns early with `ErrorBound = 1`
+  and never evaluates that comparison, and the invariant survives only because no target
+  reaches 1. An unemitted claiming report's reason is `empty-error-class` or
+  `error-bound-exceeds-target`; an emitted one's is empty
+- `MinClassClusters` equals `ceil(3 / Target)`, so it is derived rather than trusted
+- the claiming class is fixed: `in-range` claims the distractor, `not-you` the author
+- `calibration.population_id` equals `discrimination.population_id`, which is what
+  `NewRelease` requires. It does **not** equal the threshold's: thresholds are fitted on the
+  `Calibrate` split and band calibration's population is built on `Test`
+- the calibration's bounds equal its threshold's, and they share a profile and a reference.
+  That is the whole of what the persisted threshold can prove — it holds no binding fields —
+  so it is bounds and parentage, not provenance
+- both gates carry the same binding, because `NewRelease` requires it and `Band` rejects a
+  distance that contradicts any of it
+
+`scored_tiers` is a sorted, duplicate-free list of `features.Tier`. It cannot borrow
+`node.containers`' grammar, which admits lower case only, and tiers are upper case.
 
 **Every read is validated.** Unknown enum values, non-finite floats and rows whose `(kind, id)`
 disagrees with where they were found are all `ErrCorrupt`, as is an artifact that names a

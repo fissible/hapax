@@ -215,8 +215,9 @@ func TestAnEvalResultRoundTrips(t *testing.T) {
 	_, prof := seededProfile(t, s)
 	ref := referenceFixture(prof.ID)
 	mustPutReference(t, s, ref)
+	mustPutThreshold(t, s, prof.ID, ref.ID)
 	want := evalResultFixture(prof.ID, ref.ID)
-	if err := s.PutEvalResult(ctx(), want); err != nil {
+	if err := s.PutEvalResult(ctx(), want, store.LeaveHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
 	}
 
@@ -248,12 +249,15 @@ func TestAnEvalResultsReasonAgreesWithItsShippability(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
 			result.Shippable, result.Reason = c.shippable, c.reason
 			if !c.shippable {
-				result.Discriminates = false
+				// The gate's verdict is derived from its bound, so the bound
+				// and the reason move with it.
+				setDiscriminates(&result.Discrimination, false)
 			}
-			err := s.PutEvalResult(ctx(), result)
+			err := s.PutEvalResult(ctx(), result, store.LeaveHead)
 			if c.want && err != nil {
 				t.Errorf("refused: %v", err)
 			}
@@ -662,14 +666,15 @@ func TestRewritingAnIdenticalArtifactSucceedsAndADifferentOneConflicts(t *testin
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
-			if err := s.PutEvalResult(ctx(), result); err != nil {
+			if err := s.PutEvalResult(ctx(), result, store.LeaveHead); err != nil {
 				t.Fatalf("PutEvalResult: %v", err)
 			}
 			if change {
-				result.AUC += 0.01
+				result.Discrimination.AUC += 0.01
 			}
-			return s.PutEvalResult(ctx(), result)
+			return s.PutEvalResult(ctx(), result, store.LeaveHead)
 		}},
 		{"exemplar selection", func(t *testing.T, s *store.Store, change bool) error {
 			snapshot, prof := seededProfile(t, s)
@@ -734,7 +739,7 @@ func TestAnArtifactWhoseParentIsMissingIsRefused(t *testing.T) {
 			return s.PutThreshold(ctx(), thresholdFixture(prof.ID, absent))
 		}},
 		{"an eval result on no reference", func(s *store.Store, _ store.SnapshotWrite, prof store.Profile) error {
-			return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, absent))
+			return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, absent), store.LeaveHead)
 		}},
 		{"a selection naming no node", func(s *store.Store, _ store.SnapshotWrite, prof store.Profile) error {
 			return s.PutExemplarSelection(ctx(), selectionFixture(prof.ID, absent))
@@ -819,9 +824,10 @@ func TestNonFiniteFloatsAreRefused(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
-			result.Cap = inf
-			return s.PutEvalResult(ctx(), result)
+			result.Discrimination.Cap = inf
+			return s.PutEvalResult(ctx(), result, store.LeaveHead)
 		}},
 		{"an attempt distance", func(t *testing.T, s *store.Store) error {
 			snapshot, prof := seededProfile(t, s)
@@ -1004,10 +1010,31 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 			"ID", "ProfileID", "ReferenceID", "PopulationID", "Low", "High",
 			"AchievedAuthor", "AchievedDistractor", "IntervalLow", "IntervalHigh", "Verdict",
 		}},
+		// Nested, mirroring eval.Release. Three legible lists beat one of
+		// thirty, and each part's allowlist is about one gate.
 		{store.EvalResult{}, []string{
-			"ID", "ProfileID", "ReferenceID", "AUC", "LowerBound", "Cap",
-			"AuthorSegments", "DistractorSegments", "AuthorClusters", "DistractorClusters",
-			"Discriminates", "Calibrated", "Shippable", "Reason",
+			"ID", "ProfileID", "ReferenceID", "Discrimination", "Calibration", "Shippable", "Reason",
+		}},
+		{store.Binding{}, []string{
+			"ManifestDigest", "WeightScheme", "DistanceAlgorithm", "ScoredTiers",
+		}},
+		{store.Discrimination{}, []string{
+			"ID", "PopulationID", "Binding", "Split", "Algorithm", "Clustering",
+			"Floor", "Confidence", "Resamples", "Seed",
+			"AUC", "LowerBound", "Cap",
+			"AuthorSegments", "DistractorSegments",
+			"AuthorClusters", "DistractorClusters", "MinClusters",
+			"Discriminates", "Reason",
+		}},
+		{store.Calibration{}, []string{
+			"ID", "ThresholdsID", "PopulationID", "Binding", "Split", "Algorithm",
+			"Low", "High", "Confidence", "Resamples", "Seed",
+			"Bands", "Calibrated", "Reason",
+		}},
+		{store.BandReport{}, []string{
+			"Band", "Claims", "Target", "ErrorRate", "ErrorBound",
+			"ClassSegments", "ClassClusters", "MinClassClusters",
+			"AuthorSegments", "DistractorSegments", "Emitted", "Reason",
 		}},
 		{store.ExemplarSelection{}, []string{"ID", "ProfileID", "N", "CertificateID", "Members"}},
 		{store.RewriteAttempt{}, []string{
@@ -1043,17 +1070,21 @@ func TestEveryTypeAPersistenceStructReachesIsPermitted(t *testing.T) {
 		"text.Kind": true, "text.Role": true, "text.ContainerKind": true,
 		"text.ExclusionReason": true,
 		"profile.Unit":         true, "profile.VarianceConvention": true,
-		"eval.Band": true, "eval.Interval": true,
-		"eval.ThresholdVerdict": true, "eval.ReleaseReason": true,
+		"eval.Band": true, "eval.Interval": true, "eval.Class": true,
+		"eval.Clustering": true, "eval.ThresholdVerdict": true, "eval.ReleaseReason": true,
+		"features.Tier":  true,
 		"llm.ProviderID": true, "rewrite.RejectionCode": true,
 		"store.Profile": true, "store.ProfileStat": true, "store.Reference": true,
 		"store.Threshold": true, "store.EvalResult": true, "store.ExemplarSelection": true,
 		"store.RewriteAttempt": true, "store.SnapshotWrite": true,
 		"store.Document": true, "store.Node": true,
+		"store.Binding": true, "store.Discrimination": true,
+		"store.Calibration": true, "store.BandReport": true,
 	}
 	for _, value := range []any{
 		store.Profile{}, store.ProfileStat{}, store.Reference{}, store.Threshold{},
 		store.EvalResult{}, store.ExemplarSelection{}, store.RewriteAttempt{},
+		store.Binding{}, store.Discrimination{}, store.Calibration{}, store.BandReport{},
 		store.SnapshotWrite{}, store.Document{}, store.Node{},
 	} {
 		walkTypes(t, reflect.TypeOf(value), permitted, map[reflect.Type]bool{})
@@ -1103,7 +1134,7 @@ func TestARefusedConflictLeavesTheStoredArtifactUntouched(t *testing.T) {
 	changedThreshold := thresholdFixture(ids.Profile, ids.Reference)
 	changedThreshold.High += 0.01
 	changedResult := evalResultFixture(ids.Profile, ids.Reference)
-	changedResult.AUC += 0.01
+	changedResult.Discrimination.AUC += 0.01
 	changedSelection := selectionFixture(ids.Profile, ids.Nodes[1], ids.Nodes[0], ids.Nodes[2])
 	changedAttempt := attemptFixture(ids.Profile, ids.Nodes[0])
 	changedAttempt.PreserveIdentifiers = changedAttempt.PreserveIdentifiers[:1]
@@ -1112,7 +1143,7 @@ func TestARefusedConflictLeavesTheStoredArtifactUntouched(t *testing.T) {
 		"profile":            func() error { return s.PutProfile(ctx(), changedProfile, store.LeaveHead) },
 		"reference":          func() error { return s.PutReference(ctx(), changedReference) },
 		"threshold":          func() error { return s.PutThreshold(ctx(), changedThreshold) },
-		"eval result":        func() error { return s.PutEvalResult(ctx(), changedResult) },
+		"eval result":        func() error { return s.PutEvalResult(ctx(), changedResult, store.LeaveHead) },
 		"exemplar selection": func() error { return s.PutExemplarSelection(ctx(), changedSelection) },
 		"rewrite attempt":    func() error { return s.PutRewriteAttempt(ctx(), changedAttempt) },
 	} {
@@ -1212,7 +1243,8 @@ func TestConcurrentIdenticalArtifactWritersBothSucceed(t *testing.T) {
 			}},
 		{"eval result", func() { mustPutProfile(t, s, prof); mustPutReference(t, s, referenceFixture(prof.ID)) },
 			func() error {
-				return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, referenceFixture(prof.ID).ID))
+				mustPutThreshold(t, s, prof.ID, referenceFixture(prof.ID).ID)
+				return s.PutEvalResult(ctx(), evalResultFixture(prof.ID, referenceFixture(prof.ID).ID), store.LeaveHead)
 			}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -1285,12 +1317,32 @@ func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
 			_, prof := seededProfile(t, s)
 			ref := referenceFixture(prof.ID)
 			mustPutReference(t, s, ref)
+			mustPutThreshold(t, s, prof.ID, ref.ID)
 			result := evalResultFixture(prof.ID, ref.ID)
-			result.Discriminates, result.Calibrated, result.Shippable = c.discriminates, c.calibrated, c.shippable
-			if !c.shippable {
-				result.Reason = eval.ReleaseReasonDiscriminationFailed
+			// Discrimination is DERIVED too — LowerBound against the floor —
+			// so its bound and reason move with the flag for the same reason
+			// the band reports move with Calibrated.
+			setDiscriminates(&result.Discrimination, c.discriminates)
+			// Calibration is DERIVED from whether a claiming band was emitted,
+			// so moving the flag alone would contradict the reports beside it
+			// and refuse for a reason this test is not about.
+			setEmitted(&result.Calibration.Bands[0], c.calibrated)
+			setEmitted(&result.Calibration.Bands[2], c.calibrated)
+			result.Calibration.Calibrated = c.calibrated
+			result.Calibration.Reason = ""
+			if !c.calibrated {
+				result.Calibration.Reason = "no-claiming-band-emitted"
 			}
-			err := s.PutEvalResult(ctx(), result)
+			result.Shippable = c.shippable
+			if !c.shippable {
+				// Which reason is DERIVED from which gate failed: the
+				// discrimination one only when discrimination is what failed.
+				result.Reason = eval.ReleaseReasonUncalibrated
+				if !c.discriminates {
+					result.Reason = eval.ReleaseReasonDiscriminationFailed
+				}
+			}
+			err := s.PutEvalResult(ctx(), result, store.LeaveHead)
 			if want && err != nil {
 				t.Errorf("refused: %v", err)
 			}
@@ -1463,7 +1515,10 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 	})
 	t.Run("an eval result", func(t *testing.T) {
 		s, prof, foreign := setUp(t)
-		if err := s.PutEvalResult(ctx(), evalResultFixture(prof.ID, foreign.ID)); err == nil {
+		// No threshold is written: one over this profile and that reference is
+		// itself the combination the case beside this one refuses. The release
+		// is refused for the reference, which is what is under test.
+		if err := s.PutEvalResult(ctx(), evalResultFixture(prof.ID, foreign.ID), store.LeaveHead); err == nil {
 			t.Error("accepted")
 		}
 	})
@@ -1486,8 +1541,9 @@ func TestAnArtifactMayNotCombineAProfileWithAnotherProfilesReference(t *testing.
 		s, prof, foreign := setUp(t)
 		own := referenceFixture(prof.ID)
 		mustPutReference(t, s, own)
+		mustPutThreshold(t, s, prof.ID, own.ID)
 		result := evalResultFixture(prof.ID, own.ID)
-		if err := s.PutEvalResult(ctx(), result); err != nil {
+		if err := s.PutEvalResult(ctx(), result, store.LeaveHead); err != nil {
 			t.Fatalf("PutEvalResult: %v", err)
 		}
 		if _, err := openRaw(t, s).Exec("UPDATE eval_result SET reference_id = ?", foreign.ID); err != nil {

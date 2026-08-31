@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"reflect"
+	"strings"
 	"time"
 
 	"github.com/fissible/hapax/internal/corpus"
+	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/llm"
@@ -55,11 +58,62 @@ type Threshold struct {
 
 // EvalResult is the persisted release evaluation for a reference distribution.
 type EvalResult struct {
-	ID, ProfileID, ReferenceID                                             string
-	AUC, LowerBound, Cap                                                   float64
-	AuthorSegments, DistractorSegments, AuthorClusters, DistractorClusters int
-	Discriminates, Calibrated, Shippable                                   bool
-	Reason                                                                 eval.ReleaseReason
+	ID, ProfileID, ReferenceID string
+	Discrimination             Discrimination
+	Calibration                Calibration
+	Shippable                  bool
+	Reason                     eval.ReleaseReason
+}
+
+// Binding is the distance contract shared by both release gates.
+type Binding struct {
+	ManifestDigest                  string
+	WeightScheme, DistanceAlgorithm string
+	ScoredTiers                     []features.Tier
+}
+type Discrimination struct {
+	ID, PopulationID                                                                    string
+	Binding                                                                             Binding
+	Split                                                                               corpus.Split
+	Algorithm                                                                           string
+	Clustering                                                                          eval.Clustering
+	Floor, Confidence                                                                   float64
+	Resamples                                                                           int
+	Seed                                                                                uint64
+	AUC, LowerBound, Cap                                                                float64
+	AuthorSegments, DistractorSegments, AuthorClusters, DistractorClusters, MinClusters int
+	Discriminates                                                                       bool
+	Reason                                                                              string
+}
+
+// BandReport is the storage representation of eval.BandReport. Keeping this
+// as a store-owned struct makes the persistence allowlist explicit.
+type BandReport struct {
+	Band                                           eval.Band
+	Claims                                         eval.Class
+	Target, ErrorRate, ErrorBound                  float64
+	ClassSegments, ClassClusters, MinClassClusters int
+	AuthorSegments, DistractorSegments             int
+	Emitted                                        bool
+	Reason                                         string
+}
+type Calibration struct {
+	ID, ThresholdsID, PopulationID string
+	Binding                        Binding
+	Split                          corpus.Split
+	Algorithm                      string
+	Low, High, Confidence          float64
+	Resamples                      int
+	Seed                           uint64
+	Bands                          []BandReport
+	Calibrated                     bool
+	Reason                         string
+}
+type ProfileBundle struct {
+	Profile   Profile
+	Reference Reference
+	Release   EvalResult
+	Evaluated bool
 }
 
 // ExemplarSelection is the ordered exemplar-node selection for a profile.
@@ -496,14 +550,233 @@ func invalidEvalField(stored EvalResult) string {
 	if !validHash(stored.ID) || !validHash(stored.ProfileID) || !validHash(stored.ReferenceID) {
 		return "identity"
 	}
-	if stored.AuthorSegments < 0 || stored.DistractorSegments < 0 || stored.AuthorClusters < 0 || stored.DistractorClusters < 0 || !finiteAll(stored.AUC, stored.LowerBound, stored.Cap) {
-		return "metrics"
+	if invalidDiscrimination(stored.Discrimination) != "" || invalidCalibration(stored.Calibration) != "" {
+		return "gate"
 	}
-	if !known(stored.Reason, eval.ReleaseReasons()) || stored.Shippable != (stored.Discriminates && stored.Calibrated) {
+	release, err := eval.NewRelease(
+		eval.Discrimination{
+			ID:                    stored.Discrimination.ID,
+			PopulationID:          stored.Discrimination.PopulationID,
+			ProfileID:             stored.ProfileID,
+			ReferenceID:           stored.ReferenceID,
+			FeatureManifestDigest: stored.Discrimination.Binding.ManifestDigest,
+			WeightScheme:          stored.Discrimination.Binding.WeightScheme,
+			DistanceAlgorithm:     stored.Discrimination.Binding.DistanceAlgorithm,
+			ScoredTiers:           stored.Discrimination.Binding.ScoredTiers,
+			Split:                 stored.Discrimination.Split,
+			Spec: eval.DiscriminationSpec{
+				Floor: stored.Discrimination.Floor, Confidence: stored.Discrimination.Confidence,
+				Resamples: stored.Discrimination.Resamples, Seed: stored.Discrimination.Seed,
+			},
+			Algorithm:          stored.Discrimination.Algorithm,
+			Clustering:         stored.Discrimination.Clustering,
+			AUC:                stored.Discrimination.AUC,
+			LowerBound:         stored.Discrimination.LowerBound,
+			Cap:                stored.Discrimination.Cap,
+			AuthorSegments:     stored.Discrimination.AuthorSegments,
+			DistractorSegments: stored.Discrimination.DistractorSegments,
+			AuthorClusters:     stored.Discrimination.AuthorClusters,
+			DistractorClusters: stored.Discrimination.DistractorClusters,
+			MinClusters:        stored.Discrimination.MinClusters,
+			Discriminates:      stored.Discrimination.Discriminates,
+			Reason:             stored.Discrimination.Reason,
+		},
+		eval.Calibration{
+			ID:                    stored.Calibration.ID,
+			ThresholdsID:          stored.Calibration.ThresholdsID,
+			PopulationID:          stored.Calibration.PopulationID,
+			Low:                   stored.Calibration.Low,
+			High:                  stored.Calibration.High,
+			ProfileID:             stored.ProfileID,
+			ReferenceID:           stored.ReferenceID,
+			FeatureManifestDigest: stored.Calibration.Binding.ManifestDigest,
+			WeightScheme:          stored.Calibration.Binding.WeightScheme,
+			DistanceAlgorithm:     stored.Calibration.Binding.DistanceAlgorithm,
+			ScoredTiers:           stored.Calibration.Binding.ScoredTiers,
+			Split:                 stored.Calibration.Split,
+			Floor: eval.BandFloor{
+				Confidence: stored.Calibration.Confidence, Resamples: stored.Calibration.Resamples, Seed: stored.Calibration.Seed,
+			},
+			Algorithm:  stored.Calibration.Algorithm,
+			Bands:      evalBandReports(stored.Calibration.Bands),
+			Calibrated: stored.Calibration.Calibrated,
+			Reason:     stored.Calibration.Reason,
+		},
+	)
+	if err != nil {
+		return "gate composition"
+	}
+	if stored.ID != release.ID {
+		return "release identity"
+	}
+	if stored.Shippable != release.Shippable {
 		return "release state"
 	}
-	if stored.Shippable != (stored.Reason == eval.ReleaseReasonNone) {
+	if stored.Reason != eval.ReleaseReason(release.Reason) {
 		return "release reason"
+	}
+	return ""
+}
+
+func evalBandReports(reports []BandReport) []eval.BandReport {
+	evaluated := make([]eval.BandReport, len(reports))
+	for index, report := range reports {
+		evaluated[index] = eval.BandReport{
+			Band: report.Band, Claims: report.Claims, Target: report.Target, ErrorRate: report.ErrorRate,
+			ErrorBound: report.ErrorBound, ClassSegments: report.ClassSegments, ClassClusters: report.ClassClusters,
+			MinClassClusters: report.MinClassClusters, AuthorSegments: report.AuthorSegments,
+			DistractorSegments: report.DistractorSegments, Emitted: report.Emitted, Reason: report.Reason,
+		}
+	}
+	return evaluated
+}
+
+func validBinding(binding Binding) bool {
+	if binding.ManifestDigest != features.ManifestDigest() || binding.WeightScheme != deviation.WeightSchemeUniform || binding.DistanceAlgorithm != deviation.DistanceAlgorithm || len(binding.ScoredTiers) == 0 {
+		return false
+	}
+	for index, tier := range binding.ScoredTiers {
+		if tier != features.TierA || (index > 0 && binding.ScoredTiers[index-1] >= tier) {
+			return false
+		}
+	}
+	return true
+}
+func invalidDiscrimination(discrimination Discrimination) string {
+	if !validHash(discrimination.ID) || !validHash(discrimination.PopulationID) || !validBinding(discrimination.Binding) || discrimination.Split != corpus.Test || discrimination.Algorithm != eval.DiscriminationAlgorithm || discrimination.Clustering != eval.ClusterByDocument {
+		return "identity"
+	}
+	if discrimination.Resamples <= 0 || discrimination.Confidence <= 0 || discrimination.Confidence >= 1 || discrimination.Floor <= 0 || discrimination.Floor > 1 || discrimination.AuthorSegments < 0 || discrimination.DistractorSegments < 0 || discrimination.AuthorClusters < 0 || discrimination.DistractorClusters < 0 || discrimination.MinClusters < 0 || !finiteAll(discrimination.Floor, discrimination.Confidence, discrimination.AUC, discrimination.LowerBound, discrimination.Cap) {
+		return "metrics"
+	}
+	if discrimination.Discriminates != (discrimination.LowerBound >= discrimination.Floor) || (discrimination.Discriminates && discrimination.Reason != "") || (!discrimination.Discriminates && discrimination.Reason != "lower-bound-below-floor") {
+		return "decision"
+	}
+	return ""
+}
+func invalidCalibration(calibration Calibration) string {
+	if !validHash(calibration.ID) || !validHash(calibration.ThresholdsID) || !validHash(calibration.PopulationID) || !validBinding(calibration.Binding) || calibration.Split != corpus.Test || calibration.Algorithm != eval.BandCalibrationAlgorithm || calibration.Resamples <= 0 || calibration.Confidence <= 0 || calibration.Confidence >= 1 || !finiteAll(calibration.Low, calibration.High, calibration.Confidence) {
+		return "metadata"
+	}
+	if len(calibration.Bands) != 3 {
+		return "bands"
+	}
+	seen := map[eval.Band]bool{}
+	for _, report := range calibration.Bands {
+		if seen[report.Band] {
+			return "band duplicate"
+		}
+		if field := invalidBand(report); field != "" {
+			return "band " + field
+		}
+		seen[report.Band] = true
+	}
+	if !seen[eval.BandInRange] || !seen[eval.BandDrifting] || !seen[eval.BandNotYou] {
+		return "bands"
+	}
+	calibrated := false
+	for _, report := range calibration.Bands {
+		if (report.Band == eval.BandInRange || report.Band == eval.BandNotYou) && report.Emitted {
+			calibrated = true
+			break
+		}
+	}
+	if calibration.Calibrated != calibrated || (calibration.Calibrated && calibration.Reason != "") || (!calibration.Calibrated && calibration.Reason != "no-claiming-band-emitted") {
+		return "decision"
+	}
+	return ""
+}
+func invalidBand(report BandReport) string {
+	if !known(report.Band, eval.Bands()) {
+		return "name"
+	}
+	if report.AuthorSegments < 0 {
+		return "author segments"
+	}
+	if report.DistractorSegments < 0 {
+		return "distractor segments"
+	}
+	if report.Band == eval.BandDrifting {
+		if !report.Emitted {
+			return "emitted"
+		}
+		if report.Claims != "" {
+			return "claims"
+		}
+		if report.Target != 0 {
+			return "target"
+		}
+		if report.ErrorRate != 0 {
+			return "error rate"
+		}
+		if report.ErrorBound != 0 {
+			return "error bound"
+		}
+		if report.ClassSegments != 0 {
+			return "class segments"
+		}
+		if report.ClassClusters != 0 {
+			return "class clusters"
+		}
+		if report.MinClassClusters != 0 {
+			return "minimum class clusters"
+		}
+		if report.Reason != "" {
+			return "reason"
+		}
+		return ""
+	}
+	want := eval.ClassDistractor
+	if report.Band == eval.BandNotYou {
+		want = eval.ClassAuthor
+	}
+	if report.Claims != want {
+		return "claims"
+	}
+	if report.Target <= 0 || report.Target >= 1 {
+		return "target"
+	}
+	if report.ClassSegments < 0 {
+		return "class segments"
+	}
+	if report.ClassClusters < 0 {
+		return "class clusters"
+	}
+	if report.MinClassClusters != int(math.Ceil(3/report.Target)) {
+		return "minimum class clusters"
+	}
+	if report.ErrorRate < 0 || report.ErrorRate > 1 {
+		return "error rate"
+	}
+	if report.ErrorBound < 0 || report.ErrorBound > 1 || !finiteAll(report.Target, report.ErrorRate, report.ErrorBound) {
+		return "error bound"
+	}
+	if report.ClassClusters == 0 {
+		if report.ClassSegments != 0 {
+			return "class segments"
+		}
+		if report.ErrorRate != 0 {
+			return "error rate"
+		}
+		if report.ErrorBound != 1 {
+			return "error bound"
+		}
+		if report.Emitted {
+			return "emitted"
+		}
+		if report.Reason != "empty-error-class" {
+			return "reason"
+		}
+		return ""
+	}
+	if report.ErrorBound < 3/float64(report.ClassClusters) {
+		return "error bound"
+	}
+	if report.Emitted != (report.ErrorBound <= report.Target) {
+		return "emitted"
+	}
+	if report.Emitted && report.Reason != "" || !report.Emitted && report.Reason != "error-bound-exceeds-target" {
+		return "reason"
 	}
 	return ""
 }
@@ -512,14 +785,14 @@ func validEval(stored EvalResult) bool {
 }
 
 // PutEvalResult creates an immutable release evaluation.
-func (s *Store) PutEvalResult(ctx context.Context, x EvalResult) error {
-	if !validEval(x) {
-		return invalidArtifact("evaluation result", invalidEvalField(x))
+func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy HeadPolicy) error {
+	if !validEval(result) {
+		return invalidArtifact("evaluation result", invalidEvalField(result))
 	}
 	return artifactTx(ctx, s, func(c *sql.Conn) error {
-		stored, err := s.loadEval(c, ctx, x.ID)
+		stored, err := s.loadEval(c, ctx, result.ID)
 		if err == nil {
-			if stored != x {
+			if !sameEval(stored, result) {
 				return ErrConflict
 			}
 			return nil
@@ -527,16 +800,107 @@ func (s *Store) PutEvalResult(ctx context.Context, x EvalResult) error {
 		if !errors.Is(err, ErrNotFound) {
 			return err
 		}
-		exists, err := one(c, ctx, "SELECT count(*) FROM reference WHERE id=? AND profile_id=?", x.ReferenceID, x.ProfileID)
+		exists, err := one(c, ctx, "SELECT count(*) FROM reference WHERE id=? AND profile_id=?", result.ReferenceID, result.ProfileID)
 		if err != nil {
 			return err
 		}
 		if !exists {
 			return invalidArtifact("evaluation result", "reference id")
 		}
-		_, err = c.ExecContext(ctx, "INSERT INTO eval_result (id,profile_id,reference_id,auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,discriminates,calibrated,shippable,reason) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)", x.ID, x.ProfileID, x.ReferenceID, x.AUC, x.LowerBound, x.Cap, x.AuthorSegments, x.DistractorSegments, x.AuthorClusters, x.DistractorClusters, boolInt(x.Discriminates), boolInt(x.Calibrated), boolInt(x.Shippable), x.Reason)
+		threshold, err := s.loadThreshold(c, ctx, result.Calibration.ThresholdsID)
+		if err != nil || threshold.ProfileID != result.ProfileID || threshold.ReferenceID != result.ReferenceID || threshold.Low != result.Calibration.Low || threshold.High != result.Calibration.High {
+			return invalidArtifact("evaluation result", "calibration threshold")
+		}
+		discrimination, calibration := result.Discrimination, result.Calibration
+		_, err = c.ExecContext(ctx, `INSERT INTO eval_result VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, result.ID, result.ProfileID, result.ReferenceID, discrimination.ID, discrimination.PopulationID, discrimination.Binding.ManifestDigest, discrimination.Binding.WeightScheme, discrimination.Binding.DistanceAlgorithm, strings.Join(tiers(discrimination.Binding.ScoredTiers), ","), discrimination.Split, discrimination.Algorithm, discrimination.Clustering, discrimination.Floor, discrimination.Confidence, discrimination.Resamples, discrimination.Seed, discrimination.AUC, discrimination.LowerBound, discrimination.Cap, discrimination.AuthorSegments, discrimination.DistractorSegments, discrimination.AuthorClusters, discrimination.DistractorClusters, discrimination.MinClusters, boolInt(discrimination.Discriminates), discrimination.Reason, calibration.ID, calibration.ThresholdsID, calibration.PopulationID, calibration.Binding.ManifestDigest, calibration.Binding.WeightScheme, calibration.Binding.DistanceAlgorithm, strings.Join(tiers(calibration.Binding.ScoredTiers), ","), calibration.Split, calibration.Algorithm, calibration.Low, calibration.High, calibration.Confidence, calibration.Resamples, calibration.Seed, boolInt(calibration.Calibrated), calibration.Reason, boolInt(result.Shippable), result.Reason)
+		if err != nil {
+			return err
+		}
+		for _, report := range calibration.Bands {
+			if _, err = c.ExecContext(ctx, "INSERT INTO calibration_band VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", result.ID, report.Band, report.Claims, report.Target, report.ErrorRate, report.ErrorBound, report.ClassSegments, report.ClassClusters, report.MinClassClusters, report.AuthorSegments, report.DistractorSegments, boolInt(report.Emitted), report.Reason); err != nil {
+				return err
+			}
+		}
+		if headPolicy {
+			_, err = c.ExecContext(ctx, "INSERT INTO release_head(profile_id,eval_result_id,updated_at) VALUES (?,?,?) ON CONFLICT(profile_id) DO UPDATE SET eval_result_id=excluded.eval_result_id,updated_at=excluded.updated_at", result.ProfileID, result.ID, s.deps.Now().UTC().Format(time.RFC3339))
+			if err != nil {
+				return err
+			}
+			_, err = c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) SELECT register,id,? FROM profile WHERE id=? ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", s.deps.Now().UTC().Format(time.RFC3339), result.ProfileID)
+		}
 		return err
 	})
+}
+func sameEval(first, second EvalResult) bool {
+	return first.ID == second.ID && first.ProfileID == second.ProfileID && first.ReferenceID == second.ReferenceID && first.Shippable == second.Shippable && first.Reason == second.Reason && reflect.DeepEqual(first.Discrimination, second.Discrimination) && reflect.DeepEqual(first.Calibration, second.Calibration)
+}
+
+func (s *Store) ReleaseHead(ctx context.Context, profileID string) (string, error) {
+	var id string
+	err := s.db.QueryRowContext(ctx, "SELECT eval_result_id FROM release_head WHERE profile_id=?", profileID).Scan(&id)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ErrNotFound
+	}
+	if err != nil {
+		return "", err
+	}
+	x, err := s.LoadEvalResult(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	if x.ProfileID != profileID {
+		return "", ErrCorrupt
+	}
+	return id, nil
+}
+func (s *Store) ProfileHeads(ctx context.Context) (map[string]string, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT register,profile_id FROM profile_head")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]string{}
+	for rows.Next() {
+		var r, id string
+		if err = rows.Scan(&r, &id); err != nil {
+			return nil, err
+		}
+		out[r] = id
+	}
+	return out, rows.Err()
+}
+func (s *Store) LoadProfileBundle(ctx context.Context, register string) (ProfileBundle, error) {
+	var out ProfileBundle
+	id, err := s.ProfileHead(ctx, register)
+	if err != nil {
+		return out, err
+	}
+	out.Profile, err = s.LoadProfile(ctx, id)
+	if err != nil {
+		return out, err
+	}
+	var ref string
+	err = s.db.QueryRowContext(ctx, "SELECT id FROM reference WHERE profile_id=? ORDER BY id LIMIT 1", id).Scan(&ref)
+	if errors.Is(err, sql.ErrNoRows) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Reference, err = s.LoadReference(ctx, ref)
+	if err != nil {
+		return out, err
+	}
+	rid, err := s.ReleaseHead(ctx, id)
+	if errors.Is(err, ErrNotFound) {
+		return out, nil
+	}
+	if err != nil {
+		return out, err
+	}
+	out.Release, err = s.LoadEvalResult(ctx, rid)
+	out.Evaluated = err == nil
+	return out, err
 }
 
 // LoadEvalResult returns a persisted release evaluation.
@@ -545,17 +909,36 @@ func (s *Store) LoadEvalResult(ctx context.Context, id string) (EvalResult, erro
 }
 func (s *Store) loadEval(query queryer, ctx context.Context, id string) (EvalResult, error) {
 	var x EvalResult
-	var discriminates, calibrated, shippable int
-	err := query.QueryRowContext(ctx, "SELECT id,profile_id,reference_id,auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,discriminates,calibrated,shippable,reason FROM eval_result WHERE id=?", id).Scan(&x.ID, &x.ProfileID, &x.ReferenceID, &x.AUC, &x.LowerBound, &x.Cap, &x.AuthorSegments, &x.DistractorSegments, &x.AuthorClusters, &x.DistractorClusters, &discriminates, &calibrated, &shippable, &x.Reason)
+	var dd, ac, sh int
+	var dtiers, atiers string
+	err := query.QueryRowContext(ctx, `SELECT id,profile_id,reference_id,discrimination_id,discrimination_population_id,discrimination_manifest_digest,discrimination_weight_scheme,discrimination_distance_algorithm,discrimination_scored_tiers,discrimination_split,discrimination_algorithm,discrimination_clustering,discrimination_floor,discrimination_confidence,discrimination_resamples,discrimination_seed,auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,min_clusters,discriminates,discrimination_reason,calibration_id,calibration_thresholds_id,calibration_population_id,calibration_manifest_digest,calibration_weight_scheme,calibration_distance_algorithm,calibration_scored_tiers,calibration_split,calibration_algorithm,calibration_low,calibration_high,calibration_confidence,calibration_resamples,calibration_seed,calibrated,calibration_reason,shippable,reason FROM eval_result WHERE id=?`, id).Scan(&x.ID, &x.ProfileID, &x.ReferenceID, &x.Discrimination.ID, &x.Discrimination.PopulationID, &x.Discrimination.Binding.ManifestDigest, &x.Discrimination.Binding.WeightScheme, &x.Discrimination.Binding.DistanceAlgorithm, &dtiers, &x.Discrimination.Split, &x.Discrimination.Algorithm, &x.Discrimination.Clustering, &x.Discrimination.Floor, &x.Discrimination.Confidence, &x.Discrimination.Resamples, &x.Discrimination.Seed, &x.Discrimination.AUC, &x.Discrimination.LowerBound, &x.Discrimination.Cap, &x.Discrimination.AuthorSegments, &x.Discrimination.DistractorSegments, &x.Discrimination.AuthorClusters, &x.Discrimination.DistractorClusters, &x.Discrimination.MinClusters, &dd, &x.Discrimination.Reason, &x.Calibration.ID, &x.Calibration.ThresholdsID, &x.Calibration.PopulationID, &x.Calibration.Binding.ManifestDigest, &x.Calibration.Binding.WeightScheme, &x.Calibration.Binding.DistanceAlgorithm, &atiers, &x.Calibration.Split, &x.Calibration.Algorithm, &x.Calibration.Low, &x.Calibration.High, &x.Calibration.Confidence, &x.Calibration.Resamples, &x.Calibration.Seed, &ac, &x.Calibration.Reason, &sh, &x.Reason)
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
 	if err != nil {
 		return x, err
 	}
-	x.Discriminates = discriminates != 0
-	x.Calibrated = calibrated != 0
-	x.Shippable = shippable != 0
+	x.Discrimination.Binding.ScoredTiers, x.Calibration.Binding.ScoredTiers = parseTiers(dtiers), parseTiers(atiers)
+	x.Discrimination.Discriminates = dd != 0
+	x.Calibration.Calibrated = ac != 0
+	x.Shippable = sh != 0
+	rows, err := query.QueryContext(ctx, "SELECT band,claims,target,error_rate,error_bound,class_segments,class_clusters,min_class_clusters,author_segments,distractor_segments,emitted,reason FROM calibration_band WHERE eval_result_id=? ORDER BY CASE band WHEN 'in-range' THEN 0 WHEN 'drifting' THEN 1 ELSE 2 END", x.ID)
+	if err != nil {
+		return x, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var r BandReport
+		var emitted int
+		if err = rows.Scan(&r.Band, &r.Claims, &r.Target, &r.ErrorRate, &r.ErrorBound, &r.ClassSegments, &r.ClassClusters, &r.MinClassClusters, &r.AuthorSegments, &r.DistractorSegments, &emitted, &r.Reason); err != nil {
+			return x, err
+		}
+		r.Emitted = emitted != 0
+		x.Calibration.Bands = append(x.Calibration.Bands, r)
+	}
+	if err = rows.Err(); err != nil {
+		return x, err
+	}
 	if !validEval(x) {
 		return x, ErrCorrupt
 	}
@@ -566,7 +949,30 @@ func (s *Store) loadEval(query queryer, ctx context.Context, id string) (EvalRes
 	if n != 1 {
 		return x, ErrCorrupt
 	}
+	threshold, err := s.loadThreshold(query, ctx, x.Calibration.ThresholdsID)
+	if err != nil || threshold.ProfileID != x.ProfileID || threshold.ReferenceID != x.ReferenceID || threshold.Low != x.Calibration.Low || threshold.High != x.Calibration.High {
+		return x, ErrCorrupt
+	}
 	return x, nil
+}
+
+func tiers(tierValues []features.Tier) []string {
+	out := make([]string, len(tierValues))
+	for index, tier := range tierValues {
+		out[index] = string(tier)
+	}
+	return out
+}
+func parseTiers(serialized string) []features.Tier {
+	if serialized == "" {
+		return nil
+	}
+	values := strings.Split(serialized, ",")
+	out := make([]features.Tier, len(values))
+	for index, value := range values {
+		out[index] = features.Tier(value)
+	}
+	return out
 }
 
 func invalidSelectionField(stored ExemplarSelection) string {

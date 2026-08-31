@@ -24,16 +24,26 @@ import (
 // eval or rewrite would be refused by the database with nothing to say why.
 func declaredVocabularies() map[string][]string {
 	return map[string][]string{
-		"document.split":                 stringsOf(corpus.Splits()),
-		"document.admission":             stringsOf(corpus.Admissions()),
-		"node.kind":                      stringsOf(text.Kinds()),
-		"node.role":                      stringsOf(text.Roles()),
-		"node.exclusion":                 stringsOf(text.ExclusionReasons()),
-		"profile.unit":                   stringsOf(profile.Units()),
-		"profile.variance_convention":    stringsOf(profile.VarianceConventions()),
-		"reference.split":                stringsOf(corpus.Splits()),
-		"threshold.verdict":              stringsOf(eval.ThresholdVerdicts()),
-		"eval_result.reason":             stringsOf(eval.ReleaseReasons()),
+		"document.split":                        stringsOf(corpus.Splits()),
+		"document.admission":                    stringsOf(corpus.Admissions()),
+		"node.kind":                             stringsOf(text.Kinds()),
+		"node.role":                             stringsOf(text.Roles()),
+		"node.exclusion":                        stringsOf(text.ExclusionReasons()),
+		"profile.unit":                          stringsOf(profile.Units()),
+		"profile.variance_convention":           stringsOf(profile.VarianceConventions()),
+		"reference.split":                       stringsOf(corpus.Splits()),
+		"threshold.verdict":                     stringsOf(eval.ThresholdVerdicts()),
+		"eval_result.reason":                    stringsOf(eval.ReleaseReasons()),
+		"eval_result.discrimination_split":      stringsOf(corpus.Splits()),
+		"eval_result.discrimination_clustering": stringsOf(eval.Clusterings()),
+		"eval_result.discrimination_reason":     stringsOf(eval.DiscriminationReasons()),
+		"eval_result.calibration_split":         stringsOf(corpus.Splits()),
+		"eval_result.calibration_reason":        stringsOf(eval.CalibrationReasons()),
+		// A band report is always ONE of the three; the empty band belongs to
+		// an attempt that was never scored, not to a report.
+		"calibration_band.band":          labelledBands(),
+		"calibration_band.claims":        claimingClasses(),
+		"calibration_band.reason":        stringsOf(eval.BandReportReasons()),
 		"rewrite_attempt.provider_id":    stringsOf(llm.Providers()),
 		"rewrite_attempt.current_band":   stringsOf(eval.Bands()),
 		"rewrite_attempt.candidate_band": stringsOf(eval.Bands()),
@@ -74,6 +84,32 @@ func enumUpdate(table, column, value string) string {
 			return set(column+" = ''", "accepted = 0", "rejection = 'not-improved'")
 		}
 		return set(column + " = " + quoted)
+	case "calibration_band.claims":
+		// Which class a band claims is fixed by the band, so the VALUE chooses
+		// the row rather than any row taking any value.
+		switch value {
+		case "":
+			return "UPDATE calibration_band SET claims = '' WHERE band = 'drifting'"
+		case "author":
+			return "UPDATE calibration_band SET claims = 'author' WHERE band = 'not-you'"
+		case "distractor":
+			return "UPDATE calibration_band SET claims = 'distractor' WHERE band = 'in-range'"
+		}
+		return "UPDATE calibration_band SET claims = " + quoted + " WHERE band = 'in-range'"
+	case "calibration_band.reason":
+		// A reason is coupled to emission — empty exactly when emitted — so the
+		// companion moves with it, on one claiming report. drifting is left
+		// alone: it is emitted and silent by construction.
+		if value == "" {
+			return "UPDATE calibration_band SET reason = '', emitted = 1 WHERE band = 'in-range'"
+		}
+		return "UPDATE calibration_band SET reason = " + quoted + ", emitted = 0 WHERE band = 'in-range'"
+	case "calibration_band.band":
+		// The band is half the primary key, so setting every row to one value
+		// collides. Reduce to a single report first, then move it: what is
+		// under test is the vocabulary, not the key.
+		return "DELETE FROM calibration_band WHERE band <> 'drifting'; " +
+			set("band = "+quoted)
 	case "threshold.verdict":
 		if value == string(eval.VerdictSeparated) {
 			return set("verdict = "+quoted, "t_low = 0.4", "t_high = 0.9")
@@ -191,8 +227,34 @@ var textualColumnGrammars = map[string]string{
 	"threshold.id": "hex", "threshold.profile_id": "hex", "threshold.reference_id": "hex",
 	"threshold.population_id": "hex", "threshold.verdict": "enum",
 	"eval_result.id": "hex", "eval_result.profile_id": "hex", "eval_result.reference_id": "hex",
-	"eval_result.reason":    "enum",
-	"exemplar_selection.id": "hex", "exemplar_selection.profile_id": "hex",
+	"eval_result.reason":            "enum",
+	"eval_result.discrimination_id": "hex", "eval_result.discrimination_population_id": "hex",
+	"eval_result.discrimination_manifest_digest":    "hex",
+	"eval_result.discrimination_weight_scheme":      "algorithm",
+	"eval_result.discrimination_distance_algorithm": "algorithm",
+	"eval_result.discrimination_scored_tiers":       "tier-list",
+	"eval_result.discrimination_split":              "enum",
+	"eval_result.discrimination_algorithm":          "algorithm",
+	"eval_result.discrimination_clustering":         "enum",
+	"eval_result.discrimination_reason":             "enum",
+	"eval_result.calibration_id":                    "hex",
+	"eval_result.calibration_thresholds_id":         "hex",
+	"eval_result.calibration_population_id":         "hex",
+	"eval_result.calibration_manifest_digest":       "hex",
+	"eval_result.calibration_weight_scheme":         "algorithm",
+	"eval_result.calibration_distance_algorithm":    "algorithm",
+	"eval_result.calibration_scored_tiers":          "tier-list",
+	"eval_result.calibration_split":                 "enum",
+	"eval_result.calibration_algorithm":             "algorithm",
+	"eval_result.calibration_reason":                "enum",
+	"calibration_band.eval_result_id":               "hex",
+	"calibration_band.band":                         "enum",
+	"calibration_band.claims":                       "enum",
+	"calibration_band.reason":                       "enum",
+	"release_head.profile_id":                       "hex",
+	"release_head.eval_result_id":                   "hex",
+	"release_head.updated_at":                       "time",
+	"exemplar_selection.id":                         "hex", "exemplar_selection.profile_id": "hex",
 	"exemplar_selection.certificate_id": "hex",
 	"exemplar_member.selection_id":      "hex", "exemplar_member.node_id": "hex",
 	"rewrite_attempt.invocation_id": "hex", "rewrite_attempt.profile_id": "hex",
@@ -215,11 +277,18 @@ var textualColumnGrammars = map[string]string{
 // versioned vocabulary. Their membership cases are in
 // TestDamageTheSchemaCannotPreventIsCorruptNotSmaller.
 var grammarProbes = map[string][]string{
-	"hex":       {"", "not-a-hash", "abc123", strings.ToUpper(hashA), hashA[:63], hashA + "a"},
-	"rel":       {"", "/absolute.md", "../outside.md", `sub\essay.md`, "a//b.md", ".."},
-	"register":  {"", "Diary", "my essays", "-leading", "essays/2026", strings.Repeat("a", 33)},
-	"language":  {"", "English, mostly", "EN", "en_GB"},
-	"time":      {"", "yesterday", "2026/01/01", "2026-01-01 00:00:00"},
+	"hex":      {"", "not-a-hash", "abc123", strings.ToUpper(hashA), hashA[:63], hashA + "a"},
+	"rel":      {"", "/absolute.md", "../outside.md", `sub\essay.md`, "a//b.md", ".."},
+	"register": {"", "Diary", "my essays", "-leading", "essays/2026", strings.Repeat("a", 33)},
+	"language": {"", "English, mostly", "EN", "en_GB"},
+	"time":     {"", "yesterday", "2026/01/01", "2026-01-01 00:00:00"},
+	// A versioned contract identifier: lower case, digits, hyphens, ending in a
+	// version. Not free text, and not an enum either — these are owned by the
+	// components that declare them and change when their contracts do.
+	"algorithm": {"", "Uniform V1", "uniform v1", "uniform_v1"},
+	// A sorted, duplicate-free list of feature tiers. Upper case, so it cannot
+	// borrow the container grammar.
+	"tier-list": {"a", "A,A", "A B", "Z"},
 	"feature":   {"", "Has Space", "UPPER"},
 	"enum-list": {"prose, with punctuation", "Document", "document document"},
 	"preserve-identifier": {
@@ -460,6 +529,39 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
 			return err
 		},
+		// Every column of the release reaches the reader through one loader.
+		"eval_result.discrimination_split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.discrimination_clustering": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.discrimination_reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.calibration_split": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"eval_result.calibration_reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.band": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.claims": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
+		"calibration_band.reason": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadEvalResult(ctx(), ids.EvalResult)
+			return err
+		},
 	}
 
 	for qualified := range declaredVocabularies() {
@@ -511,4 +613,26 @@ func attempt(t *testing.T, db *sql.DB, statement string, arguments ...any) error
 	defer tx.Rollback()
 	_, err = tx.ExecContext(context.Background(), statement, arguments...)
 	return err
+}
+
+// labelledBands is eval's band vocabulary without the empty member. A band
+// report always names one of the three; the empty band is what a rewrite
+// attempt carries when it was never scored.
+func labelledBands() []string {
+	var out []string
+	for _, band := range stringsOf(eval.Bands()) {
+		if band != "" {
+			out = append(out, band)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// claimingClasses is eval's class vocabulary plus the empty one, which is what
+// the drifting report carries: it claims nothing.
+func claimingClasses() []string {
+	out := append([]string{""}, stringsOf(eval.Classes())...)
+	sort.Strings(out)
+	return out
 }

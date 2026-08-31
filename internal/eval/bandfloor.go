@@ -16,6 +16,11 @@ import (
 // BandCalibrationAlgorithm identifies the declared held-out band gate.
 const BandCalibrationAlgorithm = "band-error-bound-v1"
 
+func CalibrationReasons() []string { return []string{"", "no-claiming-band-emitted"} }
+func BandReportReasons() []string {
+	return []string{"", "empty-error-class", "error-bound-exceeds-target"}
+}
+
 // ReasonUncalibrated identifies a profile whose held-out calibration emitted no claiming bands.
 const ReasonUncalibrated deviation.Reason = "uncalibrated"
 
