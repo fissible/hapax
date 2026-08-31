@@ -159,6 +159,10 @@ func TestAClaimingReportsEmissionIsItsErrorBound(t *testing.T) {
 			if c.target > 0 {
 				report.MinClassClusters = int(math.Ceil(3 / c.target))
 			}
+			if c.reason == "empty-error-class" {
+				// The reason means exactly that: the class had nothing in it.
+				report.ClassClusters, report.ClassSegments, report.ErrorRate = 0, 0, 0
+			}
 			release.Calibration.Calibrated = c.emitted || release.Calibration.Bands[2].Emitted
 			err := s.PutEvalResult(ctx(), release, store.LeaveHead)
 			if c.acceptable && err != nil {
