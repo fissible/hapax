@@ -319,7 +319,7 @@ func TestTheUnknownCommandDiagnosticPromisesNothing(t *testing.T) {
 			t.Errorf("the diagnostic does not name %q, which exists: %q", implemented, diagnostic)
 		}
 	}
-	for _, unimplemented := range []string{"eval", "rewrite"} {
+	for _, unimplemented := range []string{"rewrite"} {
 		if strings.Contains(diagnostic, unimplemented) {
 			t.Errorf("the diagnostic offers %q, which is not implemented: %q", unimplemented, diagnostic)
 		}

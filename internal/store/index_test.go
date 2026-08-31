@@ -743,6 +743,10 @@ func migrationExclusions(table string) map[string]bool {
 	case "profile":
 		// These do not exist at version 1, so there is nothing to compare.
 		return map[string]bool{"production_ready": true, "not_ready_reason": true}
+	case "eval_result":
+		// This nullable audit edge did not exist in the version-1 graph the
+		// migration test seeds, so its NULL backfill is not a mutation of that row.
+		return map[string]bool{"distractor_pool_id": true}
 	}
 	return nil
 }

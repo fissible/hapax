@@ -236,8 +236,9 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 	})
 
 	t.Run("every column is typed and not null", func(t *testing.T) {
-		// unavailable_at is the one nullable column: absence is its meaning.
-		nullable := map[string]bool{"document.unavailable_at": true}
+		// unavailable_at and distractor_pool_id are nullable: absence is their
+		// declared meaning, rather than an invented timestamp or pool identity.
+		nullable := map[string]bool{"document.unavailable_at": true, "eval_result.distractor_pool_id": true}
 		for table, columns := range declaredSchema {
 			for _, column := range columns {
 				var declaredType string
@@ -304,6 +305,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				{Parent: "distractor_pool", Columns: []column{{"pool_id", "id"}}, OnDelete: "CASCADE"},
 			},
 			"eval_result": {
+				{Parent: "distractor_pool", Columns: []column{{"distractor_pool_id", "id"}}, OnDelete: "RESTRICT"},
 				{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"},
 				{Parent: "reference", Columns: []column{{"reference_id", "id"}}, OnDelete: "CASCADE"},
 			},

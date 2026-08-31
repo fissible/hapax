@@ -1014,7 +1014,7 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 		// Nested, mirroring eval.Release. Three legible lists beat one of
 		// thirty, and each part's allowlist is about one gate.
 		{store.EvalResult{}, []string{
-			"ID", "ProfileID", "ReferenceID", "Discrimination", "Calibration", "Shippable", "Reason",
+			"ID", "ProfileID", "ReferenceID", "DistractorPoolID", "Discrimination", "Calibration", "Shippable", "Reason",
 		}},
 		{store.Binding{}, []string{
 			"ManifestDigest", "WeightScheme", "DistanceAlgorithm", "ScoredTiers",
