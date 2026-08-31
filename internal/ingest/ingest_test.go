@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
+	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/ingest"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/store"
@@ -229,9 +230,9 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CalibrateStandardizations: %v", err)
 	}
-	// The COMPLETE set, derived independently: "at least one is Calibrate"
-	// permits dropping every other Calibrate leaf and every other document.
-	want := 0
+	// The COMPLETE MULTISET, derived independently. A count alone is satisfied
+	// by repeating one valid leaf while dropping every other.
+	var want []deviation.Standardization
 	for _, document := range snapshot.Eligible() {
 		if document.Split != corpus.Calibrate {
 			continue
@@ -249,13 +250,20 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("leaves of %s: %v", document.Path, err)
 		}
-		want += len(leaves)
+		for _, leaf := range leaves {
+			standardized, err := deviation.Standardize(leaf.Vector, prof, corpus.Calibrate)
+			if err != nil {
+				t.Fatalf("standardize: %v", err)
+			}
+			want = append(want, standardized)
+		}
 	}
-	if want == 0 {
+	if len(want) == 0 {
 		t.Fatal("no calibrate leaves; adjust the fixture rather than proving nothing")
 	}
-	if len(standardizations) != want {
-		t.Errorf("%d standardizations for %d calibrate leaves", len(standardizations), want)
+	if !reflect.DeepEqual(sortStandardizations(standardizations), sortStandardizations(want)) {
+		t.Errorf("%d standardizations do not match the %d calibrate leaves",
+			len(standardizations), len(want))
 	}
 
 	for i, standardization := range standardizations {
@@ -271,4 +279,15 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 func withShort(files map[string]string) map[string]string {
 	files["short.md"] = tooShort
 	return files
+}
+
+// sortStandardizations makes the multiset comparison independent of the order
+// documents were walked in.
+func sortStandardizations(values []deviation.Standardization) []string {
+	out := make([]string, len(values))
+	for i, value := range values {
+		out[i] = fmt.Sprintf("%+v", value)
+	}
+	sort.Strings(out)
+	return out
 }

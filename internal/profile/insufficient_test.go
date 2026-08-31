@@ -83,15 +83,18 @@ func TestNoTrainDocumentIsCorpusInsufficiency(t *testing.T) {
 		"a.md": paragraph, "b.md": paragraph + "\nAnd a little more.\n",
 		"c.md": paragraph + "\nAnd more again.\n", "d.md": paragraph + "\nAnd once more.\n",
 	})
-	moved := 0
+	// If the seed already assigned nothing to train, the precondition holds and
+	// the assertion below is exactly the one to run. Skipping there would make
+	// the case disappear precisely when it was already true.
 	for i := range snapshot.Documents {
 		if snapshot.Documents[i].Split == corpus.Train {
 			snapshot.Documents[i].Split = corpus.Test
-			moved++
 		}
 	}
-	if moved == 0 {
-		t.Skip("the seed assigned nothing to train, so there is nothing to move")
+	for _, document := range snapshot.Eligible() {
+		if document.Split == corpus.Train {
+			t.Fatalf("%s is still in train", document.Path)
+		}
 	}
 	requirements := profile.DefaultRequirements()
 	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1

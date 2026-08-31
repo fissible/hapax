@@ -482,8 +482,9 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	}
 	// A graph with a row in every table, written directly at version 1.
 	seedVersionOneGraph(t, db)
+	tables := preservedTables(t, db)
 	before := map[string][]string{}
-	for _, table := range preservedTables {
+	for _, table := range tables {
 		before[table] = dumpTable(t, db, table, migrationExclusions(table))
 		if len(before[table]) == 0 {
 			t.Fatalf("%s is empty at version 1; its preservation would be vacuous", table)
@@ -502,7 +503,7 @@ func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
 	// The ROWS, not their count: a migration that replaced every row with a
 	// different one — corrupting identities, edges, heads or audit payloads —
 	// keeps the counts exactly.
-	for _, table := range preservedTables {
+	for _, table := range tables {
 		if got := dumpTable(t, raw, table, migrationExclusions(table)); !reflect.DeepEqual(got, before[table]) {
 			t.Errorf("%s changed across migration 2:\n%v\nwant\n%v", table, got, before[table])
 		}
@@ -551,7 +552,15 @@ func dumpTable(t *testing.T, db *sql.DB, table string, exclude map[string]bool) 
 		}
 		rendered := make([]string, len(cells))
 		for i, cell := range cells {
-			rendered[i] = cell.(*sql.NullString).String
+			// NULL and the empty string are different values, and
+			// NullString.String collapses them: unavailable_at rewritten from
+			// NULL to '' would pass an assertion that claims to preserve
+			// every column.
+			if value := cell.(*sql.NullString); value.Valid {
+				rendered[i] = "s:" + value.String
+			} else {
+				rendered[i] = "null"
+			}
 		}
 		out = append(out, strings.Join(rendered, "|"))
 	}
@@ -565,13 +574,35 @@ func dumpTable(t *testing.T, db *sql.DB, table string, exclude map[string]bool) 
 // The columns migration 2 must leave alone. document.language is absent because
 // correcting it is the migration's job; profile's readiness columns are absent
 // because they do not exist at version 1.
-// Every table a version-1 database has. The only columns excluded are the two
-// migration 2 exists to change; everything else must survive untouched.
-var preservedTables = []string{
-	"snapshot", "document", "node", "feature_vector", "feature_value",
-	"profile", "profile_stat", "profile_head", "reference", "reference_value",
-	"threshold", "eval_result", "calibration_band", "release_head",
-	"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
+// Every table a version-1 database has, read from the database rather than
+// listed: a list is a place for a future table to go unseeded and unchecked
+// while the comment still claims every one is covered. The migration ledger is
+// excluded because migration 2 necessarily adds a row to it.
+func preservedTables(t *testing.T, db *sql.DB) []string {
+	t.Helper()
+	rows, err := db.Query(
+		"SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")
+	if err != nil {
+		t.Fatalf("tables: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		if name != "migration" {
+			out = append(out, name)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("rows: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("a version-1 database has no tables; this comparison would be vacuous")
+	}
+	return out
 }
 
 func migrationExclusions(table string) map[string]bool {
