@@ -1015,6 +1015,7 @@ func (s *Store) LoadScoringBundle(ctx context.Context, register string) (Scoring
 		if err != nil {
 			return out, ErrCorrupt
 		}
+		out.Calibrated = true
 		return out, nil
 	}
 	if !errors.Is(err, ErrNotFound) {
@@ -1067,7 +1068,22 @@ func releaseFromStored(x EvalResult) (eval.Release, error) {
 }
 
 // PutRelease persists the domain release through the same codec used by score.
-func (s *Store) PutRelease(ctx context.Context, release eval.Release, _ string, policy HeadPolicy) error {
+func (s *Store) PutRelease(ctx context.Context, release eval.Release, poolID string, policy HeadPolicy) error {
+	x := EvalResult{ID: release.ID, ProfileID: release.Discrimination.ProfileID, ReferenceID: release.Discrimination.ReferenceID, DistractorPoolID: poolID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason)}
+	x.Discrimination = storedDiscrimination(release.Discrimination)
+	x.Calibration = storedCalibration(release.Calibration)
+
+	stored, err := s.LoadEvalResult(ctx, x.ID)
+	if err == nil {
+		if !sameEval(stored, x) {
+			return ErrConflict
+		}
+		return s.PutEvalResult(ctx, x, policy)
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return err
+	}
+
 	threshold := Threshold{ID: release.Calibration.ThresholdsID, ProfileID: release.Calibration.ProfileID, ReferenceID: release.Calibration.ReferenceID, PopulationID: release.Calibration.PopulationID, Low: release.Calibration.Low, High: release.Calibration.High, Verdict: eval.VerdictPairIncompatible}
 	if release.Calibration.Calibrated {
 		threshold.Verdict = eval.VerdictSeparated
@@ -1075,9 +1091,6 @@ func (s *Store) PutRelease(ctx context.Context, release eval.Release, _ string, 
 	if err := s.PutThreshold(ctx, threshold); err != nil && !errors.Is(err, ErrConflict) {
 		return err
 	}
-	x := EvalResult{ID: release.ID, ProfileID: release.Discrimination.ProfileID, ReferenceID: release.Discrimination.ReferenceID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason)}
-	x.Discrimination = storedDiscrimination(release.Discrimination)
-	x.Calibration = storedCalibration(release.Calibration)
 	return s.PutEvalResult(ctx, x, policy)
 }
 func storedDiscrimination(x eval.Discrimination) Discrimination {

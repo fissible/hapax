@@ -403,6 +403,9 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 // a measurement through its release or returns the raw, uncalibrated measure.
 func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, error) {
 	path, found, err := discover(request.StartDir, request.StorePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return ScoreResult{Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
+	}
 	if err != nil {
 		return ScoreResult{}, err
 	}

@@ -167,24 +167,36 @@ func TestTheRefusalsScoreCanMake(t *testing.T) {
 
 // A draft with nothing to measure is insufficient-evidence, which is the one
 // refusal that FOLLOWS an attempted measurement rather than replacing it.
-func TestADraftWithNothingAboveTheFloorIsInsufficientEvidence(t *testing.T) {
+//
+// Note what "nothing to measure" has to mean at the declared floor of one
+// lexical token. Below-floor is UNREACHABLE there: prose with a word in it
+// clears a floor of one, and text without one — digits, punctuation — is not
+// admitted as a paragraph at all, so it is not below the floor either, it is
+// absent. I first wrote this against a "Too short." draft, which measures
+// perfectly well, and the implementation was changed to raise the default floor
+// to three so the test would pass. That is a product-wide change to what counts
+// as a paragraph, made to satisfy one fixture. The fixture was what was wrong.
+//
+// So ParagraphsBelowFloor is zero here and that is correct. It becomes non-zero
+// only for a profile fitted at a raised floor, which #64 records.
+func TestADraftWithNothingToMeasureIsInsufficientEvidence(t *testing.T) {
 	root, _ := calibratedStore(t)
-	draft := writeDraft(t, root, "Too short.\n")
+	draft := writeDraft(t, root, "123 456.\n\n789 1011.\n\n")
 
 	result := scored(t, scoreRequest(root, draft))
 
 	if result.Refusal != workflow.RefusalInsufficientEvidence {
 		t.Errorf("refusal = %q, want %q", result.Refusal, workflow.RefusalInsufficientEvidence)
 	}
-	// It got as far as admitting the draft, so it can say what it found.
-	if result.ParagraphsBelowFloor == 0 {
-		t.Error("nothing was below the floor, and nothing was scored either")
-	}
-	// And it measured nothing, which is what the refusal means. A result
-	// carrying segments while calling itself insufficient-evidence would be
-	// labelling a measurement as an absence of one.
+	// It measured nothing, which is what the refusal means. A result carrying
+	// segments while calling itself insufficient-evidence would be labelling a
+	// measurement as an absence of one.
 	if len(result.Segments) != 0 {
 		t.Errorf("%d segments on an insufficient-evidence refusal", len(result.Segments))
+	}
+	// And it got far enough to have admitted the draft, so it names it.
+	if result.Path != draft {
+		t.Errorf("path = %q, want %q", result.Path, draft)
 	}
 }
 
