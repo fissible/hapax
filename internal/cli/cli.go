@@ -864,7 +864,11 @@ func humanResult(result any) string {
 				bands = append(bands, s.Band.Band)
 			}
 		}
-		return fmt.Sprintf("path=%s bands=%s below-floor=%d", x.Path, strings.Join(bands, ","), x.ParagraphsBelowFloor)
+		result := fmt.Sprintf("path=%s", x.Path)
+		if len(bands) != 0 {
+			result += fmt.Sprintf(" bands=%s", strings.Join(bands, ","))
+		}
+		return fmt.Sprintf("%s below-floor=%d", result, x.ParagraphsBelowFloor)
 	default:
 		return ""
 	}
