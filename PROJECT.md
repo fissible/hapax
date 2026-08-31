@@ -33,7 +33,7 @@ model, then review.
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
 | 13 | `ingest` | **built** | PR #54. Verified snapshot to a deterministic node/vector graph; one tree per call |
-| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66. Only **B `rewrite`** remains |
+| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 offline planning #67. Only **B2 `rewrite`** remains |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -52,6 +52,8 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#63](https://github.com/fissible/hapax/issues/63) | The distractor pool cannot get its author-clustering protection | needs a schema decision, not just a workflow one |
 | [#64](https://github.com/fissible/hapax/issues/64) | `paragraphs_below_floor` is always zero at the declared floor | a stylometry decision about the floor |
 | [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view |
+| [#68](https://github.com/fissible/hapax/issues/68) | B2 — the provider, the loop, assembly, and the command | #67, which is done |
+| [#70](https://github.com/fissible/hapax/issues/70) | Every store open pays for two table rebuilds it does not need | nothing; measured, and the fix is #61's named follow-up |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
@@ -142,6 +144,64 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### 2026-08-31 (B1: everything `rewrite` decides before it spends anything)
+
+`rewrite` split into #67 and #68. B1 ships no command — `Plan` is on the runner and
+deliberately not on `Service` — because a command that reports targets it cannot rewrite
+promises an action it cannot perform.
+
+**Two defects were found at design time rather than by running the binary,** which is a first
+for this project. `rewrite.Loop.Rewrite` is per-segment and numbers attempts from zero within
+each, so one invocation over two paragraphs wrote one `rewrite_attempt` key twice; every test
+that reached that table used a single node, so the whole suite passed. And a draft had never
+been in the store at all, so `PutRewriteAttempt` would have refused every attempt as an
+invalid artifact — after the provider had been paid. DESIGN anticipated the second and nothing
+implemented it.
+
+**A third was found by a test fixture, and it had shipped: #69.** `joinContainers` joins with
+a pipe; the column's grammar admitted only lower case and hyphen. Every leaf with two or more
+containers was unstorable — every paragraph inside a list, a quote, a table cell, a footnote
+or a definition list — so `hapax index` failed on most real Markdown with a constraint error
+rather than a refusal. Twelve slices missed it because every corpus fixture in this repository
+is plain top-level paragraphs: one container, no separator. The fixture that caught it was
+added at the reviewer's insistence, on the grounds that inline code alone "can pass with a
+syntax-specific shortcut".
+
+**Eight review rounds before the freeze, and the last four each found a hole in a fix for the
+previous one.** Counting rows is not "nothing was written" — an implementation that moves a
+head leaves every count where it was, so the census hashes each table's contents. Node/span
+consistency is not identity — a same-shaped snapshot from a previous run satisfied it. The
+pattern is mine: I closed the instance the reviewer named instead of the class. Generalising
+first would have cost fewer rounds.
+
+**Both frozen-test amendments were my errors.** I froze `vocabulary_test.go`, which describes
+the schema this slice changes — the same category as `allowlist_test.go`, which I had
+deliberately excluded for exactly that reason. And I wrote a test asserting that a profile
+built directly and the same profile as indexed share an identity, which is #56 and is open.
+Each was agreed before it was made, committed on its own, and the freeze renewed, so the diff
+between consecutive freeze commits is exactly the amendment. The implementer stopped and
+reported both times rather than editing a frozen file, which is the whole argument for the
+process.
+
+**CI cost is real and filed rather than hidden: #70.** `internal/store` under race goes 140s
+to 242s, +102s on the critical path, because two rebuild migrations run on every `store.Open`
+including a brand-new empty database. That is #61's named follow-up — materialising a fresh
+store's head schema, derived from the chain rather than hand-written. Not done here; B1
+already carries two migrations, one of them unplanned.
+
+**A measurement that corrected six rounds of my own worry.** `requireBoundariesProduce`, which
+I flagged repeatedly as a CI risk, costs nothing: three fixtures and twelve score calls run in
+0.43s. B1's +57s on `internal/workflow` is 21 tests at ~0.19s each amplified about 12x by the
+race detector, with no hot spot. Third time this session a performance hypothesis of mine was
+wrong before measurement.
+
+**Next: B2, #68.** The provider seam with type-separated local and cloud factories, the loop,
+assembly, the atomic destination write, `--local-endpoint` so the smoke test can drive the
+real binary against a loopback server, and #65's human-line builder. Three things B1 leaves
+pinned only by agreement and not by test, all recorded on #68: `Selection` is populated but
+unasserted, `plan_state` and `state` must be separate envelope members, and an in-range
+paragraph with excisions stays in-range.
 
 ### 2026-08-31 (ingest, and the CLI down to one command)
 
