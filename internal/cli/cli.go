@@ -48,7 +48,7 @@ var reasons = []Reason{
 	ReasonLocalOnlyForbidsProvider,
 	ReasonNoProfile,
 }
-var commands = []string{"index", "profile", "tells"}
+var commands = []string{"eval", "index", "profile", "tells"}
 
 // Reasons returns the closed refusal vocabulary.
 func Reasons() []Reason { return append([]Reason(nil), reasons...) }
@@ -162,6 +162,11 @@ func (d Document) valid() error {
 			return errors.New("incoherent document result")
 		}
 		return validProfileResult(d.Status, d.Reason, d.Profile, result)
+	case EvalResult:
+		if d.Command != "eval" {
+			return errors.New("incoherent document result")
+		}
+		return validEvalResult(d.Status, d.Reason, result)
 	default:
 		return errors.New("incoherent document result")
 	}
@@ -226,6 +231,25 @@ func validProfileResult(status Status, reason Reason, envelopeProfile *string, r
 	}
 	if result.Evaluated && result.ReferenceID == nil {
 		return errors.New("incoherent profile result evaluation")
+	}
+	return nil
+}
+
+func validEvalResult(status Status, reason Reason, result EvalResult) error {
+	if result.Shippable && (status != StatusOK || result.Reason != "") {
+		return errors.New("incoherent eval result")
+	}
+	if !result.Shippable && status == StatusOK {
+		return errors.New("incoherent eval result")
+	}
+	if status == StatusRefused {
+		if reason != ReasonNoProfile || result.ReleaseID != nil || result.ProfileID != nil || result.ReferenceID != nil || result.DistractorPoolID != nil || result.Discrimination != nil || result.Calibration != nil {
+			return errors.New("incoherent eval refusal")
+		}
+		return nil
+	}
+	if reason != "" || result.ProfileID == nil || result.ReferenceID == nil || result.Discrimination == nil || result.Calibration == nil {
+		return errors.New("incoherent eval result")
 	}
 	return nil
 }
@@ -306,6 +330,9 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 	if parsed.command == "profile" {
 		return runProfile(ctx, parsed, deps)
 	}
+	if parsed.command == "eval" {
+		return runEval(ctx, parsed, deps)
+	}
 	raw, err := deps.ReadFile(parsed.path)
 	if err != nil {
 		diagnostic(deps.Stderr, fmt.Sprintf("cannot read draft %q: %q", parsed.path, err.Error()))
@@ -334,7 +361,7 @@ type invocation struct {
 	json                     bool
 	localOnly                bool
 	command, register, store string
-	path                     string
+	path, distractor         string
 }
 
 func parse(args []string) (invocation, error) {
@@ -353,15 +380,17 @@ func parse(args []string) (invocation, error) {
 				result.json = true
 			case "--local-only":
 				result.localOnly = true
-			case "--profile", "--store":
+			case "--profile", "--store", "--distractors":
 				if i+1 == len(args) || args[i+1] == "--" {
 					return invocation{}, fmt.Errorf("flag %q requires a value", arg)
 				}
 				i++
 				if arg == "--profile" {
 					result.register = args[i]
-				} else {
+				} else if arg == "--store" {
 					result.store = args[i]
+				} else {
+					result.distractor = args[i]
 				}
 			default:
 				if strings.HasPrefix(arg, "--profile=") {
@@ -373,6 +402,11 @@ func parse(args []string) (invocation, error) {
 					result.store = strings.TrimPrefix(arg, "--store=")
 					if result.store == "" {
 						return invocation{}, fmt.Errorf("flag %q requires a value", "--store")
+					}
+				} else if strings.HasPrefix(arg, "--distractors=") {
+					result.distractor = strings.TrimPrefix(arg, "--distractors=")
+					if result.distractor == "" {
+						return invocation{}, fmt.Errorf("flag %q requires a value", "--distractors")
 					}
 				} else {
 					return invocation{}, fmt.Errorf("invalid flag %q", arg)
@@ -401,6 +435,12 @@ func parse(args []string) (invocation, error) {
 	if result.command == "profile" {
 		if len(positional) != 1 {
 			return invocation{}, errors.New("profile takes no operands")
+		}
+		return result, nil
+	}
+	if result.command == "eval" {
+		if len(positional) != 1 {
+			return invocation{}, errors.New("eval takes no operands")
 		}
 		return result, nil
 	}
@@ -434,6 +474,50 @@ type ProfileResult struct {
 	ReferenceID *string            `json:"reference_id"`
 	Evaluated   bool               `json:"evaluated"`
 	Profile     Profile            `json:"profile"`
+}
+
+// EvalResult is the complete evaluation report, including adverse evidence.
+type EvalResult struct {
+	Store              string              `json:"store"`
+	ReleaseID          *string             `json:"release_id"`
+	ProfileID          *string             `json:"profile_id"`
+	ReferenceID        *string             `json:"reference_id"`
+	DistractorPoolID   *string             `json:"distractor_pool_id"`
+	DistractorMembers  int                 `json:"distractor_members"`
+	AuthorSegments     int                 `json:"author_segments"`
+	DistractorSegments int                 `json:"distractor_segments"`
+	Split              string              `json:"split"`
+	Shippable          bool                `json:"shippable"`
+	Reason             string              `json:"reason"`
+	Discrimination     *EvalDiscrimination `json:"discrimination"`
+	Calibration        *EvalCalibration    `json:"calibration"`
+}
+
+type EvalDiscrimination struct {
+	AUC                float64 `json:"auc"`
+	LowerBound         float64 `json:"lower_bound"`
+	Floor              float64 `json:"floor"`
+	Cap                float64 `json:"cap"`
+	AuthorClusters     int     `json:"author_clusters"`
+	DistractorClusters int     `json:"distractor_clusters"`
+	MinClusters        int     `json:"min_clusters"`
+	Passes             bool    `json:"passes"`
+	Reason             string  `json:"reason"`
+}
+
+type EvalBand struct {
+	Band      string  `json:"band"`
+	Claims    string  `json:"claims"`
+	Target    float64 `json:"target"`
+	ErrorRate float64 `json:"error_rate"`
+	Emitted   bool    `json:"emitted"`
+	Reason    string  `json:"reason"`
+}
+
+type EvalCalibration struct {
+	Calibrated bool       `json:"calibrated"`
+	Reason     string     `json:"reason"`
+	Bands      []EvalBand `json:"bands"`
 }
 
 // MarshalJSON omits profile when the workflow did not resolve one.  A zero
@@ -500,6 +584,17 @@ func profileResultFrom(r workflow.ProfileResult) ProfileResult {
 	}
 	return ProfileResult{Store: r.StorePath, Selection: r.Selection, Available: available, ReferenceID: ptr(r.ReferenceID), Evaluated: r.Evaluated, Profile: p}
 }
+func evalResultFrom(r workflow.EvalResult) EvalResult {
+	out := EvalResult{Store: r.StorePath, ReleaseID: ptr(r.ReleaseID), ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), DistractorPoolID: ptr(r.DistractorPoolID), DistractorMembers: r.DistractorMembers, AuthorSegments: r.AuthorSegments, DistractorSegments: r.DistractorSegments, Split: r.Split, Shippable: r.Shippable, Reason: r.Reason}
+	if r.Selection != workflow.SelectionNoProfile {
+		out.Discrimination = &EvalDiscrimination{AUC: r.Discrimination.AUC, LowerBound: r.Discrimination.LowerBound, Floor: r.Discrimination.Floor, Cap: r.Discrimination.Cap, AuthorClusters: r.Discrimination.AuthorClusters, DistractorClusters: r.Discrimination.DistractorClusters, MinClusters: r.Discrimination.MinClusters, Passes: r.Discrimination.Passes, Reason: r.Discrimination.Reason}
+		out.Calibration = &EvalCalibration{Calibrated: r.Calibration.Calibrated, Reason: r.Calibration.Reason}
+		for _, band := range r.Calibration.Bands {
+			out.Calibration.Bands = append(out.Calibration.Bands, EvalBand{Band: band.Band, Claims: band.Claims, Target: band.Target, ErrorRate: band.ErrorRate, Emitted: band.Emitted, Reason: band.Reason})
+		}
+	}
+	return out
+}
 func runIndex(ctx context.Context, parsed invocation, deps Deps) int {
 	if deps.Service == nil {
 		diagnostic(deps.Stderr, "index service unavailable")
@@ -550,6 +645,29 @@ func runProfile(ctx context.Context, parsed invocation, deps Deps) int {
 	}
 	return code
 }
+func runEval(ctx context.Context, parsed invocation, deps Deps) int {
+	if deps.Service == nil {
+		diagnostic(deps.Stderr, "eval service unavailable")
+		return 3
+	}
+	result, err := deps.Service.Eval(ctx, workflow.EvalRequest{StorePath: parsed.store, Register: parsed.register, DistractorRoot: parsed.distractor})
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	status, reason, code := StatusOK, Reason(""), 0
+	if result.Selection == workflow.SelectionNoProfile {
+		status, reason, code = StatusRefused, ReasonNoProfile, 4
+	} else if result.Adverse || !result.Shippable {
+		status, code = StatusAdverse, 1
+	}
+	payload := evalResultFrom(result)
+	if err = (Document{Schema: Schema, Command: "eval", Status: status, Reason: reason, Result: payload}).Render(deps.Stdout, parsed.json); err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	return code
+}
 func humanResult(result any) string {
 	switch x := result.(type) {
 	case TellsResult:
@@ -565,6 +683,12 @@ func humanResult(result any) string {
 			return ""
 		}
 		return fmt.Sprintf("store=%s", x.Store)
+	case EvalResult:
+		result := fmt.Sprintf("store=%s shippable=%t", x.Store, x.Shippable)
+		if x.Reason != "" {
+			result += fmt.Sprintf(" reason=%s", x.Reason)
+		}
+		return result
 	default:
 		return ""
 	}

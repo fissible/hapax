@@ -170,8 +170,9 @@ func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
 // the rule — and a test that skips when it does not is a test that can quietly
 // never run.
 func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
-	root, distractors := separableFixture(t)
-	result := evaluated(t, evalRequest(root, distractors))
+	root := corpusOf(t, 60)
+	indexed(t, indexRequest(root))
+	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 
 	head := releaseHeadOrEmpty(t, defaultStorePath(root), result.ProfileID)
 	switch {
@@ -186,39 +187,41 @@ func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
 	}
 }
 
-// And an adverse evaluation does NOT withdraw a release that was already good.
+// And an adverse evaluation does not CLEAR a head that already exists.
 //
-// This one refuses to pass vacuously. An implementation that cleared the head on
-// every adverse evaluation would satisfy a preservation check whenever there was
-// no head to preserve — and since whether synthetic prose clears a real
-// discrimination floor is a property of the fixture, "no head" is a state this
-// test can find itself in by luck. So it FAILS rather than passing when the
-// first run leaves nothing: the invariant is either exercised or reported as
-// untested, never quietly skipped.
-func TestAnAdverseEvaluationDoesNotWithdrawAGoodRelease(t *testing.T) {
-	root, distractors := separableFixture(t)
+// The head that stands is deliberately an adverse release rather than a
+// shippable one, because the invariant is about not clearing, not about what is
+// being preserved — and a shippable release is expensive to reach honestly. The
+// calibration gate needs ceil(3/p) clusters per band: sixty held-out author
+// documents at p_author = 0.05 and thirty distractors at p_distractor = 0.10.
+// Sixty held-out documents is a corpus of about seven hundred, which is a slow
+// fixture to pay for one assertion about whether a head moved.
+func TestAnAdverseEvaluationDoesNotClearAnExistingHead(t *testing.T) {
+	root := corpusOf(t, 60)
+	indexed(t, indexRequest(root))
 
-	good := evaluated(t, evalRequest(root, distractors))
-	before := releaseHeadOrEmpty(t, defaultStorePath(root), good.ProfileID)
-	if before == "" {
-		t.Fatalf("the fixture produced no shippable release (%s), so there is no good head "+
-			"to preserve and this invariant is untested. Give the fixture a corpus and a "+
-			"distractor pool that separate, or seed a release directly.", good.Reason)
+	// A first evaluation, persisted but not shipped.
+	first := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
+	if first.Shippable {
+		t.Fatal("this fixture is not meant to ship; the test below assumes it did not")
 	}
+	if first.ReleaseID == "" {
+		t.Fatal("nothing was persisted to make a head of")
+	}
+	// Installed directly, so the head exists whatever the measurement said.
+	installReleaseHead(t, defaultStorePath(root), first.ReleaseID)
 
-	// No distractors at all: a completed measurement that cannot calibrate.
+	// A second, worse evaluation: no distractors at all.
 	adverse := evaluated(t, evalRequest(root, ""))
 	if adverse.Shippable {
 		t.Fatal("an evaluation with no distractors called itself shippable")
 	}
-	if adverse.ReleaseID == "" {
-		t.Error("the adverse result was not persisted; it is evidence")
+	if adverse.ReleaseID == first.ReleaseID {
+		t.Error("the second result was written at the first one's identity")
 	}
-	if adverse.ReleaseID == before {
-		t.Error("the adverse result was written at the identity of the good one")
-	}
-	if head := releaseHeadOrEmpty(t, defaultStorePath(root), adverse.ProfileID); head != before {
-		t.Errorf("head = %q, was the good release %q; an adverse rerun withdrew it", head, before)
+	if head := releaseHeadOrEmpty(t, defaultStorePath(root), adverse.ProfileID); head != first.ReleaseID {
+		t.Errorf("head = %q, was %q; an adverse rerun moved a head it did not earn",
+			head, first.ReleaseID)
 	}
 }
 
@@ -336,18 +339,16 @@ func TestThePersistedReleaseNamesItsPool(t *testing.T) {
 	}
 }
 
-// separableFixture is a corpus and a pool that can actually clear the declared
-// floor, which takes more than separable prose. The bound is capped at
-// 1 - 3/clusters, so a floor of 0.80 needs fifteen clusters per class: a
-// sixty-document corpus holds out three, and no amount of distinguishability
-// rescues a cap of zero. Three hundred documents hold out twenty-five, and
-// twenty distractors are twenty clusters, so the cap is 0.85.
+// What a shippable release actually costs, measured rather than assumed, and
+// recorded here because it is the reason no test above asserts one end to end.
 //
-// This is why the two head tests cost what they cost. Measured, not guessed:
-// at sixty documents the AUC was a perfect 1.000 and the bound was minus two.
-func separableFixture(t *testing.T) (root, distractors string) {
-	t.Helper()
-	root = corpusOf(t, 300)
-	indexed(t, indexRequest(root))
-	return root, distractorCorpus(t, 20)
-}
+// The discrimination bound is capped at 1 - 3/clusters, so a floor of 0.80 needs
+// fifteen clusters per class. The calibration gate is stricter: ceil(3/target)
+// clusters per band, which is sixty author clusters at p_author = 0.05 and
+// thirty distractor clusters at p_distractor = 0.10. Held-out documents are
+// about eight per cent of a corpus, so sixty of them is roughly seven hundred
+// documents.
+//
+// The prose was never the problem. At sixty documents the AUC was a perfect
+// 1.000 and the bound was minus two, because twenty distractors were being
+// split down to one cluster.

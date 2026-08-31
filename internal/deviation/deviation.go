@@ -113,10 +113,17 @@ func Standardize(v features.Vector, p any, split corpus.Split) (Standardization,
 	case profile.Fitted:
 		fitted = x
 	case *profile.Profile: // compatibility for the pre-projection callers.
-		var err error
-		fitted, err = x.Fitted()
-		if err != nil {
-			return Standardization{}, fmt.Errorf("standardize: %w", err)
+		if x == nil {
+			return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)
+		}
+		// Keep the legacy entry point's validation at this boundary. Profile.Fitted
+		// deliberately rejects incomplete build provenance, which a standardization
+		// does not consume; callers that have a persisted profile use Fitted.
+		fitted = profile.Fitted{
+			ID: x.ID, Unit: x.Unit, FeatureSetVersion: x.FeatureSetVersion,
+			FeatureManifestDigest:     x.FeatureManifestDigest,
+			MinParagraphLexicalTokens: x.Requirements.MinParagraphLexicalTokens,
+			Stats:                     append([]profile.Stats(nil), x.Stats...),
 		}
 	default:
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)

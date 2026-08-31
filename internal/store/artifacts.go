@@ -85,7 +85,7 @@ func DistractorPoolID(policyDigest string, hashes []string) string {
 func (s *Store) PutDistractorPool(ctx context.Context, pool DistractorPool) error {
 	ordered := append([]string(nil), pool.ContentHashes...)
 	sort.Strings(ordered)
-	if !validHash(pool.PolicyDigest) || len(ordered) == 0 || pool.ID != DistractorPoolID(pool.PolicyDigest, ordered) {
+	if !validHash(pool.ID) || !validHash(pool.PolicyDigest) || len(ordered) == 0 {
 		return ErrInvalid
 	}
 	for i, h := range ordered {
@@ -104,6 +104,9 @@ func (s *Store) PutDistractorPool(ctx context.Context, pool DistractorPool) erro
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
+		}
+		if pool.ID != DistractorPoolID(pool.PolicyDigest, ordered) {
+			return ErrInvalid
 		}
 		if _, err = c.ExecContext(ctx, "INSERT INTO distractor_pool (id,policy_digest,members,created_at) VALUES (?,?,?,?)", pool.ID, pool.PolicyDigest, pool.Members, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
 			return err

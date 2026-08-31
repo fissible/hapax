@@ -117,9 +117,10 @@ type ProfileResult struct {
 }
 type EvalRequest struct{ StorePath, Register, DistractorRoot string }
 type DiscriminationReport struct {
-	AUC, LowerBound, Floor float64
-	Passes                 bool
-	Reason                 string
+	AUC, LowerBound, Floor, Cap                     float64
+	AuthorClusters, DistractorClusters, MinClusters int
+	Passes                                          bool
+	Reason                                          string
 }
 type BandReport struct {
 	Band, Claims      string
@@ -137,6 +138,7 @@ type EvalResult struct {
 	Selection                                             Selection
 	ReleaseID, ProfileID, ReferenceID, DistractorPoolID   string
 	DistractorMembers, AuthorSegments, DistractorSegments int
+	AuthorClusters, DistractorClusters                    int
 	Split                                                 string
 	Shippable, Adverse                                    bool
 	Reason                                                string
@@ -233,7 +235,10 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	distractorTest, err := diskSegments(request.DistractorRoot, dsnap, corpus.Test, eval.ClassDistractor, fitted)
+	// The author corpus has a Train/Calibrate/Test partition. A distractor pool
+	// does not: every eligible member is comparison material, so applying that
+	// partition here silently throws away most of the not-the-author class.
+	distractorTest, err := diskSegments(request.DistractorRoot, dsnap, eval.ClassDistractor, fitted)
 	if err != nil {
 		return EvalResult{}, err
 	}
@@ -250,7 +255,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	distractorCal, err := diskSegments(request.DistractorRoot, dsnap, corpus.Calibrate, eval.ClassDistractor, fitted)
+	distractorCal, err := diskSegments(request.DistractorRoot, dsnap, eval.ClassDistractor, fitted)
 	if err != nil {
 		return EvalResult{}, err
 	}
@@ -259,28 +264,40 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	threshold, err := eval.Calibrate(calibrationDistances, eval.Source{Cohort: bundle.Profile.SnapshotID, DistractorPool: pool.ID}, eval.DefaultTargets())
-	if err != nil {
-		return EvalResult{}, err
-	}
-	calibration, err := threshold.CalibrateBands(test, eval.DefaultBandFloor())
-	if err != nil {
-		return EvalResult{}, err
-	}
 	discrimination, err := eval.Discriminate(test, eval.DefaultDiscrimination())
 	if err != nil {
 		return EvalResult{}, err
 	}
+	threshold, err := eval.Calibrate(calibrationDistances, eval.Source{Cohort: bundle.Profile.SnapshotID, DistractorPool: pool.ID}, eval.DefaultTargets())
+	var calibration eval.Calibration
+	if err != nil {
+		if !errors.Is(err, eval.ErrNoQualifyingThreshold) {
+			return EvalResult{}, err
+		}
+		calibration = uncalibratedCalibration(discrimination, pool.ID)
+		if err = s.PutThreshold(ctx, store.Threshold{ID: calibration.ThresholdsID, ProfileID: calibration.ProfileID, ReferenceID: calibration.ReferenceID, PopulationID: calibration.PopulationID, Verdict: eval.VerdictPairIncompatible}); err != nil {
+			return EvalResult{}, err
+		}
+	} else {
+		intervals, err := threshold.Bootstrap(calibrationDistances, eval.DefaultBootstrap())
+		if err != nil {
+			return EvalResult{}, err
+		}
+		calibration, err = threshold.CalibrateBands(test, eval.DefaultBandFloor())
+		if err != nil {
+			return EvalResult{}, err
+		}
+		if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: intervals.ID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: intervals.Low, IntervalHigh: intervals.High, Verdict: func() eval.ThresholdVerdict {
+			if intervals.Shippable {
+				return eval.VerdictSeparated
+			}
+			return eval.VerdictPairIncompatible
+		}()}); err != nil {
+			return EvalResult{}, err
+		}
+	}
 	release, err := eval.NewRelease(discrimination, calibration)
 	if err != nil {
-		return EvalResult{}, err
-	}
-	if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: threshold.PopulationID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: threshold.IntervalLow, IntervalHigh: threshold.IntervalHigh, Verdict: func() eval.ThresholdVerdict {
-		if threshold.Separated {
-			return eval.VerdictSeparated
-		}
-		return eval.VerdictPairIncompatible
-	}()}); err != nil {
 		return EvalResult{}, err
 	}
 	stored := store.EvalResult{ID: release.ID, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, DistractorPoolID: pool.ID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason), Discrimination: storeDiscrimination(discrimination), Calibration: storeCalibration(calibration)}
@@ -289,9 +306,39 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	}
 	result.ReleaseID, result.Shippable, result.Adverse, result.Reason = release.ID, release.Shippable, !release.Shippable, release.Reason
 	result.AuthorSegments, result.DistractorSegments = set.AuthorSegments, set.DistractorSegments
-	result.Discrimination = DiscriminationReport{AUC: discrimination.AUC, LowerBound: discrimination.LowerBound, Floor: discrimination.Spec.Floor, Passes: discrimination.Discriminates, Reason: discrimination.Reason}
+	result.AuthorClusters, result.DistractorClusters = discrimination.AuthorClusters, discrimination.DistractorClusters
+	result.Discrimination = DiscriminationReport{
+		AUC: discrimination.AUC, LowerBound: discrimination.LowerBound, Floor: discrimination.Spec.Floor, Cap: discrimination.Cap,
+		AuthorClusters: discrimination.AuthorClusters, DistractorClusters: discrimination.DistractorClusters, MinClusters: discrimination.MinClusters,
+		Passes: discrimination.Discriminates, Reason: discrimination.Reason,
+	}
 	result.Calibration = calibrationReport(calibration)
 	return result, nil
+}
+
+// uncalibratedCalibration records a completed Test measurement when Calibrate
+// could not select either observed boundary. It deliberately emits no claiming
+// bands: a made-up threshold would turn insufficient calibration evidence into
+// a label. The release remains auditable and, because Calibrated is false,
+// cannot advance the head.
+func uncalibratedCalibration(discrimination eval.Discrimination, poolID string) eval.Calibration {
+	floor := eval.DefaultBandFloor()
+	thresholdsID := identity.HashInputs(map[string]string{"kind": "no-qualifying-threshold", "pool": poolID, "population": discrimination.PopulationID})
+	calibration := eval.Calibration{
+		ThresholdsID: thresholdsID, PopulationID: discrimination.PopulationID,
+		ProfileID: discrimination.ProfileID, ReferenceID: discrimination.ReferenceID,
+		FeatureManifestDigest: discrimination.FeatureManifestDigest, WeightScheme: discrimination.WeightScheme,
+		DistanceAlgorithm: discrimination.DistanceAlgorithm, ScoredTiers: append([]features.Tier(nil), discrimination.ScoredTiers...),
+		Split: corpus.Test, Floor: floor, Algorithm: eval.BandCalibrationAlgorithm,
+		Bands: []eval.BandReport{
+			{Band: eval.BandInRange, Claims: eval.ClassDistractor, Target: 0.10, ErrorBound: 1, MinClassClusters: 30, Reason: "empty-error-class"},
+			{Band: eval.BandDrifting, Emitted: true},
+			{Band: eval.BandNotYou, Claims: eval.ClassAuthor, Target: 0.05, ErrorBound: 1, MinClassClusters: 60, Reason: "empty-error-class"},
+		},
+		Reason: "no-claiming-band-emitted",
+	}
+	calibration.ID = identity.HashInputs(map[string]string{"kind": "uncalibrated-calibration", "pool": poolID, "population": calibration.PopulationID, "thresholds": calibration.ThresholdsID})
+	return calibration
 }
 
 func hashesForStored(ctx context.Context, s *store.Store, id string, split corpus.Split) []string {
@@ -304,12 +351,9 @@ func hashesForStored(ctx context.Context, s *store.Store, id string, split corpu
 	}
 	return out
 }
-func diskSegments(root string, snap *corpus.Snapshot, split corpus.Split, class eval.Class, f profile.Fitted) ([]eval.Segment, error) {
+func diskSegments(root string, snap *corpus.Snapshot, class eval.Class, f profile.Fitted) ([]eval.Segment, error) {
 	var out []eval.Segment
 	for _, d := range snap.Eligible() {
-		if d.Split != split {
-			continue
-		}
 		doc, err := snapshot.ReadVerified(root, d.Path, d.ContentHash)
 		if err != nil {
 			return nil, err

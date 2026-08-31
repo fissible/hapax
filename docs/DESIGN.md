@@ -485,6 +485,25 @@ member a segment came from, which a population does not need. Duplicate admitted
 refused, as it already is for the author's corpus, because otherwise the content hash cannot
 serve as the per-document clustering key the bootstrap needs.
 
+**What a shippable release costs, measured.** Two floors bind, and the stricter one was
+never written down. The discrimination bound is capped at `1 - 3/clusters`, so a floor of
+0.80 cannot be cleared below fifteen clusters per class however separable the prose is. The
+calibration gate is stricter still: `ceil(3/target)` clusters per band, which is **sixty
+held-out author documents** at `p_author` = 0.05 and **thirty distractors** at
+`p_distractor` = 0.10. Held-out documents are about eight per cent of a corpus, so that is a
+corpus of roughly seven hundred.
+
+DESIGN already stated ⌈1/*p*⌉ — twenty and ten — but that is the minimum number of
+*distances* for a quantile to exist, not the number of *clusters* the bootstrap needs, and
+the cluster minimum is the one a user actually runs into. Both are real; only one was
+documented.
+
+This surfaced when a sixty-document fixture could not ship. The prose was never the problem —
+the AUC was a perfect 1.000 and the bound was minus two, because twenty distractors were
+being split down to a single cluster. **A distractor pool is used whole**: there is nothing
+to hold out of it, since every member is not-the-author, and the held-out split qualifies the
+author's corpus alone.
+
 **A failed evaluation does not withdraw a good release.** A shippable release advances
 `release_head` in the same transaction that writes it, and `score` resolves through that
 head. An adverse one is still persisted — it is evidence — but it leaves the head where it

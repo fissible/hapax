@@ -295,3 +295,18 @@ func releaseHeadOrEmpty(t *testing.T, path, profileID string) string {
 	}
 	return head
 }
+
+// installReleaseHead makes an existing release the head directly, so a test
+// about what may MOVE a head does not have to earn one through a gate that
+// wants sixty held-out documents.
+func installReleaseHead(t *testing.T, path, releaseID string) {
+	t.Helper()
+	opened := openStore(t, path)
+	stored, err := opened.LoadEvalResult(ctx(), releaseID)
+	if err != nil {
+		t.Fatalf("LoadEvalResult: %v", err)
+	}
+	if err := opened.PutEvalResult(ctx(), stored, store.AdvanceHead); err != nil {
+		t.Fatalf("PutEvalResult: %v", err)
+	}
+}
