@@ -22,17 +22,20 @@ func TestHowAProfileIsSelected(t *testing.T) {
 	// small to fit anything, which is the ordinary first-run state. Pointing at
 	// a database that was never created would test the discovery failure
 	// instead, which is a different thing and is tested below.
+	// Copies of two templates rather than an index per register per case, which
+	// was thirty-two seconds under race for a table about SELECTION. The stores
+	// are identical to what indexing would have produced; only the cost differs.
 	indexedRoot := func(t *testing.T, registers ...string) string {
 		t.Helper()
-		root := corpusOf(t, 60)
-		for _, register := range registers {
-			request := indexRequest(root)
-			request.Register = register
-			if _, err := workflow.Default().Index(ctx(), request); err != nil {
-				t.Fatalf("Index %q: %v", register, err)
-			}
+		switch len(registers) {
+		case 1:
+			return indexedCorpus(t)
+		case 2:
+			return twoRegisterCorpus(t)
+		default:
+			t.Fatalf("no template for %d registers", len(registers))
+			return ""
 		}
-		return root
 	}
 	headlessRoot := func(t *testing.T) string {
 		t.Helper()

@@ -367,7 +367,15 @@ func installReleaseHead(t *testing.T, path, releaseID string) {
 // It is used ONLY where indexing is setup. index's own tests, and the
 // concurrency tests, still index for real: a fixture that pre-indexed for the
 // tests of indexing would be testing the fixture.
-var indexedTemplate = sync.OnceValues(func() (string, error) {
+var indexedTemplate = sync.OnceValues(func() (string, error) { return buildTemplate("essays") })
+
+// Some tests need a store holding SEVERAL registers — the selection table asks
+// what happens when more than one head exists — and indexing the same corpus
+// twice per case was the single most expensive thing left in this package at
+// nearly thirty-two seconds under race. One template, two registers, copied.
+var twoRegisterTemplate = sync.OnceValues(func() (string, error) { return buildTemplate("essays", "letters") })
+
+func buildTemplate(registers ...string) (string, error) {
 	root, err := os.MkdirTemp("", "hapax-indexed-template")
 	if err != nil {
 		return "", err
@@ -375,19 +383,33 @@ var indexedTemplate = sync.OnceValues(func() (string, error) {
 	if err := writeCorpusInto(root, 60, 10, 0); err != nil {
 		return "", err
 	}
-	if _, err := workflow.Default().Index(context.Background(), workflow.IndexRequest{
-		CorpusRoot: root, Register: "essays",
-	}); err != nil {
-		return "", err
+	for _, register := range registers {
+		if _, err := workflow.Default().Index(context.Background(), workflow.IndexRequest{
+			CorpusRoot: root, Register: register,
+		}); err != nil {
+			return "", err
+		}
 	}
 	return root, nil
-})
+}
 
 // indexedCorpus is a fresh copy of that template: a corpus root whose .hapax
 // database is already populated, owned entirely by this test.
 func indexedCorpus(t *testing.T) string {
 	t.Helper()
-	template, err := indexedTemplate()
+	return copyOfTemplate(t, indexedTemplate, "essays")
+}
+
+// twoRegisterCorpus is a copy of a store where both essays and letters have
+// heads.
+func twoRegisterCorpus(t *testing.T) string {
+	t.Helper()
+	return copyOfTemplate(t, twoRegisterTemplate, "essays", "letters")
+}
+
+func copyOfTemplate(t *testing.T, build func() (string, error), registers ...string) string {
+	t.Helper()
+	template, err := build()
 	if err != nil {
 		t.Fatalf("building the indexed template: %v", err)
 	}
@@ -404,8 +426,13 @@ func indexedCorpus(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("the copied store does not open: %v", err)
 	}
-	if heads["essays"] == "" {
-		t.Fatalf("the copied store has no profile head; the copy is not the template")
+	for _, register := range registers {
+		if heads[register] == "" {
+			t.Fatalf("the copied store has no head for %q; the copy is not the template", register)
+		}
+	}
+	if len(heads) != len(registers) {
+		t.Fatalf("the copied store holds %d heads, and the template indexed %d", len(heads), len(registers))
 	}
 	return destination
 }
