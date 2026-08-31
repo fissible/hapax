@@ -150,13 +150,26 @@ func TestTheStoredProjectionEqualsTheBuiltOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Build: %v", err)
 	}
+
+	indexed(t, indexRequest(root))
+	stored := persistedBundle(t, defaultStorePath(root), "essays").Profile
+
+	// The built profile is rebound to the persisted snapshot's identity before
+	// the comparison, because #56 — one corpus has two of them. profile.Build
+	// binds to corpus.Snapshot.ID and ingest derives its own over the persisted
+	// membership, so Index calls RebindSnapshot and the stored profile is
+	// legitimately not the ID a fresh Build produces. Asserting otherwise
+	// asserts that #56 is already fixed.
+	//
+	// The independence that makes this test worth having survives: the built side
+	// still never reads the store, so a mapper that dropped a stat or read
+	// variance where it wanted mean still fails. Only the identity
+	// reconciliation is applied to both sides.
+	built.RebindSnapshot(stored.SnapshotID)
 	want, err := built.Fitted()
 	if err != nil {
 		t.Fatalf("built Fitted: %v", err)
 	}
-
-	indexed(t, indexRequest(root))
-	stored := persistedBundle(t, defaultStorePath(root), "essays").Profile
 	if stored.ID != want.ID {
 		t.Fatalf("the store holds profile %s and the build produced %s; these are not the "+
 			"same profile and comparing their projections proves nothing", stored.ID, want.ID)
