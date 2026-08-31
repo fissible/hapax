@@ -499,14 +499,70 @@ func TestAnIndexPrunesExactlyAsPruneDoes(t *testing.T) {
 	if indexed.Pruned.Snapshots == 0 || indexed.Pruned.Documents == 0 || indexed.Pruned.Nodes == 0 {
 		t.Errorf("the orphan profile went but its graph stayed: %+v", indexed.Pruned)
 	}
-	// The counts are the report; the rows are the fact. An index that reported
-	// a descendant sweep it did not perform would pass everything above.
+	// The counts are the report; the rows are the fact. Compared by identity
+	// rather than by number, across every table, because equal counts are also
+	// what deleting the live graph and keeping the orphan's would produce.
 	indexedRaw, separateRaw := openRaw(t, indexedStore), openRaw(t, separateStore)
-	for _, table := range []string{"snapshot", "document", "node"} {
-		if got, want := rowsIn(t, indexedRaw, table), rowsIn(t, separateRaw, table); got != want {
-			t.Errorf("%s has %d rows after an index and %d after a prune", table, got, want)
+	for _, table := range preservedTables(t, indexedRaw) {
+		got, want := survivingKeys(t, indexedRaw, table), survivingKeys(t, separateRaw, table)
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("%s after an index is\n%v\nafter a prune it is\n%v", table, got, want)
 		}
 	}
+}
+
+// survivingKeys identifies each surviving row of a table by its primary key,
+// falling back to every non-timestamp column where a table declares none. The
+// timestamps are excluded because the two stores are written a moment apart and
+// a clock difference is not a pruning difference.
+func survivingKeys(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	columns, err := db.Query("SELECT name, pk FROM pragma_table_info(?) ORDER BY cid", table)
+	if err != nil {
+		t.Fatalf("columns of %s: %v", table, err)
+	}
+	defer columns.Close()
+	var keys, others []string
+	for columns.Next() {
+		var name string
+		var pk int
+		if err := columns.Scan(&name, &pk); err != nil {
+			t.Fatalf("scan column of %s: %v", table, err)
+		}
+		if pk > 0 {
+			keys = append(keys, name)
+		} else if !strings.HasSuffix(name, "_at") {
+			others = append(others, name)
+		}
+	}
+	if err := columns.Err(); err != nil {
+		t.Fatalf("columns of %s: %v", table, err)
+	}
+	if len(keys) == 0 {
+		keys = others
+	}
+	if len(keys) == 0 {
+		t.Fatalf("%s has no column to identify a row by", table)
+	}
+
+	rows, err := db.Query("SELECT " + strings.Join(keys, "||'|'||") + " FROM " + table)
+	if err != nil {
+		t.Fatalf("keys of %s: %v", table, err)
+	}
+	defer rows.Close()
+	out := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			t.Fatalf("scan key of %s: %v", table, err)
+		}
+		out = append(out, key)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("keys of %s: %v", table, err)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // The profile mode advances a head too, so it prunes as well — the distinction
