@@ -375,6 +375,53 @@ func TestTheHumanEvalRenderingSaysWhetherItShipped(t *testing.T) {
 	}
 }
 
+// Every case here is a document the REAL workflow can produce, rendered through
+// the real Document.valid. The fake means the CLI tests never see the shapes the
+// workflow actually emits, and running the binary found one: an uncalibrated
+// evaluation was refused by its own validator with "incoherent eval result" at
+// exit 3. A payload the producer can build and the renderer rejects is a
+// contract disagreeing with itself.
+func TestEveryShapeTheWorkflowProducesRenders(t *testing.T) {
+	for name, result := range map[string]workflow.EvalResult{
+		"shippable":               shippableEval(),
+		"uncalibrated":            uncalibratedEval(),
+		"discrimination failed":   adverseEval("discrimination-failed"),
+		"no reference to measure": noReferenceEval(),
+		"no profile at all": {
+			StorePath: "/w/.hapax/hapax.sqlite3", Selection: workflow.SelectionNoProfile,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for _, asJSON := range []bool{true, false} {
+				got := runWith(t, &fakeService{evalResult: result}, renderArgs(asJSON)...)
+				if got.code == 3 {
+					t.Errorf("json=%v: refused its own producer's result: %q", asJSON, got.stderr)
+				}
+				if got.stdout == "" {
+					t.Errorf("json=%v: emitted no document", asJSON)
+				}
+			}
+		})
+	}
+}
+
+func renderArgs(asJSON bool) []string {
+	args := []string{"eval", "--profile", "essays", "--distractors", "/others"}
+	if asJSON {
+		return append([]string{"--json"}, args...)
+	}
+	return args
+}
+
+// noReferenceEval is index having kept a profile it could not build a reference
+// for: a state the design names and the binary hit.
+func noReferenceEval() workflow.EvalResult {
+	return workflow.EvalResult{
+		StorePath: "/w/.hapax/hapax.sqlite3", Selection: workflow.SelectedExplicit,
+		ProfileID: "pro", Adverse: true, Reason: "no-reference",
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Fixtures
 // ---------------------------------------------------------------------------

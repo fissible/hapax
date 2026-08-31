@@ -115,7 +115,7 @@ type ProfileResult struct {
 	Evaluated   bool
 	Profile     StoredProfile
 }
-type EvalRequest struct{ StorePath, Register, DistractorRoot string }
+type EvalRequest struct{ StartDir, StorePath, Register, DistractorRoot string }
 type DiscriminationReport struct {
 	AUC, LowerBound, Floor, Cap                     float64
 	AuthorClusters, DistractorClusters, MinClusters int
@@ -190,17 +190,21 @@ func storedSegments(ctx context.Context, s *store.Store, snapshotID string, spli
 }
 
 func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, error) {
-	if request.StorePath == "" {
-		return EvalResult{}, errors.New("eval store path is required")
+	path, found, err := discover(request.StartDir, request.StorePath)
+	if err != nil {
+		return EvalResult{}, err
 	}
-	s, err := store.Open(request.StorePath)
+	if !found {
+		return EvalResult{Selection: SelectionNoProfile}, nil
+	}
+	s, err := store.Open(path)
 	if err != nil {
 		return EvalResult{}, err
 	}
 	defer s.Close()
 	bundle, err := s.LoadProfileBundle(ctx, request.Register)
 	if errors.Is(err, store.ErrNotFound) {
-		return EvalResult{StorePath: request.StorePath, Selection: SelectionNoProfile}, nil
+		return EvalResult{StorePath: path, Selection: SelectionNoProfile}, nil
 	}
 	if err != nil {
 		return EvalResult{}, err
@@ -209,7 +213,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	result := EvalResult{StorePath: request.StorePath, Selection: SelectedExplicit, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, Split: string(corpus.Test)}
+	result := EvalResult{StorePath: path, Selection: SelectedExplicit, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, Split: string(corpus.Test)}
 	if request.DistractorRoot == "" {
 		result.Adverse = true
 		result.Reason = "uncalibrated"
@@ -495,7 +499,7 @@ func (r *Runner) commit(ctx context.Context, request IndexRequest, mode IndexMod
 }
 
 func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileResult, error) {
-	path, found, err := discover(request)
+	path, found, err := discover(request.StartDir, request.StorePath)
 	if err != nil {
 		return ProfileResult{}, err
 	}
@@ -546,14 +550,14 @@ func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileRe
 	return result, nil
 }
 
-func discover(request ProfileRequest) (string, bool, error) {
-	if request.StorePath != "" {
-		if _, err := os.Stat(request.StorePath); err != nil {
+func discover(startDir, storePath string) (string, bool, error) {
+	if storePath != "" {
+		if _, err := os.Stat(storePath); err != nil {
 			return "", false, err
 		}
-		return request.StorePath, true, nil
+		return storePath, true, nil
 	}
-	dir := request.StartDir
+	dir := startDir
 	if dir == "" {
 		return "", false, errors.New("profile start directory is required")
 	}

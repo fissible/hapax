@@ -646,11 +646,16 @@ func runProfile(ctx context.Context, parsed invocation, deps Deps) int {
 	return code
 }
 func runEval(ctx context.Context, parsed invocation, deps Deps) int {
-	if deps.Service == nil {
+	if deps.Service == nil || deps.Getwd == nil {
 		diagnostic(deps.Stderr, "eval service unavailable")
 		return 3
 	}
-	result, err := deps.Service.Eval(ctx, workflow.EvalRequest{StorePath: parsed.store, Register: parsed.register, DistractorRoot: parsed.distractor})
+	cwd, err := deps.Getwd()
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	result, err := deps.Service.Eval(ctx, workflow.EvalRequest{StartDir: cwd, StorePath: parsed.store, Register: parsed.register, DistractorRoot: parsed.distractor})
 	if err != nil {
 		diagnostic(deps.Stderr, err.Error())
 		return 3

@@ -291,6 +291,37 @@ func TestEvalWithNoStoreAnywhereRefuses(t *testing.T) {
 	}
 }
 
+// A profile with no reference is an ordinary state — index reports it as
+// reference-too-small and keeps the profile — and eval must say so rather than
+// failing with whatever error the first library to notice happens to raise.
+// Running the binary against such a store produced "transform: profile
+// mismatch" at exit 3: a deviation-internal message for a state the design
+// names. Every eval test above indexes a corpus that DOES produce a reference,
+// which is why none of them saw it.
+func TestEvaluatingAProfileWithNoReferenceRefusesCleanly(t *testing.T) {
+	root := corpusOf(t, 3)
+	requireComposition(t, root, 3, 0, 0)
+	written := indexed(t, indexRequest(root))
+	if written.ReferenceID != "" {
+		t.Fatalf("the fixture produced a reference; it was meant not to")
+	}
+
+	result, err := workflow.Default().Eval(ctx(), evalRequest(root, distractorCorpus(t, 20)))
+	if err != nil {
+		t.Fatalf("Eval: %v — a profile with no reference is a declared state, not a failure", err)
+	}
+	if result.Shippable {
+		t.Error("shippable with no reference to measure against")
+	}
+	if !result.Adverse || result.Reason == "" {
+		t.Errorf("adverse=%v reason=%q; the state has a name and the result should carry it",
+			result.Adverse, result.Reason)
+	}
+	if result.ReferenceID != "" {
+		t.Errorf("named a reference %q that does not exist", result.ReferenceID)
+	}
+}
+
 // Nothing indexed yet is the ordinary first-run state and the same refusal
 // profile makes: an unmet precondition, not a failure.
 func TestEvaluatingWithNoProfileIsARefusalAndNotAFailure(t *testing.T) {
