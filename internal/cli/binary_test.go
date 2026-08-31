@@ -37,7 +37,7 @@ func TestTheBinaryHonoursTheSameContract(t *testing.T) {
 		// machine form: a main that always emitted JSON would pass above.
 		{"a clean draft, rendered for a person", clean, nil, 0, "ok", false},
 		{"a finding, rendered for a person", adverse, nil, 1, "adverse", false},
-		{"an unknown command", clean, []string{"score"}, 2, "", true},
+		{"an unknown command", clean, []string{"publish"}, 2, "", true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "draft.md")

@@ -145,6 +145,8 @@ type ScoredSegment struct {
 }
 type ScoreResult struct {
 	StorePath, Path, ProfileID, ReferenceID, ReleaseID string
+	Selection                                          Selection
+	Available                                          []string
 	Calibrated, Adverse                                bool
 	Refusal                                            string
 	ParagraphsBelowFloor                               int
@@ -405,22 +407,47 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 		return ScoreResult{}, err
 	}
 	if !found {
-		return ScoreResult{Path: request.Path, Refusal: RefusalNoProfile}, nil
+		return ScoreResult{Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
 	}
 	s, err := store.Open(path)
 	if err != nil {
 		return ScoreResult{}, err
 	}
 	defer s.Close()
-	bundle, err := s.LoadScoringBundle(ctx, request.Register)
+	heads, err := s.ProfileHeads(ctx)
+	if err != nil {
+		return ScoreResult{}, err
+	}
+	available := availableRegisters(heads)
+	result := ScoreResult{StorePath: path, Path: request.Path, Available: available}
+	register := request.Register
+	if register == "" {
+		switch len(available) {
+		case 0:
+			result.Selection, result.Refusal = SelectionNoProfile, RefusalNoProfile
+			return result, nil
+		case 1:
+			register, result.Selection = available[0], SelectedSoleHead
+		default:
+			result.Selection = SelectionAmbiguous
+			return result, nil
+		}
+	} else {
+		if _, ok := heads[register]; !ok {
+			result.Selection = SelectionUnknownRegister
+			return result, nil
+		}
+		result.Selection = SelectedExplicit
+	}
+	bundle, err := s.LoadScoringBundle(ctx, register)
 	if errors.Is(err, store.ErrNotFound) {
-		return ScoreResult{StorePath: path, Path: request.Path, Refusal: RefusalNoProfile}, nil
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: SelectionNoProfile, Refusal: RefusalNoProfile}, nil
 	}
 	if errors.Is(err, store.ErrNoReference) {
-		return ScoreResult{StorePath: path, Path: request.Path, Refusal: RefusalNoReference}, nil
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, Refusal: RefusalNoReference}, nil
 	}
 	if errors.Is(err, store.ErrAmbiguousReference) {
-		return ScoreResult{StorePath: path, Path: request.Path, Refusal: RefusalAmbiguousReference}, nil
+		return ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, Refusal: RefusalAmbiguousReference}, nil
 	}
 	if err != nil {
 		return ScoreResult{}, err
@@ -438,7 +465,7 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 	if err != nil {
 		return ScoreResult{}, err
 	}
-	out := ScoreResult{StorePath: path, Path: request.Path, ProfileID: report.ProfileID, ReferenceID: report.ReferenceID, ReleaseID: report.ReleaseID, Calibrated: report.Calibrated, ParagraphsBelowFloor: report.ParagraphsBelowFloor}
+	out := ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, ProfileID: report.ProfileID, ReferenceID: report.ReferenceID, ReleaseID: report.ReleaseID, Calibrated: report.Calibrated, ParagraphsBelowFloor: report.ParagraphsBelowFloor}
 	if !bundle.Calibrated {
 		out.Refusal = RefusalUncalibrated
 	}
@@ -670,11 +697,7 @@ func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileRe
 	if err != nil {
 		return ProfileResult{}, err
 	}
-	available := make([]string, 0, len(heads))
-	for register := range heads {
-		available = append(available, register)
-	}
-	sort.Strings(available)
+	available := availableRegisters(heads)
 	result := ProfileResult{StorePath: path, Available: available}
 	register := request.Register
 	if register == "" {
@@ -703,6 +726,15 @@ func (r *Runner) Profile(ctx context.Context, request ProfileRequest) (ProfileRe
 	result.Evaluated = bundle.Evaluated
 	result.ReferenceID = bundle.Reference.ID
 	return result, nil
+}
+
+func availableRegisters(heads map[string]string) []string {
+	available := make([]string, 0, len(heads))
+	for register := range heads {
+		available = append(available, register)
+	}
+	sort.Strings(available)
+	return available
 }
 
 func discover(startDir, storePath string) (string, bool, error) {

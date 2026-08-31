@@ -562,11 +562,12 @@ The codes partition on one question — *did the tool produce a verdict?*
 
 0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
 rather than a failure. A refusal carries a reason from a closed set — `uncalibrated`,
-`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile` —
+`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile`,
+`no-reference`, `ambiguous-reference` —
 because a script must not have to parse prose to tell them apart.
 
-`no-profile` was added when `cli` was designed. The other four were written before any
-composition root existed and none of them covers the most common first-run state there is:
+`no-profile` was added when `cli` was designed. None of the earlier refusal reasons covers
+the most common first-run state there is:
 a store with no profile head at all, because nothing has been indexed yet. That is an unmet
 precondition, not a user error — naming a register that does not exist is exit 2 and lists
 the ones that do, but asking for a profile before there are any is an ordinary thing to do.

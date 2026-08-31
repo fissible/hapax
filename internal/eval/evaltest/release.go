@@ -41,10 +41,16 @@ func digest(parts ...string) string {
 // are cheap where seven hundred documents would not be.
 func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release {
 	t.Helper()
-	// Distractors cluster by AUTHOR, not by document, so that one prolific
-	// writer cannot dominate the comparison. A pool whose members all carry the
-	// same author name is one cluster however many files it holds — which is
-	// how this fixture first came back with a cap of minus two.
+	// Distractors cluster by AUTHOR when every one carries a name, and by
+	// DOCUMENT when none does. This fixture leaves the author empty on purpose,
+	// for two reasons found the hard way. Giving thirty distractors one name
+	// makes a single cluster and a cap of minus two behind a perfect AUC. And
+	// giving them thirty DIFFERENT names switches the clustering mode, which
+	// store refuses outright — its validation admits ClusterByDocument and
+	// nothing else, so an author-clustered release cannot be persisted at all.
+	//
+	// Which is what hapax produces anyway: its pools carry no author, because
+	// they carry no identifying metadata whatsoever. #63.
 	distance := func(class eval.Class, document, author string, value float64) eval.ClassedDistance {
 		return eval.ClassedDistance{
 			Class: class, Document: document, Author: author,
@@ -65,13 +71,13 @@ func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release 
 	population := func(split corpus.Split) []eval.ClassedDistance {
 		var out []eval.ClassedDistance
 		for i := 0; i < 60; i++ {
-			d := distance(eval.ClassAuthor, digest("author", strconv.Itoa(i)), "the-author", 0.10+float64(i)*0.001)
+			d := distance(eval.ClassAuthor, digest("author", strconv.Itoa(i)), "", 0.10+float64(i)*0.001)
 			d.Distance.Split = split
 			out = append(out, d)
 		}
 		for i := 0; i < 30; i++ {
 			d := distance(eval.ClassDistractor, digest("distractor", strconv.Itoa(i)),
-				"other-writer-"+strconv.Itoa(i), 3.00+float64(i)*0.001)
+				"", 3.00+float64(i)*0.001)
 			d.Distance.Split = split
 			out = append(out, d)
 		}

@@ -800,6 +800,10 @@ func runScore(ctx context.Context, parsed invocation, deps Deps) int {
 		diagnostic(deps.Stderr, err.Error())
 		return 3
 	}
+	if r.Selection == workflow.SelectionAmbiguous || r.Selection == workflow.SelectionUnknownRegister {
+		diagnostic(deps.Stderr, strings.Join(r.Available, ", "))
+		return 2
+	}
 	status, reason, code := StatusOK, Reason(""), 0
 	if r.Refusal != "" {
 		status, code = StatusRefused, 4
