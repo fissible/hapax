@@ -49,6 +49,71 @@ type Set struct {
 	AuthorSegments, DistractorSegments                    int
 }
 
+// SetIdentity declares the immutable populations from which a Set is made.
+type SetIdentity struct {
+	Fitted            profile.Fitted
+	AuthorSnapshotID  string
+	AuthorMembers     []string
+	DistractorPoolID  string
+	DistractorMembers []string
+}
+
+// NewSet validates caller-supplied held-out segments under the same rules as
+// Extract, plus membership checks required when the segments were not read here.
+func NewSet(declared SetIdentity, author, distractor []Segment, req Requirements) (*Set, error) {
+	if err := validateRequirements(req); err != nil {
+		return nil, err
+	}
+	if declared.Fitted.ID == "" || declared.AuthorSnapshotID == "" || declared.DistractorPoolID == "" {
+		return nil, ErrMissingInput
+	}
+	if declared.Fitted.Unit != profile.UnitParagraph || declared.Fitted.FeatureSetVersion != features.SetVersion || declared.Fitted.FeatureManifestDigest != features.ManifestDigest() || declared.Fitted.MinParagraphLexicalTokens <= 0 || len(declared.Fitted.Stats) == 0 {
+		return nil, ErrMissingInput
+	}
+	authors, err := memberSet(declared.AuthorMembers)
+	if err != nil {
+		return nil, err
+	}
+	distractors, err := memberSet(declared.DistractorMembers)
+	if err != nil {
+		return nil, err
+	}
+	if len(author) < req.MinAuthorSegments {
+		return nil, fmt.Errorf("%w: got %d, need %d", ErrTooFewAuthorSegments, len(author), req.MinAuthorSegments)
+	}
+	if len(distractor) < req.MinDistractorSegments {
+		return nil, fmt.Errorf("%w: got %d, need %d", ErrTooFewDistractorSegments, len(distractor), req.MinDistractorSegments)
+	}
+	for _, s := range author {
+		if s.Class != ClassAuthor || s.DocumentHash == "" || !authors[s.DocumentHash] {
+			return nil, ErrMissingInput
+		}
+	}
+	for _, s := range distractor {
+		if s.Class != ClassDistractor || s.DocumentHash == "" || !distractors[s.DocumentHash] {
+			return nil, ErrMissingInput
+		}
+	}
+	all := append(append([]Segment(nil), author...), distractor...)
+	set := &Set{ProfileID: declared.Fitted.ID, AuthorSnapshotID: declared.AuthorSnapshotID, DistractorSnapshotID: declared.DistractorPoolID, Split: req.Split, FeatureSetVersion: declared.Fitted.FeatureSetVersion, FeatureManifestDigest: declared.Fitted.FeatureManifestDigest, MinParagraphLexicalTokens: declared.Fitted.MinParagraphLexicalTokens, Segments: all, AuthorSegments: len(author), DistractorSegments: len(distractor)}
+	set.ID = identity.HashInputs(map[string]string{"author-snapshot-id": set.AuthorSnapshotID, "distractor-snapshot-id": set.DistractorSnapshotID, "feature-manifest-digest": set.FeatureManifestDigest, "feature-set-version": strconv.Itoa(set.FeatureSetVersion), "min-paragraph-lexical-tokens": strconv.Itoa(set.MinParagraphLexicalTokens), "profile-id": set.ProfileID, "split": string(req.Split)})
+	return set, nil
+}
+
+func memberSet(members []string) (map[string]bool, error) {
+	if len(members) == 0 {
+		return nil, ErrMissingInput
+	}
+	out := make(map[string]bool, len(members))
+	for _, member := range members {
+		if member == "" || out[member] {
+			return nil, ErrMissingInput
+		}
+		out[member] = true
+	}
+	return out, nil
+}
+
 var (
 	ErrMissingInput             = errors.New("eval missing input")
 	ErrInvalidRequirements      = errors.New("eval invalid requirements")
@@ -99,24 +164,22 @@ func Extract(authorRoot string, author *corpus.Snapshot, distractorRoot string, 
 		return nil, fmt.Errorf("%w: got %d, need %d", ErrTooFewDistractorSegments, len(distractorSegments), req.MinDistractorSegments)
 	}
 
-	all := make([]Segment, 0, len(authorSegments)+len(distractorSegments))
-	all = append(all, authorSegments...)
-	all = append(all, distractorSegments...)
-	set := &Set{
-		ProfileID: prof.ID, AuthorSnapshotID: author.ID, DistractorSnapshotID: distractor.ID,
-		Split: req.Split, FeatureSetVersion: prof.FeatureSetVersion,
-		FeatureManifestDigest:     prof.FeatureManifestDigest,
-		MinParagraphLexicalTokens: prof.Requirements.MinParagraphLexicalTokens,
-		Segments:                  all, AuthorSegments: len(authorSegments), DistractorSegments: len(distractorSegments),
+	fitted, err := prof.Fitted()
+	if err != nil {
+		return nil, err
 	}
-	set.ID = identity.HashInputs(map[string]string{
-		"author-snapshot-id": author.ID, "distractor-snapshot-id": distractor.ID,
-		"feature-manifest-digest":      set.FeatureManifestDigest,
-		"feature-set-version":          strconv.Itoa(set.FeatureSetVersion),
-		"min-paragraph-lexical-tokens": strconv.Itoa(set.MinParagraphLexicalTokens),
-		"profile-id":                   prof.ID, "split": string(req.Split),
-	})
-	return set, nil
+	authorMembers, distractorMembers := []string{}, []string{}
+	for _, d := range author.Eligible() {
+		if d.Split == req.Split {
+			authorMembers = append(authorMembers, d.ContentHash)
+		}
+	}
+	for _, d := range distractor.Eligible() {
+		if d.Split == req.Split {
+			distractorMembers = append(distractorMembers, d.ContentHash)
+		}
+	}
+	return NewSet(SetIdentity{Fitted: fitted, AuthorSnapshotID: author.ID, AuthorMembers: authorMembers, DistractorPoolID: distractor.ID, DistractorMembers: distractorMembers}, authorSegments, distractorSegments, req)
 }
 
 func validateRequirements(req Requirements) error {

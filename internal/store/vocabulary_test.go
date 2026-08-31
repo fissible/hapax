@@ -218,7 +218,8 @@ var textualColumnGrammars = map[string]string{
 	// The distractor pool holds identities and digests and nothing else, so
 	// every textual column of it is hex. A column that accepted arbitrary text
 	// is where a filename would eventually go.
-	"distractor_pool.id": "hex", "distractor_pool.policy_digest": "hex",
+	"eval_result.distractor_pool_id": "hex",
+	"distractor_pool.id":             "hex", "distractor_pool.policy_digest": "hex",
 	"distractor_pool.created_at":          "time",
 	"distractor_pool_member.pool_id":      "hex",
 	"distractor_pool_member.content_hash": "hex",

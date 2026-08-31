@@ -2,6 +2,8 @@ package store_test
 
 import (
 	"errors"
+	"reflect"
+	"sort"
 	"strings"
 	"testing"
 
@@ -38,10 +40,13 @@ func TestAPoolIsMembershipWithoutProvenance(t *testing.T) {
 	if len(read.ContentHashes) != len(pool.ContentHashes) {
 		t.Fatalf("%d hashes came back, %d went in", len(read.ContentHashes), len(pool.ContentHashes))
 	}
-	for i, hash := range pool.ContentHashes {
-		if read.ContentHashes[i] != hash {
-			t.Errorf("hash %d = %q, want %q", i, read.ContentHashes[i], hash)
-		}
+	// Compared as a SET, sorted: the order a pool reads back in is its own and
+	// is asserted separately below. Requiring the caller's order here as well
+	// would be two contracts for one method.
+	want := append([]string(nil), pool.ContentHashes...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(read.ContentHashes, want) {
+		t.Errorf("membership = %v, want %v", read.ContentHashes, want)
 	}
 }
 

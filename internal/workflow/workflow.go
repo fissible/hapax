@@ -12,8 +12,12 @@ import (
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
+	"github.com/fissible/hapax/internal/eval"
+	"github.com/fissible/hapax/internal/features"
+	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/ingest"
 	"github.com/fissible/hapax/internal/profile"
+	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/store"
 )
 
@@ -111,12 +115,253 @@ type ProfileResult struct {
 	Evaluated   bool
 	Profile     StoredProfile
 }
+type EvalRequest struct{ StorePath, Register, DistractorRoot string }
+type DiscriminationReport struct {
+	AUC, LowerBound, Floor float64
+	Passes                 bool
+	Reason                 string
+}
+type BandReport struct {
+	Band, Claims      string
+	Target, ErrorRate float64
+	Emitted           bool
+	Reason            string
+}
+type CalibrationReport struct {
+	Calibrated bool
+	Reason     string
+	Bands      []BandReport
+}
+type EvalResult struct {
+	StorePath                                             string
+	Selection                                             Selection
+	ReleaseID, ProfileID, ReferenceID, DistractorPoolID   string
+	DistractorMembers, AuthorSegments, DistractorSegments int
+	Split                                                 string
+	Shippable, Adverse                                    bool
+	Reason                                                string
+	Discrimination                                        DiscriminationReport
+	Calibration                                           CalibrationReport
+}
 
 // Service is the sole execution seam required by the CLI.
 type Service interface {
 	Index(context.Context, IndexRequest) (IndexResult, error)
 	Profile(context.Context, ProfileRequest) (ProfileResult, error)
+	Eval(context.Context, EvalRequest) (EvalResult, error)
 }
+
+func fittedFrom(p store.Profile) (profile.Fitted, error) {
+	f := profile.Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion, FeatureManifestDigest: p.ManifestDigest, MinParagraphLexicalTokens: p.MinParagraphLexicalTokens, Stats: make([]profile.Stats, 0, len(p.Stats))}
+	for _, s := range p.Stats {
+		f.Stats = append(f.Stats, profile.Stats{Feature: s.Feature, N: s.N, Mean: s.Mean, Variance: s.Variance, Defined: s.Defined, VarianceDefined: s.VarianceDefined, MinObservations: s.MinObservations})
+	}
+	if f.ID == "" || f.Unit != profile.UnitParagraph || f.FeatureSetVersion != features.SetVersion || f.FeatureManifestDigest != features.ManifestDigest() || f.MinParagraphLexicalTokens <= 0 || len(f.Stats) == 0 {
+		return profile.Fitted{}, errors.New("stored profile cannot score")
+	}
+	return f, nil
+}
+
+func heldOutSegments(ctx context.Context, s *store.Store, snapshotID string, fitted profile.Fitted) ([]eval.Segment, error) {
+	return storedSegments(ctx, s, snapshotID, corpus.Test, eval.ClassAuthor, fitted)
+}
+func storedSegments(ctx context.Context, s *store.Store, snapshotID string, split corpus.Split, class eval.Class, fitted profile.Fitted) ([]eval.Segment, error) {
+	w, err := s.Snapshot(ctx, snapshotID)
+	if err != nil {
+		return nil, err
+	}
+	var out []eval.Segment
+	for _, d := range w.Documents {
+		if d.Split != split {
+			continue
+		}
+		index := 0
+		for _, n := range d.Nodes {
+			if n.Vector == nil {
+				continue
+			}
+			out = append(out, eval.Segment{Class: class, DocumentHash: d.ContentHash, DocumentPath: d.Path, Index: index, LexicalTokens: n.Vector.LexicalTokens, Vector: *n.Vector})
+			index++
+		}
+	}
+	return out, nil
+}
+
+func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, error) {
+	if request.StorePath == "" {
+		return EvalResult{}, errors.New("eval store path is required")
+	}
+	s, err := store.Open(request.StorePath)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	defer s.Close()
+	bundle, err := s.LoadProfileBundle(ctx, request.Register)
+	if errors.Is(err, store.ErrNotFound) {
+		return EvalResult{StorePath: request.StorePath, Selection: SelectionNoProfile}, nil
+	}
+	if err != nil {
+		return EvalResult{}, err
+	}
+	fitted, err := fittedFrom(bundle.Profile)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	result := EvalResult{StorePath: request.StorePath, Selection: SelectedExplicit, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, Split: string(corpus.Test)}
+	if request.DistractorRoot == "" {
+		result.Adverse = true
+		result.Reason = "uncalibrated"
+		return result, nil
+	}
+	policy := corpus.DefaultPolicy(bundle.Profile.Register)
+	policy.Role = corpus.RoleDistractor
+	dsnap, err := corpus.Walk(request.DistractorRoot, policy)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	var hashes []string
+	for _, d := range dsnap.Eligible() {
+		hashes = append(hashes, d.ContentHash)
+	}
+	pool := store.DistractorPool{PolicyDigest: identity.HashInputs(dsnap.IdentityInputs()), ContentHashes: hashes}
+	pool.ID = store.DistractorPoolID(pool.PolicyDigest, hashes)
+	if err = s.PutDistractorPool(ctx, pool); err != nil {
+		return EvalResult{}, err
+	}
+	result.DistractorPoolID, result.DistractorMembers = pool.ID, len(hashes)
+	authorTest, err := heldOutSegments(ctx, s, bundle.Profile.SnapshotID, fitted)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	distractorTest, err := diskSegments(request.DistractorRoot, dsnap, corpus.Test, eval.ClassDistractor, fitted)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	authorMembers := hashesForStored(ctx, s, bundle.Profile.SnapshotID, corpus.Test)
+	set, err := eval.NewSet(eval.SetIdentity{Fitted: fitted, AuthorSnapshotID: bundle.Profile.SnapshotID, AuthorMembers: authorMembers, DistractorPoolID: pool.ID, DistractorMembers: hashes}, authorTest, distractorTest, eval.Requirements{Split: corpus.Test, MinAuthorSegments: 1, MinDistractorSegments: 1})
+	if err != nil {
+		return EvalResult{}, err
+	}
+	test, err := distances(set.Segments, fitted, &bundle.Reference, corpus.Test)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	authorCal, err := storedSegments(ctx, s, bundle.Profile.SnapshotID, corpus.Calibrate, eval.ClassAuthor, fitted)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	distractorCal, err := diskSegments(request.DistractorRoot, dsnap, corpus.Calibrate, eval.ClassDistractor, fitted)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	calSeg := append(authorCal, distractorCal...)
+	calibrationDistances, err := distances(calSeg, fitted, &bundle.Reference, corpus.Calibrate)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	threshold, err := eval.Calibrate(calibrationDistances, eval.Source{Cohort: bundle.Profile.SnapshotID, DistractorPool: pool.ID}, eval.DefaultTargets())
+	if err != nil {
+		return EvalResult{}, err
+	}
+	calibration, err := threshold.CalibrateBands(test, eval.DefaultBandFloor())
+	if err != nil {
+		return EvalResult{}, err
+	}
+	discrimination, err := eval.Discriminate(test, eval.DefaultDiscrimination())
+	if err != nil {
+		return EvalResult{}, err
+	}
+	release, err := eval.NewRelease(discrimination, calibration)
+	if err != nil {
+		return EvalResult{}, err
+	}
+	if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: threshold.PopulationID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: threshold.IntervalLow, IntervalHigh: threshold.IntervalHigh, Verdict: func() eval.ThresholdVerdict {
+		if threshold.Separated {
+			return eval.VerdictSeparated
+		}
+		return eval.VerdictPairIncompatible
+	}()}); err != nil {
+		return EvalResult{}, err
+	}
+	stored := store.EvalResult{ID: release.ID, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, DistractorPoolID: pool.ID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason), Discrimination: storeDiscrimination(discrimination), Calibration: storeCalibration(calibration)}
+	if err = s.PutEvalResult(ctx, stored, store.HeadPolicy(release.Shippable)); err != nil {
+		return EvalResult{}, err
+	}
+	result.ReleaseID, result.Shippable, result.Adverse, result.Reason = release.ID, release.Shippable, !release.Shippable, release.Reason
+	result.AuthorSegments, result.DistractorSegments = set.AuthorSegments, set.DistractorSegments
+	result.Discrimination = DiscriminationReport{AUC: discrimination.AUC, LowerBound: discrimination.LowerBound, Floor: discrimination.Spec.Floor, Passes: discrimination.Discriminates, Reason: discrimination.Reason}
+	result.Calibration = calibrationReport(calibration)
+	return result, nil
+}
+
+func hashesForStored(ctx context.Context, s *store.Store, id string, split corpus.Split) []string {
+	w, _ := s.Snapshot(ctx, id)
+	var out []string
+	for _, d := range w.Documents {
+		if d.Split == split {
+			out = append(out, d.ContentHash)
+		}
+	}
+	return out
+}
+func diskSegments(root string, snap *corpus.Snapshot, split corpus.Split, class eval.Class, f profile.Fitted) ([]eval.Segment, error) {
+	var out []eval.Segment
+	for _, d := range snap.Eligible() {
+		if d.Split != split {
+			continue
+		}
+		doc, err := snapshot.ReadVerified(root, d.Path, d.ContentHash)
+		if err != nil {
+			return nil, err
+		}
+		p, err := profile.ParagraphVectors(doc, f.MinParagraphLexicalTokens)
+		if err != nil {
+			return nil, err
+		}
+		for i, v := range p.Vectors {
+			out = append(out, eval.Segment{Class: class, DocumentHash: d.ContentHash, DocumentPath: d.Path, Index: i, LexicalTokens: v.LexicalTokens, Vector: v})
+		}
+	}
+	return out, nil
+}
+func distances(segments []eval.Segment, f profile.Fitted, ref *store.Reference, split corpus.Split) ([]eval.ClassedDistance, error) {
+	r := &deviation.Reference{ID: ref.ID, ProfileID: ref.ProfileID, FeatureManifestDigest: ref.ManifestDigest, Split: ref.Split, MinSegments: ref.MinSegments, Values: ref.Values}
+	var out []eval.ClassedDistance
+	for _, s := range segments {
+		z, err := deviation.Standardize(s.Vector, f, split)
+		if err != nil {
+			return nil, err
+		}
+		d, err := r.Transform(z)
+		if err != nil {
+			return nil, err
+		}
+		x, err := d.Distance()
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, eval.ClassedDistance{Class: s.Class, Document: s.DocumentHash, Distance: x})
+	}
+	return out, nil
+}
+func storeDiscrimination(x eval.Discrimination) store.Discrimination {
+	return store.Discrimination{ID: x.ID, PopulationID: x.PopulationID, Binding: store.Binding{ManifestDigest: x.FeatureManifestDigest, WeightScheme: x.WeightScheme, DistanceAlgorithm: x.DistanceAlgorithm, ScoredTiers: x.ScoredTiers}, Split: x.Split, Algorithm: x.Algorithm, Clustering: x.Clustering, Floor: x.Spec.Floor, Confidence: x.Spec.Confidence, Resamples: x.Spec.Resamples, Seed: x.Spec.Seed, AUC: x.AUC, LowerBound: x.LowerBound, Cap: x.Cap, AuthorSegments: x.AuthorSegments, DistractorSegments: x.DistractorSegments, AuthorClusters: x.AuthorClusters, DistractorClusters: x.DistractorClusters, MinClusters: x.MinClusters, Discriminates: x.Discriminates, Reason: x.Reason}
+}
+func storeCalibration(x eval.Calibration) store.Calibration {
+	y := store.Calibration{ID: x.ID, ThresholdsID: x.ThresholdsID, PopulationID: x.PopulationID, Binding: store.Binding{ManifestDigest: x.FeatureManifestDigest, WeightScheme: x.WeightScheme, DistanceAlgorithm: x.DistanceAlgorithm, ScoredTiers: x.ScoredTiers}, Split: x.Split, Algorithm: x.Algorithm, Low: x.Low, High: x.High, Confidence: x.Floor.Confidence, Resamples: x.Floor.Resamples, Seed: x.Floor.Seed, Calibrated: x.Calibrated, Reason: x.Reason}
+	for _, b := range x.Bands {
+		y.Bands = append(y.Bands, store.BandReport{Band: b.Band, Claims: b.Claims, Target: b.Target, ErrorRate: b.ErrorRate, ErrorBound: b.ErrorBound, ClassSegments: b.ClassSegments, ClassClusters: b.ClassClusters, MinClassClusters: b.MinClassClusters, AuthorSegments: b.AuthorSegments, DistractorSegments: b.DistractorSegments, Emitted: b.Emitted, Reason: b.Reason})
+	}
+	return y
+}
+func calibrationReport(x eval.Calibration) CalibrationReport {
+	r := CalibrationReport{Calibrated: x.Calibrated, Reason: x.Reason}
+	for _, b := range x.Bands {
+		r.Bands = append(r.Bands, BandReport{Band: string(b.Band), Claims: string(b.Claims), Target: b.Target, ErrorRate: b.ErrorRate, Emitted: b.Emitted, Reason: b.Reason})
+	}
+	return r
+}
+
 type Runner struct {
 	Requirements profile.Requirements
 	MinSegments  int

@@ -78,6 +78,7 @@ var declaredSchema = map[string][]string{
 		"calibration_low", "calibration_high",
 		"calibration_confidence", "calibration_resamples", "calibration_seed",
 		"calibrated", "calibration_reason",
+		"distractor_pool_id",
 	},
 	"calibration_band": {
 		"eval_result_id", "band", "claims", "target", "error_rate", "error_bound",
@@ -422,6 +423,10 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				"discrimination_clustering", "discrimination_reason", "min_clusters",
 				"calibration_id", "calibration_thresholds_id", "calibration_population_id",
 				"calibration_split", "calibration_reason", "calibrated",
+				// Nullable: an uncalibrated release measured against no pool.
+				// Constrained all the same, so "no pool" is NULL rather than
+				// whatever a writer happens to put there.
+				"distractor_pool_id",
 			},
 			"calibration_band": {
 				"eval_result_id", "band", "claims", "reason",
