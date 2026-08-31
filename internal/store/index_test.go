@@ -58,9 +58,8 @@ func TestAStoredLanguageThatIsNotAVerdictIsCorrupt(t *testing.T) {
 	s := newStore(t)
 	write := snapshotWrite(document("essays/a.md", hashA, node(0, 0, 4)))
 	mustPutSnapshot(t, s, write)
-	if _, err := openRaw(t, s).Exec("UPDATE document SET language = 'en'"); err == nil {
-		// The schema refuses it, which is the stronger answer.
-		return
+	if _, err := openRaw(t, s).Exec("UPDATE document SET language = 'en'"); err != nil {
+		return // The schema refused it, which is the stronger answer.
 	}
 	if _, err := s.Snapshot(ctx(), write.ID); !errors.Is(err, store.ErrCorrupt) {
 		t.Errorf("error = %v, want ErrCorrupt", err)
@@ -141,8 +140,8 @@ func TestAStoredReadinessThatContradictsItselfIsCorrupt(t *testing.T) {
 	prof.ProductionReady, prof.NotReadyReason = true, ""
 	mustPutProfile(t, s, prof)
 
-	if _, err := openRaw(t, s).Exec("UPDATE profile SET production_ready = 0"); err == nil {
-		return // refused by the schema, which is stronger
+	if _, err := openRaw(t, s).Exec("UPDATE profile SET production_ready = 0"); err != nil {
+		return // The schema refused it, which is stronger.
 	}
 	if _, err := s.LoadProfile(ctx(), prof.ID); !errors.Is(err, store.ErrCorrupt) {
 		t.Errorf("error = %v, want ErrCorrupt", err)
@@ -173,7 +172,18 @@ func indexWrite(t *testing.T, s *store.Store, mode store.IndexMode) store.IndexW
 	)
 	prof := profileFixture(write.ID)
 	ref := referenceFixture(prof.ID)
-	return store.IndexWrite{Mode: mode, Snapshot: write, Profile: prof, Reference: ref}
+	// Exactly what the mode declares and nothing else — carrying a part the
+	// mode does not name is the thing modes exist to refuse, and a fixture
+	// that always carried all three would make the two tests below
+	// contradict each other.
+	out := store.IndexWrite{Mode: mode, Snapshot: write}
+	switch mode {
+	case store.IndexProfile:
+		out.Profile = prof
+	case store.IndexProfileAndReference:
+		out.Profile, out.Reference = prof, ref
+	}
+	return out
 }
 
 // The three modes are the three things an index can commit, declared rather
@@ -225,12 +235,16 @@ func TestIndexRefusesPartsItsModeDoesNotDeclare(t *testing.T) {
 	}{
 		{"snapshot-only carrying a profile", func(w *store.IndexWrite) {
 			w.Mode = store.IndexSnapshotOnly
+			// Profile and Reference are still populated from the fixture below.
 		}},
 		{"profile mode carrying a reference", func(w *store.IndexWrite) {
 			w.Mode = store.IndexProfile
 		}},
 		{"profile-and-reference with no reference", func(w *store.IndexWrite) {
 			w.Reference = store.Reference{}
+		}},
+		{"profile mode with no profile", func(w *store.IndexWrite) {
+			w.Mode, w.Profile, w.Reference = store.IndexProfile, store.Profile{}, store.Reference{}
 		}},
 		{"an undeclared mode", func(w *store.IndexWrite) { w.Mode = "everything" }},
 	} {

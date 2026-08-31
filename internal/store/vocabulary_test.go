@@ -86,6 +86,12 @@ func enumUpdate(table, column, value string) string {
 			return set(column+" = ''", "accepted = 0", "rejection = 'not-improved'")
 		}
 		return set(column + " = " + quoted)
+	case "profile.not_ready_reason":
+		// Readiness is coupled to its reason, so the companion moves with it.
+		if value == "" {
+			return set("not_ready_reason = ''", "production_ready = 1")
+		}
+		return set("not_ready_reason = "+quoted, "production_ready = 0")
 	case "calibration_band.claims":
 		// Which class a band claims is fixed by the band, so the VALUE chooses
 		// the row rather than any row taking any value.
@@ -483,6 +489,10 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			_, err := s.Snapshot(ctx(), ids.Snapshot)
 			return err
 		},
+		"document.language": func(s *store.Store, ids seededIDs) error {
+			_, err := s.Snapshot(ctx(), ids.Snapshot)
+			return err
+		},
 		"node.kind": func(s *store.Store, ids seededIDs) error {
 			_, err := s.Snapshot(ctx(), ids.Snapshot)
 			return err
@@ -500,6 +510,10 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			return err
 		},
 		"profile.variance_convention": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadProfile(ctx(), ids.Profile)
+			return err
+		},
+		"profile.not_ready_reason": func(s *store.Store, ids seededIDs) error {
 			_, err := s.LoadProfile(ctx(), ids.Profile)
 			return err
 		},
