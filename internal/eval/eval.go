@@ -130,9 +130,6 @@ var (
 // Extract produces one complete held-out population. It deliberately builds
 // locally until every guard has passed so callers never receive partial data.
 func Extract(authorRoot string, author *corpus.Snapshot, distractorRoot string, distractor *corpus.Snapshot, prof *profile.Profile, req Requirements) (*Set, error) {
-	if err := validateRequirements(req); err != nil {
-		return nil, err
-	}
 	if author == nil || distractor == nil || prof == nil {
 		return nil, ErrMissingInput
 	}
@@ -157,13 +154,6 @@ func Extract(authorRoot string, author *corpus.Snapshot, distractorRoot string, 
 	if err != nil {
 		return nil, err
 	}
-	if len(authorSegments) < req.MinAuthorSegments {
-		return nil, fmt.Errorf("%w: got %d, need %d", ErrTooFewAuthorSegments, len(authorSegments), req.MinAuthorSegments)
-	}
-	if len(distractorSegments) < req.MinDistractorSegments {
-		return nil, fmt.Errorf("%w: got %d, need %d", ErrTooFewDistractorSegments, len(distractorSegments), req.MinDistractorSegments)
-	}
-
 	fitted, err := prof.Fitted()
 	if err != nil {
 		return nil, err

@@ -103,30 +103,32 @@ type Reference struct {
 	Values                                          map[features.ID][]float64
 }
 
+// standardizeInput constrains Standardize to its scoring projection and the
+// legacy build artifact. New callers must pass Fitted; Profile remains only so
+// established callers can migrate without changing their scoring semantics.
+type standardizeInput interface {
+	profile.Fitted | *profile.Profile
+}
+
 // Standardize applies the length-aware standardization to every manifest feature.
-func Standardize(v features.Vector, p any, split corpus.Split) (Standardization, error) {
+func Standardize[T standardizeInput](v features.Vector, p T, split corpus.Split) (Standardization, error) {
 	if !knownSplit(split) {
 		return Standardization{}, fmt.Errorf("standardize: %w: %q", ErrUnknownSplit, split)
 	}
 	var fitted profile.Fitted
-	switch x := p.(type) {
+	switch x := any(p).(type) {
 	case profile.Fitted:
 		fitted = x
-	case *profile.Profile: // compatibility for the pre-projection callers.
+	case *profile.Profile:
 		if x == nil {
 			return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)
 		}
-		// Keep the legacy entry point's validation at this boundary. Profile.Fitted
-		// deliberately rejects incomplete build provenance, which a standardization
-		// does not consume; callers that have a persisted profile use Fitted.
 		fitted = profile.Fitted{
 			ID: x.ID, Unit: x.Unit, FeatureSetVersion: x.FeatureSetVersion,
 			FeatureManifestDigest:     x.FeatureManifestDigest,
 			MinParagraphLexicalTokens: x.Requirements.MinParagraphLexicalTokens,
 			Stats:                     append([]profile.Stats(nil), x.Stats...),
 		}
-	default:
-		return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)
 	}
 	if fitted.Unit != profile.UnitParagraph {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrProfileUnit)

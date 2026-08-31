@@ -236,22 +236,36 @@ func validProfileResult(status Status, reason Reason, envelopeProfile *string, r
 }
 
 func validEvalResult(status Status, reason Reason, result EvalResult) error {
-	if result.Shippable && (status != StatusOK || result.Reason != "") {
-		return errors.New("incoherent eval result")
-	}
-	if !result.Shippable && status == StatusOK {
-		return errors.New("incoherent eval result")
-	}
 	if status == StatusRefused {
-		if reason != ReasonNoProfile || result.ReleaseID != nil || result.ProfileID != nil || result.ReferenceID != nil || result.DistractorPoolID != nil || result.Discrimination != nil || result.Calibration != nil {
+		if reason != ReasonNoProfile || result.Reason != "" || result.ReleaseID != nil || result.ProfileID != nil || result.ReferenceID != nil || result.DistractorPoolID != nil || result.Discrimination != nil || result.Calibration != nil {
 			return errors.New("incoherent eval refusal")
 		}
 		return nil
 	}
-	if reason != "" || result.ProfileID == nil || result.ReferenceID == nil || result.Discrimination == nil || result.Calibration == nil {
+	if reason != "" || result.ProfileID == nil || !contains(workflow.EvalReasons(), result.Reason) {
+		return errors.New("incoherent eval result")
+	}
+	if result.Reason == workflow.EvalReasonNoReference {
+		if result.Shippable || status != StatusAdverse || result.ReferenceID != nil || result.ReleaseID != nil || result.DistractorPoolID != nil || !emptyEvalReports(result) {
+			return errors.New("incoherent eval result")
+		}
+		return nil
+	}
+	if result.Reason == "uncalibrated" {
+		if result.Shippable || status != StatusAdverse || result.ReferenceID == nil || result.ReleaseID != nil || result.DistractorPoolID != nil || !emptyEvalReports(result) {
+			return errors.New("incoherent eval result")
+		}
+		return nil
+	}
+	if result.ReferenceID == nil || result.ReleaseID == nil || result.DistractorPoolID == nil || result.Discrimination == nil || result.Calibration == nil || result.Shippable != (status == StatusOK) || result.Shippable != (result.Reason == "") {
 		return errors.New("incoherent eval result")
 	}
 	return nil
+}
+
+func emptyEvalReports(result EvalResult) bool {
+	return result.Discrimination != nil && *result.Discrimination == (EvalDiscrimination{}) &&
+		result.Calibration != nil && !result.Calibration.Calibrated && result.Calibration.Reason == "" && len(result.Calibration.Bands) == 0
 }
 
 func validAvailableProfiles(available []string) bool {

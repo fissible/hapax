@@ -116,6 +116,20 @@ type ProfileResult struct {
 	Profile     StoredProfile
 }
 type EvalRequest struct{ StartDir, StorePath, Register, DistractorRoot string }
+
+// EvalReasonNoReference names a completed evaluation that cannot measure a
+// profile because indexing retained it without a reference distribution.
+const EvalReasonNoReference = "no-reference"
+
+// EvalReasons is the closed vocabulary for completed evaluation outcomes.
+// Release reasons are persisted; no-reference is deliberately not, because no
+// release exists for that outcome.
+var evalReasons = []string{string(eval.ReleaseReasonNone), string(eval.ReleaseReasonDiscriminationFailed), string(eval.ReleaseReasonUncalibrated), EvalReasonNoReference}
+
+func EvalReasons() []string {
+	return append([]string(nil), evalReasons...)
+}
+
 type DiscriminationReport struct {
 	AUC, LowerBound, Floor, Cap                     float64
 	AuthorClusters, DistractorClusters, MinClusters int
@@ -214,6 +228,11 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 		return EvalResult{}, err
 	}
 	result := EvalResult{StorePath: path, Selection: SelectedExplicit, ProfileID: fitted.ID, ReferenceID: bundle.Reference.ID, Split: string(corpus.Test)}
+	if bundle.Reference.ID == "" {
+		result.Adverse = true
+		result.Reason = EvalReasonNoReference
+		return result, nil
+	}
 	if request.DistractorRoot == "" {
 		result.Adverse = true
 		result.Reason = "uncalibrated"
@@ -246,7 +265,10 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 	if err != nil {
 		return EvalResult{}, err
 	}
-	authorMembers := hashesForStored(ctx, s, bundle.Profile.SnapshotID, corpus.Test)
+	authorMembers, err := hashesForStored(ctx, s, bundle.Profile.SnapshotID, corpus.Test)
+	if err != nil {
+		return EvalResult{}, err
+	}
 	set, err := eval.NewSet(eval.SetIdentity{Fitted: fitted, AuthorSnapshotID: bundle.Profile.SnapshotID, AuthorMembers: authorMembers, DistractorPoolID: pool.ID, DistractorMembers: hashes}, authorTest, distractorTest, eval.Requirements{Split: corpus.Test, MinAuthorSegments: 1, MinDistractorSegments: 1})
 	if err != nil {
 		return EvalResult{}, err
@@ -345,15 +367,18 @@ func uncalibratedCalibration(discrimination eval.Discrimination, poolID string) 
 	return calibration
 }
 
-func hashesForStored(ctx context.Context, s *store.Store, id string, split corpus.Split) []string {
-	w, _ := s.Snapshot(ctx, id)
+func hashesForStored(ctx context.Context, s *store.Store, id string, split corpus.Split) ([]string, error) {
+	w, err := s.Snapshot(ctx, id)
+	if err != nil {
+		return nil, err
+	}
 	var out []string
 	for _, d := range w.Documents {
 		if d.Split == split {
 			out = append(out, d.ContentHash)
 		}
 	}
-	return out
+	return out, nil
 }
 func diskSegments(root string, snap *corpus.Snapshot, class eval.Class, f profile.Fitted) ([]eval.Segment, error) {
 	var out []eval.Segment
