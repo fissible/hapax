@@ -103,29 +103,48 @@ type Reference struct {
 	Values                                          map[features.ID][]float64
 }
 
+// standardizeInput constrains Standardize to its scoring projection and the
+// legacy build artifact. New callers must pass Fitted; Profile remains only so
+// established callers can migrate without changing their scoring semantics.
+type standardizeInput interface {
+	profile.Fitted | *profile.Profile
+}
+
 // Standardize applies the length-aware standardization to every manifest feature.
-func Standardize(v features.Vector, p *profile.Profile, split corpus.Split) (Standardization, error) {
+func Standardize[T standardizeInput](v features.Vector, p T, split corpus.Split) (Standardization, error) {
 	if !knownSplit(split) {
 		return Standardization{}, fmt.Errorf("standardize: %w: %q", ErrUnknownSplit, split)
 	}
-	if p == nil {
-		return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)
+	var fitted profile.Fitted
+	switch x := any(p).(type) {
+	case profile.Fitted:
+		fitted = x
+	case *profile.Profile:
+		if x == nil {
+			return Standardization{}, fmt.Errorf("standardize: %w", ErrMissingInput)
+		}
+		fitted = profile.Fitted{
+			ID: x.ID, Unit: x.Unit, FeatureSetVersion: x.FeatureSetVersion,
+			FeatureManifestDigest:     x.FeatureManifestDigest,
+			MinParagraphLexicalTokens: x.Requirements.MinParagraphLexicalTokens,
+			Stats:                     append([]profile.Stats(nil), x.Stats...),
+		}
 	}
-	if p.Unit != profile.UnitParagraph {
+	if fitted.Unit != profile.UnitParagraph {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrProfileUnit)
 	}
-	if v.SetVersion != features.SetVersion || p.FeatureSetVersion != features.SetVersion || p.FeatureManifestDigest != features.ManifestDigest() {
+	if v.SetVersion != features.SetVersion || fitted.FeatureSetVersion != features.SetVersion || fitted.FeatureManifestDigest != features.ManifestDigest() {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
 	vector, ok := manifestMap(v.Values, func(value features.FeatureValue) features.ID { return value.ID }, features.Definitions())
 	if !ok {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
-	stats, ok := manifestMap(p.Stats, func(stat profile.Stats) features.ID { return stat.Feature }, features.Definitions())
+	stats, ok := manifestMap(fitted.Stats, func(stat profile.Stats) features.ID { return stat.Feature }, features.Definitions())
 	if !ok {
 		return Standardization{}, fmt.Errorf("standardize: %w", ErrManifestMismatch)
 	}
-	out := Standardization{ProfileID: p.ID, FeatureManifestDigest: p.FeatureManifestDigest, Split: split, LexicalTokens: v.LexicalTokens, Values: make([]Standardized, 0, len(features.Definitions()))}
+	out := Standardization{ProfileID: fitted.ID, FeatureManifestDigest: fitted.FeatureManifestDigest, Split: split, LexicalTokens: v.LexicalTokens, Values: make([]Standardized, 0, len(features.Definitions()))}
 	for _, definition := range features.Definitions() {
 		fv, st := vector[definition.ID], stats[definition.ID]
 		value := Standardized{Feature: definition.ID}

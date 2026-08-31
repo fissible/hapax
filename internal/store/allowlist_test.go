@@ -78,15 +78,21 @@ var declaredSchema = map[string][]string{
 		"calibration_low", "calibration_high",
 		"calibration_confidence", "calibration_resamples", "calibration_seed",
 		"calibrated", "calibration_reason",
+		"distractor_pool_id",
 	},
 	"calibration_band": {
 		"eval_result_id", "band", "claims", "target", "error_rate", "error_bound",
 		"class_segments", "class_clusters", "min_class_clusters",
 		"author_segments", "distractor_segments", "emitted", "reason",
 	},
-	"release_head":       {"profile_id", "eval_result_id", "updated_at"},
-	"exemplar_selection": {"id", "profile_id", "n", "certificate_id"},
-	"exemplar_member":    {"selection_id", "ordinal", "node_id"},
+	"release_head": {"profile_id", "eval_result_id", "updated_at"},
+	// The distractor pool is other people's writing, so it keeps NO path
+	// representation — the columns are an identity, a policy digest, a count
+	// and content hashes, and there is deliberately nowhere to put a filename.
+	"distractor_pool":        {"id", "policy_digest", "members", "created_at"},
+	"distractor_pool_member": {"pool_id", "content_hash"},
+	"exemplar_selection":     {"id", "profile_id", "n", "certificate_id"},
+	"exemplar_member":        {"selection_id", "ordinal", "node_id"},
 	"rewrite_attempt": {
 		"invocation_id", "attempt_index", "profile_id", "provider_id", "node_id",
 		"current_hash", "candidate_hash", "current_distance", "candidate_distance",
@@ -230,8 +236,9 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 	})
 
 	t.Run("every column is typed and not null", func(t *testing.T) {
-		// unavailable_at is the one nullable column: absence is its meaning.
-		nullable := map[string]bool{"document.unavailable_at": true}
+		// unavailable_at and distractor_pool_id are nullable: absence is their
+		// declared meaning, rather than an invented timestamp or pool identity.
+		nullable := map[string]bool{"document.unavailable_at": true, "eval_result.distractor_pool_id": true}
 		for table, columns := range declaredSchema {
 			for _, column := range columns {
 				var declaredType string
@@ -292,7 +299,13 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"},
 				{Parent: "reference", Columns: []column{{"reference_id", "id"}}, OnDelete: "CASCADE"},
 			},
+			// distractor_pool has no parent: it is other people's writing and
+			// belongs to no profile. Its members belong to it and go with it.
+			"distractor_pool_member": {
+				{Parent: "distractor_pool", Columns: []column{{"pool_id", "id"}}, OnDelete: "CASCADE"},
+			},
 			"eval_result": {
+				{Parent: "distractor_pool", Columns: []column{{"distractor_pool_id", "id"}}, OnDelete: "RESTRICT"},
 				{Parent: "profile", Columns: []column{{"profile_id", "id"}}, OnDelete: "CASCADE"},
 				{Parent: "reference", Columns: []column{{"reference_id", "id"}}, OnDelete: "CASCADE"},
 			},
@@ -412,14 +425,20 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				"discrimination_clustering", "discrimination_reason", "min_clusters",
 				"calibration_id", "calibration_thresholds_id", "calibration_population_id",
 				"calibration_split", "calibration_reason", "calibrated",
+				// Nullable: an uncalibrated release measured against no pool.
+				// Constrained all the same, so "no pool" is NULL rather than
+				// whatever a writer happens to put there.
+				"distractor_pool_id",
 			},
 			"calibration_band": {
 				"eval_result_id", "band", "claims", "reason",
 				"class_segments", "class_clusters", "min_class_clusters", "emitted",
 			},
-			"release_head":       {"profile_id", "eval_result_id"},
-			"exemplar_selection": {"id", "profile_id", "certificate_id", "n"},
-			"exemplar_member":    {"selection_id", "node_id", "ordinal"},
+			"release_head":           {"profile_id", "eval_result_id"},
+			"distractor_pool":        {"id", "policy_digest", "members"},
+			"distractor_pool_member": {"pool_id", "content_hash"},
+			"exemplar_selection":     {"id", "profile_id", "certificate_id", "n"},
+			"exemplar_member":        {"selection_id", "node_id", "ordinal"},
 			"rewrite_attempt": {
 				"invocation_id", "profile_id", "provider_id", "node_id",
 				"current_hash", "candidate_hash", "current_band", "candidate_band", "rejection", "attempt_index",
@@ -464,7 +483,9 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			"reference_value": {"reference_id", "feature", "ordinal"},
 			"threshold":       {"id"}, "eval_result": {"id"},
 			"calibration_band": {"eval_result_id", "band"}, "release_head": {"profile_id"},
-			"exemplar_selection": {"id"}, "exemplar_member": {"selection_id", "ordinal"},
+			"distractor_pool":        {"id"},
+			"distractor_pool_member": {"pool_id", "content_hash"},
+			"exemplar_selection":     {"id"}, "exemplar_member": {"selection_id", "ordinal"},
 			"rewrite_attempt":            {"invocation_id", "attempt_index"},
 			"rewrite_attempt_identifier": {"invocation_id", "attempt_index", "ordinal"},
 			"migration":                  {"version"},

@@ -67,6 +67,10 @@ func Score(source []byte, prof *profile.Profile, ref *deviation.Reference, relea
 	if err := validate(prof, ref, release); err != nil {
 		return Report{}, err
 	}
+	fitted, err := prof.Fitted()
+	if err != nil {
+		return Report{}, fmt.Errorf("score profile: %w", err)
+	}
 
 	doc, err := text.Admit(source)
 	if err != nil {
@@ -85,7 +89,7 @@ func Score(source []byte, prof *profile.Profile, ref *deviation.Reference, relea
 		Segments:             make([]Segment, 0, len(paragraphs.Vectors)),
 	}
 	for index, vector := range paragraphs.Vectors {
-		standardized, err := deviation.Standardize(vector, prof, corpus.Draft)
+		standardized, err := deviation.Standardize(vector, fitted, corpus.Draft)
 		if err != nil {
 			return Report{}, fmt.Errorf("score paragraph %d: %w", index, err)
 		}

@@ -83,6 +83,10 @@ func calibrateStandardizationsWith(root string, snap *corpus.Snapshot, p *profil
 	if snap == nil {
 		return nil, fmt.Errorf("ingest snapshot is nil")
 	}
+	fitted, err := p.Fitted()
+	if err != nil {
+		return nil, err
+	}
 	var out []deviation.Standardization
 	for _, source := range snap.Eligible() {
 		if source.Split != corpus.Calibrate {
@@ -97,7 +101,7 @@ func calibrateStandardizationsWith(root string, snap *corpus.Snapshot, p *profil
 			return nil, err
 		}
 		for _, leaf := range leaves {
-			standardized, err := deviation.Standardize(leaf.Vector, p, corpus.Calibrate)
+			standardized, err := deviation.Standardize(leaf.Vector, fitted, corpus.Calibrate)
 			if err != nil {
 				return nil, err
 			}

@@ -309,6 +309,11 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 		t.Fatalf("PutThreshold: %v", err)
 	}
 	result := evalResultFixture(prof.ID, ref.ID)
+	pool := poolFixture(hashA, hashB)
+	if err := s.PutDistractorPool(ctx(), pool); err != nil {
+		t.Fatalf("PutDistractorPool: %v", err)
+	}
+	result.DistractorPoolID = pool.ID
 	if err := s.PutEvalResult(ctx(), result, store.AdvanceHead); err != nil {
 		t.Fatalf("PutEvalResult: %v", err)
 	}

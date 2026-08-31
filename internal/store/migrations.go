@@ -32,4 +32,8 @@ ALTER TABLE document DROP COLUMN language;
 ALTER TABLE document ADD COLUMN language TEXT NOT NULL DEFAULT 'not-performed' CHECK(language IN ('not-performed','passed','failed','skipped-by-policy'));
 ALTER TABLE profile ADD COLUMN production_ready INTEGER NOT NULL DEFAULT 0 CHECK(production_ready IN (0,1));
 ALTER TABLE profile ADD COLUMN not_ready_reason TEXT NOT NULL DEFAULT 'profile minimums are declared, not derived' CHECK(not_ready_reason IN ('','profile minimums are declared, not derived')) CHECK(production_ready=(not_ready_reason=''));
+`, `
+CREATE TABLE distractor_pool (id TEXT NOT NULL PRIMARY KEY CHECK(length(id)=64 AND id NOT GLOB '*[^0-9a-f]*'), policy_digest TEXT NOT NULL CHECK(length(policy_digest)=64 AND policy_digest NOT GLOB '*[^0-9a-f]*'), members INTEGER NOT NULL CHECK(members>=0), created_at TEXT NOT NULL CHECK(strftime('%Y-%m-%dT%H:%M:%SZ',created_at) IS NOT NULL AND strftime('%Y-%m-%dT%H:%M:%SZ',created_at)=created_at));
+CREATE TABLE distractor_pool_member (pool_id TEXT NOT NULL CHECK(length(pool_id)=64 AND pool_id NOT GLOB '*[^0-9a-f]*') REFERENCES distractor_pool(id) ON DELETE CASCADE, content_hash TEXT NOT NULL CHECK(length(content_hash)=64 AND content_hash NOT GLOB '*[^0-9a-f]*'), PRIMARY KEY(pool_id,content_hash));
+ALTER TABLE eval_result ADD COLUMN distractor_pool_id TEXT CHECK(distractor_pool_id IS NULL OR (length(distractor_pool_id)=64 AND distractor_pool_id NOT GLOB '*[^0-9a-f]*')) REFERENCES distractor_pool(id) ON DELETE RESTRICT;
 `}

@@ -2,6 +2,7 @@ package workflow_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -207,4 +208,105 @@ func persistedProfiles(t *testing.T, path string) (heads int, references int) {
 		}
 	}
 	return len(registers), references
+}
+
+// ---------------------------------------------------------------------------
+// Evaluation
+// ---------------------------------------------------------------------------
+
+// distractorCorpus is other people's writing: distinct from the author's
+// fixtures and from each other, because identical content is refused.
+func distractorCorpus(t *testing.T, n int) string {
+	t.Helper()
+	root := t.TempDir()
+	for i := 0; i < n; i++ {
+		writeDistractor(t, root, i)
+	}
+	return root
+}
+
+func writeDistractor(t *testing.T, root string, i int) {
+	t.Helper()
+	body := ""
+	for p := 0; p < 6; p++ {
+		body += fmt.Sprintf("Another writer's paragraph %d in piece %d, running on well past a single "+
+			"sentence in a manner of its own so the structure pass reads it as prose; it mentions %d.\n\n",
+			p, i, i*1000+p)
+	}
+	if err := os.WriteFile(filepath.Join(root, fmt.Sprintf("other%03d.md", i)), []byte(body), 0o644); err != nil {
+		t.Fatalf("write distractor: %v", err)
+	}
+}
+
+func evalRequest(root, distractors string) workflow.EvalRequest {
+	return workflow.EvalRequest{
+		StorePath: defaultStorePath(root), Register: "essays", DistractorRoot: distractors,
+	}
+}
+
+func evaluated(t *testing.T, request workflow.EvalRequest) workflow.EvalResult {
+	t.Helper()
+	result, err := workflow.Default().Eval(ctx(), request)
+	if err != nil {
+		t.Fatalf("Eval: %v", err)
+	}
+	return result
+}
+
+func releaseHead(t *testing.T, path, profileID string) string {
+	t.Helper()
+	head, err := openStore(t, path).ReleaseHead(ctx(), profileID)
+	if err != nil {
+		t.Fatalf("ReleaseHead: %v", err)
+	}
+	return head
+}
+
+// storedPool is the pool's membership as the database holds it: content hashes
+// and nothing that could name a file or a person.
+func storedPool(t *testing.T, path, poolID string) []string {
+	t.Helper()
+	pool, err := openStore(t, path).LoadDistractorPool(ctx(), poolID)
+	if err != nil {
+		t.Fatalf("LoadDistractorPool: %v", err)
+	}
+	return pool.ContentHashes
+}
+
+func storedRelease(t *testing.T, path, releaseID string) store.EvalResult {
+	t.Helper()
+	stored, err := openStore(t, path).LoadEvalResult(ctx(), releaseID)
+	if err != nil {
+		t.Fatalf("LoadEvalResult: %v", err)
+	}
+	return stored
+}
+
+// releaseHeadOrEmpty tolerates there being no head yet, which is the ordinary
+// state before anything has shipped.
+func releaseHeadOrEmpty(t *testing.T, path, profileID string) string {
+	t.Helper()
+	head, err := openStore(t, path).ReleaseHead(ctx(), profileID)
+	if errors.Is(err, store.ErrNotFound) {
+		return ""
+	}
+	if err != nil {
+		t.Fatalf("ReleaseHead: %v", err)
+	}
+	return head
+}
+
+// installReleaseHead makes an existing release the head directly, so a test
+// about what may MOVE a head does not have to earn one through a gate that
+// wants sixty held-out documents.
+func installReleaseHead(t *testing.T, path, releaseID string) {
+	t.Helper()
+	opened := openStore(t, path)
+	stored, err := opened.LoadEvalResult(ctx(), releaseID)
+	if err != nil {
+		t.Fatalf("LoadEvalResult: %v", err)
+	}
+	if err := opened.PutEvalResult(ctx(), stored, store.AdvanceHead); err != nil {
+		t.Fatalf("PutEvalResult: %v", err)
+	}
 }

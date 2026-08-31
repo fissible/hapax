@@ -96,6 +96,26 @@ type Profile struct {
 	Stats                    []Stats
 }
 
+// Fitted is the deliberately small scoring projection of a Profile.
+type Fitted struct {
+	ID, FeatureManifestDigest                    string
+	Unit                                         Unit
+	FeatureSetVersion, MinParagraphLexicalTokens int
+	Stats                                        []Stats
+}
+
+// Fitted returns the facts a scorer needs, detached from the build artifact.
+func (p *Profile) Fitted() (Fitted, error) {
+	if p == nil || p.ID == "" || p.Unit != UnitParagraph ||
+		p.FeatureSetVersion != features.SetVersion || p.FeatureManifestDigest != features.ManifestDigest() ||
+		p.Requirements.MinParagraphLexicalTokens <= 0 || len(p.Stats) == 0 {
+		return Fitted{}, errors.New("profile is not usable for scoring")
+	}
+	return Fitted{ID: p.ID, Unit: p.Unit, FeatureSetVersion: p.FeatureSetVersion,
+		FeatureManifestDigest: p.FeatureManifestDigest, MinParagraphLexicalTokens: p.Requirements.MinParagraphLexicalTokens,
+		Stats: append([]Stats(nil), p.Stats...)}, nil
+}
+
 // Paragraphs is the paragraph-scale feature population admitted by a lexical
 // token floor. Keeping this path shared prevents profile fitting and evaluation
 // from silently adopting different definitions of a paragraph.

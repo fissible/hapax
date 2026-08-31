@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/eval"
 	"github.com/fissible/hapax/internal/features"
+	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/llm"
 	"github.com/fissible/hapax/internal/preserve"
 	"github.com/fissible/hapax/internal/profile"
@@ -60,11 +62,92 @@ type Threshold struct {
 
 // EvalResult is the persisted release evaluation for a reference distribution.
 type EvalResult struct {
-	ID, ProfileID, ReferenceID string
-	Discrimination             Discrimination
-	Calibration                Calibration
-	Shippable                  bool
-	Reason                     eval.ReleaseReason
+	ID, ProfileID, ReferenceID, DistractorPoolID string
+	Discrimination                               Discrimination
+	Calibration                                  Calibration
+	Shippable                                    bool
+	Reason                                       eval.ReleaseReason
+}
+
+// DistractorPool records content-addressed membership without locations.
+type DistractorPool struct {
+	ID, PolicyDigest string
+	Members          int
+	ContentHashes    []string
+}
+
+func DistractorPoolID(policyDigest string, hashes []string) string {
+	ordered := append([]string(nil), hashes...)
+	sort.Strings(ordered)
+	return identity.HashInputs(map[string]string{"policy": policyDigest, "members": string(identity.Frame(ordered...))})
+}
+
+func (s *Store) PutDistractorPool(ctx context.Context, pool DistractorPool) error {
+	ordered := append([]string(nil), pool.ContentHashes...)
+	sort.Strings(ordered)
+	if !validHash(pool.ID) || !validHash(pool.PolicyDigest) || len(ordered) == 0 {
+		return ErrInvalid
+	}
+	for i, h := range ordered {
+		if !validHash(h) || i > 0 && h == ordered[i-1] {
+			return ErrInvalid
+		}
+	}
+	pool.ContentHashes, pool.Members = ordered, len(ordered)
+	return artifactTx(ctx, s, func(c *sql.Conn) error {
+		got, err := s.loadDistractorPool(c, ctx, pool.ID)
+		if err == nil {
+			if got.PolicyDigest == pool.PolicyDigest && reflect.DeepEqual(got.ContentHashes, pool.ContentHashes) {
+				return nil
+			}
+			return ErrConflict
+		}
+		if !errors.Is(err, ErrNotFound) {
+			return err
+		}
+		if pool.ID != DistractorPoolID(pool.PolicyDigest, ordered) {
+			return ErrInvalid
+		}
+		if _, err = c.ExecContext(ctx, "INSERT INTO distractor_pool (id,policy_digest,members,created_at) VALUES (?,?,?,?)", pool.ID, pool.PolicyDigest, pool.Members, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
+			return err
+		}
+		for _, hash := range pool.ContentHashes {
+			if _, err = c.ExecContext(ctx, "INSERT INTO distractor_pool_member (pool_id,content_hash) VALUES (?,?)", pool.ID, hash); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+func (s *Store) LoadDistractorPool(ctx context.Context, id string) (DistractorPool, error) {
+	return s.loadDistractorPool(s.db, ctx, id)
+}
+func (s *Store) loadDistractorPool(q queryer, ctx context.Context, id string) (DistractorPool, error) {
+	var p DistractorPool
+	if err := q.QueryRowContext(ctx, "SELECT id,policy_digest,members FROM distractor_pool WHERE id=?", id).Scan(&p.ID, &p.PolicyDigest, &p.Members); errors.Is(err, sql.ErrNoRows) {
+		return p, ErrNotFound
+	} else if err != nil {
+		return p, err
+	}
+	rows, err := q.QueryContext(ctx, "SELECT content_hash FROM distractor_pool_member WHERE pool_id=? ORDER BY content_hash", id)
+	if err != nil {
+		return p, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var h string
+		if err := rows.Scan(&h); err != nil {
+			return p, err
+		}
+		p.ContentHashes = append(p.ContentHashes, h)
+	}
+	if err := rows.Err(); err != nil {
+		return p, err
+	}
+	if p.Members != len(p.ContentHashes) || p.ID != DistractorPoolID(p.PolicyDigest, p.ContentHashes) {
+		return p, ErrCorrupt
+	}
+	return p, nil
 }
 
 // Binding is the distance contract shared by both release gates.
@@ -774,7 +857,7 @@ func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy
 			if !sameEval(stored, result) {
 				return ErrConflict
 			}
-			return nil
+			return s.advanceEvalHead(c, ctx, result, headPolicy)
 		}
 		if !errors.Is(err, ErrNotFound) {
 			return err
@@ -791,7 +874,7 @@ func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy
 			return invalidArtifact("evaluation result", "calibration threshold")
 		}
 		discrimination, calibration := result.Discrimination, result.Calibration
-		_, err = c.ExecContext(ctx, `INSERT INTO eval_result VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, result.ID, result.ProfileID, result.ReferenceID, discrimination.ID, discrimination.PopulationID, discrimination.Binding.ManifestDigest, discrimination.Binding.WeightScheme, discrimination.Binding.DistanceAlgorithm, strings.Join(tiers(discrimination.Binding.ScoredTiers), ","), discrimination.Split, discrimination.Algorithm, discrimination.Clustering, discrimination.Floor, discrimination.Confidence, discrimination.Resamples, discrimination.Seed, discrimination.AUC, discrimination.LowerBound, discrimination.Cap, discrimination.AuthorSegments, discrimination.DistractorSegments, discrimination.AuthorClusters, discrimination.DistractorClusters, discrimination.MinClusters, boolInt(discrimination.Discriminates), discrimination.Reason, calibration.ID, calibration.ThresholdsID, calibration.PopulationID, calibration.Binding.ManifestDigest, calibration.Binding.WeightScheme, calibration.Binding.DistanceAlgorithm, strings.Join(tiers(calibration.Binding.ScoredTiers), ","), calibration.Split, calibration.Algorithm, calibration.Low, calibration.High, calibration.Confidence, calibration.Resamples, calibration.Seed, boolInt(calibration.Calibrated), calibration.Reason, boolInt(result.Shippable), result.Reason)
+		_, err = c.ExecContext(ctx, `INSERT INTO eval_result VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, result.ID, result.ProfileID, result.ReferenceID, discrimination.ID, discrimination.PopulationID, discrimination.Binding.ManifestDigest, discrimination.Binding.WeightScheme, discrimination.Binding.DistanceAlgorithm, strings.Join(tiers(discrimination.Binding.ScoredTiers), ","), discrimination.Split, discrimination.Algorithm, discrimination.Clustering, discrimination.Floor, discrimination.Confidence, discrimination.Resamples, discrimination.Seed, discrimination.AUC, discrimination.LowerBound, discrimination.Cap, discrimination.AuthorSegments, discrimination.DistractorSegments, discrimination.AuthorClusters, discrimination.DistractorClusters, discrimination.MinClusters, boolInt(discrimination.Discriminates), discrimination.Reason, calibration.ID, calibration.ThresholdsID, calibration.PopulationID, calibration.Binding.ManifestDigest, calibration.Binding.WeightScheme, calibration.Binding.DistanceAlgorithm, strings.Join(tiers(calibration.Binding.ScoredTiers), ","), calibration.Split, calibration.Algorithm, calibration.Low, calibration.High, calibration.Confidence, calibration.Resamples, calibration.Seed, boolInt(calibration.Calibrated), calibration.Reason, boolInt(result.Shippable), result.Reason, nullable(result.DistractorPoolID))
 		if err != nil {
 			return err
 		}
@@ -800,18 +883,29 @@ func (s *Store) PutEvalResult(ctx context.Context, result EvalResult, headPolicy
 				return err
 			}
 		}
-		if headPolicy {
-			_, err = c.ExecContext(ctx, "INSERT INTO release_head(profile_id,eval_result_id,updated_at) VALUES (?,?,?) ON CONFLICT(profile_id) DO UPDATE SET eval_result_id=excluded.eval_result_id,updated_at=excluded.updated_at", result.ProfileID, result.ID, s.deps.Now().UTC().Format(time.RFC3339))
-			if err != nil {
-				return err
-			}
-			_, err = c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) SELECT register,id,? FROM profile WHERE id=? ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", s.deps.Now().UTC().Format(time.RFC3339), result.ProfileID)
-		}
-		return err
+		return s.advanceEvalHead(c, ctx, result, headPolicy)
 	})
 }
+
+func (s *Store) advanceEvalHead(c *sql.Conn, ctx context.Context, result EvalResult, headPolicy HeadPolicy) error {
+	if !headPolicy {
+		return nil
+	}
+	if _, err := c.ExecContext(ctx, "INSERT INTO release_head(profile_id,eval_result_id,updated_at) VALUES (?,?,?) ON CONFLICT(profile_id) DO UPDATE SET eval_result_id=excluded.eval_result_id,updated_at=excluded.updated_at", result.ProfileID, result.ID, s.deps.Now().UTC().Format(time.RFC3339)); err != nil {
+		return err
+	}
+	_, err := c.ExecContext(ctx, "INSERT INTO profile_head(register,profile_id,updated_at) SELECT register,id,? FROM profile WHERE id=? ON CONFLICT(register) DO UPDATE SET profile_id=excluded.profile_id,updated_at=excluded.updated_at", s.deps.Now().UTC().Format(time.RFC3339), result.ProfileID)
+	return err
+}
+
 func sameEval(first, second EvalResult) bool {
-	return first.ID == second.ID && first.ProfileID == second.ProfileID && first.ReferenceID == second.ReferenceID && first.Shippable == second.Shippable && first.Reason == second.Reason && reflect.DeepEqual(first.Discrimination, second.Discrimination) && reflect.DeepEqual(first.Calibration, second.Calibration)
+	return first.ID == second.ID && first.ProfileID == second.ProfileID && first.ReferenceID == second.ReferenceID && first.DistractorPoolID == second.DistractorPoolID && first.Shippable == second.Shippable && first.Reason == second.Reason && reflect.DeepEqual(first.Discrimination, second.Discrimination) && reflect.DeepEqual(first.Calibration, second.Calibration)
+}
+func nullable(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
 }
 
 func (s *Store) ReleaseHead(ctx context.Context, profileID string) (string, error) {
@@ -890,7 +984,8 @@ func (s *Store) loadEval(query queryer, ctx context.Context, id string) (EvalRes
 	var x EvalResult
 	var dd, ac, sh int
 	var dtiers, atiers string
-	err := query.QueryRowContext(ctx, `SELECT id,profile_id,reference_id,discrimination_id,discrimination_population_id,discrimination_manifest_digest,discrimination_weight_scheme,discrimination_distance_algorithm,discrimination_scored_tiers,discrimination_split,discrimination_algorithm,discrimination_clustering,discrimination_floor,discrimination_confidence,discrimination_resamples,discrimination_seed,auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,min_clusters,discriminates,discrimination_reason,calibration_id,calibration_thresholds_id,calibration_population_id,calibration_manifest_digest,calibration_weight_scheme,calibration_distance_algorithm,calibration_scored_tiers,calibration_split,calibration_algorithm,calibration_low,calibration_high,calibration_confidence,calibration_resamples,calibration_seed,calibrated,calibration_reason,shippable,reason FROM eval_result WHERE id=?`, id).Scan(&x.ID, &x.ProfileID, &x.ReferenceID, &x.Discrimination.ID, &x.Discrimination.PopulationID, &x.Discrimination.Binding.ManifestDigest, &x.Discrimination.Binding.WeightScheme, &x.Discrimination.Binding.DistanceAlgorithm, &dtiers, &x.Discrimination.Split, &x.Discrimination.Algorithm, &x.Discrimination.Clustering, &x.Discrimination.Floor, &x.Discrimination.Confidence, &x.Discrimination.Resamples, &x.Discrimination.Seed, &x.Discrimination.AUC, &x.Discrimination.LowerBound, &x.Discrimination.Cap, &x.Discrimination.AuthorSegments, &x.Discrimination.DistractorSegments, &x.Discrimination.AuthorClusters, &x.Discrimination.DistractorClusters, &x.Discrimination.MinClusters, &dd, &x.Discrimination.Reason, &x.Calibration.ID, &x.Calibration.ThresholdsID, &x.Calibration.PopulationID, &x.Calibration.Binding.ManifestDigest, &x.Calibration.Binding.WeightScheme, &x.Calibration.Binding.DistanceAlgorithm, &atiers, &x.Calibration.Split, &x.Calibration.Algorithm, &x.Calibration.Low, &x.Calibration.High, &x.Calibration.Confidence, &x.Calibration.Resamples, &x.Calibration.Seed, &ac, &x.Calibration.Reason, &sh, &x.Reason)
+	var pool sql.NullString
+	err := query.QueryRowContext(ctx, `SELECT id,profile_id,reference_id,discrimination_id,discrimination_population_id,discrimination_manifest_digest,discrimination_weight_scheme,discrimination_distance_algorithm,discrimination_scored_tiers,discrimination_split,discrimination_algorithm,discrimination_clustering,discrimination_floor,discrimination_confidence,discrimination_resamples,discrimination_seed,auc,lower_bound,cap,author_segments,distractor_segments,author_clusters,distractor_clusters,min_clusters,discriminates,discrimination_reason,calibration_id,calibration_thresholds_id,calibration_population_id,calibration_manifest_digest,calibration_weight_scheme,calibration_distance_algorithm,calibration_scored_tiers,calibration_split,calibration_algorithm,calibration_low,calibration_high,calibration_confidence,calibration_resamples,calibration_seed,calibrated,calibration_reason,shippable,reason,distractor_pool_id FROM eval_result WHERE id=?`, id).Scan(&x.ID, &x.ProfileID, &x.ReferenceID, &x.Discrimination.ID, &x.Discrimination.PopulationID, &x.Discrimination.Binding.ManifestDigest, &x.Discrimination.Binding.WeightScheme, &x.Discrimination.Binding.DistanceAlgorithm, &dtiers, &x.Discrimination.Split, &x.Discrimination.Algorithm, &x.Discrimination.Clustering, &x.Discrimination.Floor, &x.Discrimination.Confidence, &x.Discrimination.Resamples, &x.Discrimination.Seed, &x.Discrimination.AUC, &x.Discrimination.LowerBound, &x.Discrimination.Cap, &x.Discrimination.AuthorSegments, &x.Discrimination.DistractorSegments, &x.Discrimination.AuthorClusters, &x.Discrimination.DistractorClusters, &x.Discrimination.MinClusters, &dd, &x.Discrimination.Reason, &x.Calibration.ID, &x.Calibration.ThresholdsID, &x.Calibration.PopulationID, &x.Calibration.Binding.ManifestDigest, &x.Calibration.Binding.WeightScheme, &x.Calibration.Binding.DistanceAlgorithm, &atiers, &x.Calibration.Split, &x.Calibration.Algorithm, &x.Calibration.Low, &x.Calibration.High, &x.Calibration.Confidence, &x.Calibration.Resamples, &x.Calibration.Seed, &ac, &x.Calibration.Reason, &sh, &x.Reason, &pool)
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
@@ -901,6 +996,7 @@ func (s *Store) loadEval(query queryer, ctx context.Context, id string) (EvalRes
 	x.Discrimination.Discriminates = dd != 0
 	x.Calibration.Calibrated = ac != 0
 	x.Shippable = sh != 0
+	x.DistractorPoolID = pool.String
 	rows, err := query.QueryContext(ctx, "SELECT band,claims,target,error_rate,error_bound,class_segments,class_clusters,min_class_clusters,author_segments,distractor_segments,emitted,reason FROM calibration_band WHERE eval_result_id=? ORDER BY CASE band WHEN 'in-range' THEN 0 WHEN 'drifting' THEN 1 ELSE 2 END", x.ID)
 	if err != nil {
 		return x, err
