@@ -178,7 +178,16 @@ func (s *Store) checkLedger(ctx context.Context) error {
 }
 
 func (s *Store) applyMigration(ctx context.Context, version int, ddl string) error {
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "PRAGMA foreign_keys=OFF"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), "PRAGMA foreign_keys=ON")
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
@@ -636,15 +645,7 @@ func validAdmission(x corpus.Admission) bool {
 	return x == corpus.Eligible || x == corpus.RejectedTooShort || x == corpus.RejectedNotUTF8 || x == corpus.RejectedDuplicate
 }
 func validLanguage(x corpus.CheckState) bool {
-	if len(x) < 2 || len(x) > 35 {
-		return false
-	}
-	for _, r := range x {
-		if !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-') {
-			return false
-		}
-	}
-	return true
+	return known(x, corpus.CheckStates())
 }
 func validKind(x text.Kind) bool { return x == text.KindContainer || x == text.KindLeaf }
 func validRole(x text.Role) bool {

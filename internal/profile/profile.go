@@ -17,6 +17,17 @@ import (
 
 const profileSchemaVersion = 1
 
+// ErrCorpusTooSmall distinguishes an adverse corpus outcome from an I/O failure.
+var ErrCorpusTooSmall = errors.New("profile: corpus too small")
+
+const notReadyMinimumsNotDerived = "profile minimums are declared, not derived"
+
+func NotReadyReasons() []string { return []string{notReadyMinimumsNotDerived} }
+
+func DefaultRequirements() Requirements {
+	return Requirements{MinDocuments: 3, MinParagraphs: 30, MinObservationsPerFeature: 30, MinParagraphLexicalTokens: 1}
+}
+
 // Unit identifies the source unit from which each feature vector was made.
 type Unit string
 
@@ -93,6 +104,33 @@ type Paragraphs struct {
 	BelowFloor int
 }
 
+// ParagraphLeaf ties an admitted feature vector to the caller-owned tree node.
+type ParagraphLeaf struct {
+	Node   *text.Node
+	Vector features.Vector
+}
+
+func ParagraphLeaves(doc *text.Document, root *text.Node, minLexicalTokens int) ([]ParagraphLeaf, int, error) {
+	if doc == nil || root == nil {
+		return nil, 0, errors.New("paragraph document and root must not be nil")
+	}
+	var leaves []ParagraphLeaf
+	below := 0
+	for _, node := range root.IncludedLeaves() {
+		tokens, err := doc.RunTokens(node)
+		if err != nil {
+			return nil, 0, fmt.Errorf("read paragraph: %w", err)
+		}
+		vector := features.Extract(tokens)
+		if vector.LexicalTokens < minLexicalTokens {
+			below++
+			continue
+		}
+		leaves = append(leaves, ParagraphLeaf{Node: node, Vector: vector})
+	}
+	return leaves, below, nil
+}
+
 // ParagraphVectors extracts vectors for included paragraph leaves that meet
 // minLexicalTokens. It reports excluded leaves separately so callers can retain
 // their own accounting without reimplementing the admission rule.
@@ -101,18 +139,13 @@ func ParagraphVectors(doc *text.Document, minLexicalTokens int) (Paragraphs, err
 		return Paragraphs{}, errors.New("paragraph document must not be nil")
 	}
 
-	paragraphs := Paragraphs{}
-	for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
-		tokens, err := doc.RunTokens(leaf)
-		if err != nil {
-			return Paragraphs{}, fmt.Errorf("read paragraph: %w", err)
-		}
-		vector := features.Extract(tokens)
-		if vector.LexicalTokens < minLexicalTokens {
-			paragraphs.BelowFloor++
-			continue
-		}
-		paragraphs.Vectors = append(paragraphs.Vectors, vector)
+	leaves, below, err := ParagraphLeaves(doc, doc.Structure(text.DefaultStructureOptions()), minLexicalTokens)
+	if err != nil {
+		return Paragraphs{}, err
+	}
+	paragraphs := Paragraphs{BelowFloor: below}
+	for _, leaf := range leaves {
+		paragraphs.Vectors = append(paragraphs.Vectors, leaf.Vector)
 	}
 	return paragraphs, nil
 }
@@ -128,10 +161,10 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 
 	eligible := snap.Eligible()
 	if len(eligible) == 0 {
-		return nil, errors.New("profile requires at least one eligible document")
+		return nil, fmt.Errorf("%w: profile requires at least one eligible document", ErrCorpusTooSmall)
 	}
 	if len(snap.Documents) < req.MinDocuments {
-		return nil, fmt.Errorf("profile requires at least %d snapshot documents; snapshot has %d", req.MinDocuments, len(snap.Documents))
+		return nil, fmt.Errorf("%w: profile requires at least %d snapshot documents; snapshot has %d", ErrCorpusTooSmall, req.MinDocuments, len(snap.Documents))
 	}
 	train := make([]corpus.Document, 0, len(eligible))
 	for _, document := range eligible {
@@ -140,7 +173,14 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		}
 	}
 	if len(train) == 0 {
-		return nil, errors.New("profile requires at least one train document")
+		// A vanished eligible file is an operational failure even when the split
+		// would otherwise be insufficient; do not classify I/O as corpus size.
+		for _, document := range eligible {
+			if _, err := readVerified(root, document); err != nil {
+				return nil, err
+			}
+		}
+		return nil, fmt.Errorf("%w: profile requires at least one train document", ErrCorpusTooSmall)
 	}
 
 	values := make(map[features.ID][]float64, len(features.Definitions()))
@@ -170,7 +210,7 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		}
 	}
 	if paragraphs < req.MinParagraphs {
-		return nil, fmt.Errorf("profile requires at least %d paragraphs; train documents have %d", req.MinParagraphs, paragraphs)
+		return nil, fmt.Errorf("%w: profile requires at least %d paragraphs; train documents have %d", ErrCorpusTooSmall, req.MinParagraphs, paragraphs)
 	}
 
 	p := &Profile{
@@ -179,7 +219,7 @@ func Build(root string, snap *corpus.Snapshot, req Requirements) (*Profile, erro
 		Split:                 corpus.Train,
 		Unit:                  UnitParagraph,
 		ProductionReady:       false,
-		NotProductionReason:   "profile minimums are declared, not derived",
+		NotProductionReason:   notReadyMinimumsNotDerived,
 		FeatureSetVersion:     features.SetVersion,
 		FeatureManifestDigest: features.ManifestDigest(),
 		SchemaVersion:         profileSchemaVersion,
