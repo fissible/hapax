@@ -31,8 +31,8 @@ model, then review.
 | 9 | `llm` | **built** | PR #41. Ollama + Anthropic, dial seam, AST egress guard |
 | 10 | `rewrite` | **built** | PR #33; audit record corrected in PR #43 |
 | 11 | `assemble` | **built** | PR #37 |
-| 12 | `store` | **built** | PR #45 schema and snapshots, #48 the codecs, #49 rehydration and `Prune` |
-| 13 | `cli` | **partial** | A1: contracts, exit codes, output document, mode, `tells`. A2 blocked on #50 |
+| 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
+| 13 | `cli` | **partial** | A1 shipped (#51). A2 — `index`, `profile`, `eval`, `score` — is next and unblocked |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
