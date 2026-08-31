@@ -15,17 +15,30 @@ import (
 
 func corpusOf(t *testing.T, files map[string]string) (string, *corpus.Snapshot) {
 	t.Helper()
+	return corpusUnder(t, files, corpus.DefaultPolicy("essays"))
+}
+
+func corpusUnder(t *testing.T, files map[string]string, policy corpus.Policy) (string, *corpus.Snapshot) {
+	t.Helper()
 	root := t.TempDir()
 	for name, body := range files {
 		if err := os.WriteFile(filepath.Join(root, name), []byte(body), 0o644); err != nil {
 			t.Fatalf("write %s: %v", name, err)
 		}
 	}
-	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
+	snapshot, err := corpus.Walk(root, policy)
 	if err != nil {
 		t.Fatalf("Walk: %v", err)
 	}
 	return root, snapshot
+}
+
+// noTrainSplit weights train to zero, so which documents land where is a
+// decision rather than a coincidence of the seed.
+func noTrainSplit() corpus.Policy {
+	policy := corpus.DefaultPolicy("essays")
+	policy.Splits = corpus.SplitWeights{Train: 0, Calibrate: 1, Test: 1}
+	return policy
 }
 
 const paragraph = "A paragraph of prose with enough lexical tokens in it to clear any reasonable floor, " +
@@ -70,6 +83,30 @@ func TestEveryInsufficientCorpusIsTypedAsSuch(t *testing.T) {
 				t.Errorf("error = %v, want ErrCorpusTooSmall", err)
 			}
 		})
+	}
+}
+
+// A corpus whose split assigns nothing to train is insufficient for the same
+// reason and must carry the same type. The weights make that a decision rather
+// than a coincidence of the split seed.
+func TestNoTrainDocumentIsCorpusInsufficiency(t *testing.T) {
+	root, snapshot := corpusUnder(t, map[string]string{
+		"a.md": paragraph, "b.md": paragraph, "c.md": paragraph, "d.md": paragraph,
+	}, noTrainSplit())
+	for _, document := range snapshot.Eligible() {
+		if document.Split == corpus.Train {
+			t.Fatalf("%s landed in train despite a zero weight", document.Path)
+		}
+	}
+	requirements := profile.DefaultRequirements()
+	requirements.MinDocuments, requirements.MinParagraphs, requirements.MinObservationsPerFeature = 1, 1, 1
+
+	_, err := profile.Build(root, snapshot, requirements)
+	if err == nil {
+		t.Fatal("built a profile with no train document")
+	}
+	if !errors.Is(err, profile.ErrCorpusTooSmall) {
+		t.Errorf("error = %v, want ErrCorpusTooSmall", err)
 	}
 }
 

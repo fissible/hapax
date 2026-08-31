@@ -829,3 +829,49 @@ func requireNoIndirection(t *testing.T, s *Store, table string) {
 		}
 	}
 }
+
+// Index is ONE transaction, not four writers composed. Composing PutSnapshot,
+// PutProfile, PutReference and Prune would leave three windows in which another
+// indexer's not-yet-headed write can be pruned — and a failure part way through
+// would commit some of it. The fault on the commit proves the boundary: nothing
+// it wrote survives, and nothing it would have pruned is gone.
+func TestAnIndexThatFailsToCommitChangesNothing(t *testing.T) {
+	faults := &rowFaults{}
+	name := registerFaultDriver(t, faults)
+	s, ids := seededSeamStore(t, name)
+	before := graphCensus(t, s)
+
+	root := t.TempDir()
+	write := seamSnapshot(seamDocument(t, root, "indexed/a.md", text.Span{Offset: 0, Length: 31}))
+	profile := seamProfile(write.ID)
+	profile.Register = "indexed"
+
+	faults.armCommit()
+	_, err := s.Index(context.Background(), IndexWrite{
+		Mode: IndexProfile, Snapshot: write, Profile: profile,
+	})
+	faults.disarm()
+	if !errors.Is(err, errInjectedRowFault) {
+		t.Fatalf("error = %v, want the fault injected into Index's commit", err)
+	}
+
+	if after := graphCensus(t, s); !reflect.DeepEqual(after, before) {
+		t.Errorf("a failed index left the graph as\n%v\nwant\n%v", after, before)
+	}
+	if _, err := s.Snapshot(context.Background(), write.ID); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the snapshot survived a failed index: %v", err)
+	}
+	if _, err := s.LoadProfile(context.Background(), ids.Orphan); err != nil {
+		t.Errorf("a failed index pruned the orphan anyway: %v", err)
+	}
+}
+
+// seamProfile is a valid profile over a seeded snapshot.
+func seamProfile(snapshotID string) Profile {
+	return Profile{
+		ID: identity.HashInputs(map[string]string{"a": "indexed-profile"}), SnapshotID: snapshotID,
+		Register: "indexed", Unit: "paragraph", VarianceConvention: "sample",
+		ManifestDigest: features.ManifestDigest(), FeatureSetVersion: features.SetVersion,
+		MinParagraphLexicalTokens: 40, Stats: seamStats(),
+	}
+}

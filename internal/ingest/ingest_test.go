@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/fissible/hapax/internal/corpus"
@@ -49,8 +50,19 @@ func TestEveryDocumentIsPersistedAndOnlyEligibleOnesGetAGraph(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	if len(write.Documents) != len(snapshot.Documents) {
-		t.Fatalf("%d document rows for %d corpus documents", len(write.Documents), len(snapshot.Documents))
+	// The exact set, not the count: duplicating one document and dropping
+	// another keeps the length and loses the corpus.
+	wantPaths, gotPaths := []string{}, []string{}
+	for _, document := range snapshot.Documents {
+		wantPaths = append(wantPaths, document.Path)
+	}
+	for _, document := range write.Documents {
+		gotPaths = append(gotPaths, document.Path)
+	}
+	sort.Strings(wantPaths)
+	sort.Strings(gotPaths)
+	if !reflect.DeepEqual(gotPaths, wantPaths) {
+		t.Fatalf("documents =\n%v\nwant\n%v", gotPaths, wantPaths)
 	}
 
 	eligible := map[string]bool{}
@@ -70,7 +82,13 @@ func TestEveryDocumentIsPersistedAndOnlyEligibleOnesGetAGraph(t *testing.T) {
 // The verdict that reaches the store is the one corpus produced, not a value
 // ingest invented — which is the whole point of the column being a verdict.
 func TestTheLanguageVerdictIsTheOneCorpusProduced(t *testing.T) {
-	root, snapshot := walked(t, map[string]string{"a.md": prose})
+	root, snapshot := walked(t, map[string]string{"a.md": prose, "b.md": prose})
+	// Corpus produces not-performed for everything today, so a hard-coded
+	// not-performed would pass. Vary them, and require the value to travel.
+	varied := []corpus.CheckState{corpus.CheckPassed, corpus.CheckSkippedByPolicy}
+	for i := range snapshot.Documents {
+		snapshot.Documents[i].Language.State = varied[i%len(varied)]
+	}
 	write, err := ingest.Snapshot(root, snapshot)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
@@ -200,6 +218,19 @@ func TestCalibrateStandardizationsCoverTheCalibrateSplitOnly(t *testing.T) {
 	standardizations, err := ingest.CalibrateStandardizations(root, snapshot, prof)
 	if err != nil {
 		t.Fatalf("CalibrateStandardizations: %v", err)
+	}
+	// An empty slice satisfies every per-element assertion below.
+	calibrate := 0
+	for _, document := range snapshot.Eligible() {
+		if document.Split == corpus.Calibrate {
+			calibrate++
+		}
+	}
+	if calibrate == 0 {
+		t.Skip("the split assigned no calibrate documents; nothing to standardize")
+	}
+	if len(standardizations) == 0 {
+		t.Fatal("no standardizations for a corpus with calibrate documents")
 	}
 	for i, standardization := range standardizations {
 		if standardization.Split != corpus.Calibrate {

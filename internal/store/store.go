@@ -50,7 +50,7 @@ type Document struct {
 	ID, Path, ContentHash, Register string
 	Split                           corpus.Split
 	Admission                       corpus.Admission
-	Language                        string
+	Language                        corpus.CheckState
 	Nodes                           []Node
 }
 
@@ -635,7 +635,7 @@ func validSplit(x corpus.Split) bool {
 func validAdmission(x corpus.Admission) bool {
 	return x == corpus.Eligible || x == corpus.RejectedTooShort || x == corpus.RejectedNotUTF8 || x == corpus.RejectedDuplicate
 }
-func validLanguage(x string) bool {
+func validLanguage(x corpus.CheckState) bool {
 	if len(x) < 2 || len(x) > 35 {
 		return false
 	}

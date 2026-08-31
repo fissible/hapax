@@ -430,3 +430,68 @@ func TestMigrationTwoBackfillsTheReadinessProfilesAlwaysHad(t *testing.T) {
 		t.Errorf("the migration changed a profile's identity: %q", id)
 	}
 }
+
+// The profile mode advances a head too, so it prunes as well — the distinction
+// that matters is whether a head moved, not whether a reference was written.
+func TestTheProfileModeAlsoPrunes(t *testing.T) {
+	s := newStore(t)
+	orphanSnapshot := storedGraph(t, s)
+	orphan := profileFixture(orphanSnapshot.ID)
+	orphan.ID, orphan.Register = fakeID("profile", "orphan"), "orphan"
+	mustPutProfile(t, s, orphan)
+
+	write := indexWrite(t, s, store.IndexProfile)
+	indexed, err := s.Index(ctx(), write)
+	if err != nil {
+		t.Fatalf("Index: %v", err)
+	}
+	if indexed.Pruned.Profiles == 0 {
+		t.Error("a profile-mode index pruned nothing")
+	}
+	if _, err := s.LoadProfile(ctx(), orphan.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("the orphan survived: %v", err)
+	}
+}
+
+// Migration 2 corrects two columns. It must not lose the rest of the graph:
+// a table rebuild that dropped children, heads or the release would satisfy
+// every assertion about language and readiness while destroying the store.
+func TestMigrationTwoPreservesEverythingElse(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hapax.db")
+	first, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	ids := seedEveryArtifact(t, first)
+	before := map[string]int{}
+	raw := openRaw(t, first)
+	for _, table := range []string{
+		"snapshot", "document", "node", "feature_vector", "feature_value",
+		"profile", "profile_stat", "profile_head", "reference", "reference_value",
+		"threshold", "eval_result", "calibration_band", "release_head",
+		"exemplar_selection", "exemplar_member", "rewrite_attempt", "rewrite_attempt_identifier",
+	} {
+		before[table] = rowsIn(t, raw, table)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	second, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer second.Close()
+	reopened := openRaw(t, second)
+	for table, want := range before {
+		if got := rowsIn(t, reopened, table); got != want {
+			t.Errorf("%s has %d rows after reopening, had %d", table, got, want)
+		}
+	}
+	if _, err := second.Snapshot(ctx(), ids.Snapshot); err != nil {
+		t.Errorf("the snapshot no longer reads: %v", err)
+	}
+	if _, err := second.LoadEvalResult(ctx(), ids.EvalResult); err != nil {
+		t.Errorf("the release no longer reads: %v", err)
+	}
+}

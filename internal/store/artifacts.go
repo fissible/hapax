@@ -27,6 +27,8 @@ type Profile struct {
 	VarianceConvention                           profile.VarianceConvention
 	ManifestDigest                               string
 	FeatureSetVersion, MinParagraphLexicalTokens int
+	ProductionReady                              bool
+	NotReadyReason                               string
 	Stats                                        []ProfileStat
 }
 
