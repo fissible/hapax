@@ -63,27 +63,23 @@ type Report struct {
 }
 
 // Score measures every paragraph admitted under the profile's own floor.
-func Score(source []byte, prof *profile.Profile, ref *deviation.Reference, release eval.Release) (Report, error) {
-	if err := validate(prof, ref, release); err != nil {
+func Score(source []byte, fitted profile.Fitted, ref *deviation.Reference, release eval.Release) (Report, error) {
+	if err := validate(fitted, ref, release); err != nil {
 		return Report{}, err
-	}
-	fitted, err := prof.Fitted()
-	if err != nil {
-		return Report{}, fmt.Errorf("score profile: %w", err)
 	}
 
 	doc, err := text.Admit(source)
 	if err != nil {
 		return Report{}, fmt.Errorf("score admit draft: %w", err)
 	}
-	paragraphs, err := profile.ParagraphVectors(doc, prof.Requirements.MinParagraphLexicalTokens)
+	paragraphs, err := profile.ParagraphVectors(doc, fitted.MinParagraphLexicalTokens)
 	if err != nil {
 		return Report{}, fmt.Errorf("score paragraphs: %w", err)
 	}
 
 	report := Report{
-		ProfileID: prof.ID, ReferenceID: ref.ID, ReleaseID: release.ID,
-		FeatureManifestDigest: prof.FeatureManifestDigest, Algorithm: Algorithm,
+		ProfileID: fitted.ID, ReferenceID: ref.ID, ReleaseID: release.ID,
+		FeatureManifestDigest: fitted.FeatureManifestDigest, Algorithm: Algorithm,
 		Split: corpus.Draft, Calibrated: release.Shippable,
 		ParagraphsBelowFloor: paragraphs.BelowFloor,
 		Segments:             make([]Segment, 0, len(paragraphs.Vectors)),
@@ -113,26 +109,23 @@ func Score(source []byte, prof *profile.Profile, ref *deviation.Reference, relea
 	return report, nil
 }
 
-func validate(prof *profile.Profile, ref *deviation.Reference, release eval.Release) error {
-	if prof == nil {
-		return fmt.Errorf("%w: profile", ErrMissingInput)
-	}
+func validate(fitted profile.Fitted, ref *deviation.Reference, release eval.Release) error {
 	if ref == nil {
 		return fmt.Errorf("%w: reference", ErrMissingInput)
 	}
-	if prof.Requirements.MinParagraphLexicalTokens <= 0 {
-		return fmt.Errorf("%w: got %d, want > 0", ErrInvalidRequirements, prof.Requirements.MinParagraphLexicalTokens)
+	if fitted.MinParagraphLexicalTokens <= 0 {
+		return fmt.Errorf("%w: got %d, want > 0", ErrInvalidRequirements, fitted.MinParagraphLexicalTokens)
 	}
-	if prof.Unit != profile.UnitParagraph {
+	if fitted.Unit != profile.UnitParagraph {
 		return deviation.ErrProfileUnit
 	}
 	// A profile ID hashes all profile identity inputs, including its feature manifest
 	// digest, so matching IDs make a separate manifest-digest comparison redundant.
-	if ref.ProfileID != prof.ID {
-		return fmt.Errorf("%w: got %q, want %q", ErrProfileMismatch, ref.ProfileID, prof.ID)
+	if ref.ProfileID != fitted.ID {
+		return fmt.Errorf("%w: got %q, want %q", ErrProfileMismatch, ref.ProfileID, fitted.ID)
 	}
-	if release.Discrimination.ProfileID != prof.ID || release.Calibration.ProfileID != prof.ID {
-		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrProfileMismatch, release.Discrimination.ProfileID, release.Calibration.ProfileID, prof.ID)
+	if release.Discrimination.ProfileID != fitted.ID || release.Calibration.ProfileID != fitted.ID {
+		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrProfileMismatch, release.Discrimination.ProfileID, release.Calibration.ProfileID, fitted.ID)
 	}
 	if release.Discrimination.ReferenceID != ref.ID || release.Calibration.ReferenceID != ref.ID {
 		return fmt.Errorf("%w: got discrimination %q and calibration %q, want %q", ErrReferenceMismatch, release.Discrimination.ReferenceID, release.Calibration.ReferenceID, ref.ID)

@@ -752,23 +752,13 @@ func TestScoreRefusesMismatchedArtifacts(t *testing.T) {
 		}
 	})
 
-	t.Run("a document-unit profile", func(t *testing.T) {
-		other := testProfile()
-		other.Unit = profile.UnitDocument
-		if _, err := score.Score([]byte(draft), mustFit(t, other), ref, release); !errors.Is(err, deviation.ErrProfileUnit) {
-			t.Errorf("err = %v, want %v", err, deviation.ErrProfileUnit)
-		}
-	})
-
-	// Non-positive, not merely zero: profile.Build validates the floor, so one
-	// arriving here at all is malformed however it got that way.
-	for _, floor := range []int{0, -1} {
-		t.Run("a profile whose paragraph floor is "+itoa(floor), func(t *testing.T) {
-			if _, err := score.Score([]byte(draft), mustFit(t, withFloor(prof), floor), ref, release); !errors.Is(err, score.ErrInvalidRequirements) {
-				t.Errorf("err = %v, want %v", err, score.ErrInvalidRequirements)
-			}
-		})
-	}
+	// A document-unit profile and a non-positive paragraph floor left this table
+	// when Score narrowed: profile.Fitted() refuses to project either, so
+	// neither can be passed here any more. Both are asserted where the
+	// projection is made, in profile's
+	// TestAProfileScoringCannotUseYieldsNoProjection, which covers the unit and
+	// both floors — the negative one having been moved there rather than
+	// dropped.
 }
 
 // ---------------------------------------------------------------------------
@@ -1206,7 +1196,7 @@ func TestMismatchedArtifactsAreRefusedWithNothingToScore(t *testing.T) {
 			for i := range population {
 				population[i].Distance.ReferenceID = "another-reference"
 			}
-			if _, err := score.Score([]byte(draft), mustFit(t, withFloor(prof), 500), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
+			if _, err := score.Score([]byte(draft), mustFit(t, withFloor(prof, 500)), ref, releaseOver(t, population)); !errors.Is(err, score.ErrReferenceMismatch) {
 				t.Errorf("err = %v, want %v", err, score.ErrReferenceMismatch)
 			}
 		})

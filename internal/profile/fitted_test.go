@@ -73,7 +73,11 @@ func TestAProfileScoringCannotUseYieldsNoProjection(t *testing.T) {
 		{"a feature set version from another build", func(p *profile.Profile) { p.FeatureSetVersion = features.SetVersion + 1 }},
 		{"a manifest digest from another build", func(p *profile.Profile) { p.FeatureManifestDigest = "0f4a2c9b" }},
 		{"no statistics at all", func(p *profile.Profile) { p.Stats = nil }},
+		// Non-positive, not merely zero: Build validates the floor, so one
+		// arriving here at all is malformed however it got that way. Both
+		// values moved here from score, where they can no longer be passed.
 		{"a floor of zero", func(p *profile.Profile) { p.Requirements.MinParagraphLexicalTokens = 0 }},
+		{"a negative floor", func(p *profile.Profile) { p.Requirements.MinParagraphLexicalTokens = -1 }},
 		{"no identity", func(p *profile.Profile) { p.ID = "" }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
