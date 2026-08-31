@@ -1335,7 +1335,12 @@ func TestShippabilityIsTheConjunctionOfTheGates(t *testing.T) {
 			}
 			result.Shippable = c.shippable
 			if !c.shippable {
-				result.Reason = eval.ReleaseReasonDiscriminationFailed
+				// Which reason is DERIVED from which gate failed: the
+				// discrimination one only when discrimination is what failed.
+				result.Reason = eval.ReleaseReasonUncalibrated
+				if !c.discriminates {
+					result.Reason = eval.ReleaseReasonDiscriminationFailed
+				}
 			}
 			err := s.PutEvalResult(ctx(), result, store.LeaveHead)
 			if want && err != nil {
