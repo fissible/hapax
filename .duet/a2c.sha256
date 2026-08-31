@@ -1,3 +1,4 @@
+86ef2366a2280fd02ca5c6a647d097a1070f7d8be99fcf1e5ebbf190503807a6  internal/cli/binary_test.go
 48cd42d43cf54c9dd956f30c2c9a28b5e66e3d9d7d8e15c6a9822784f1e8d59c  internal/cli/commands_test.go
 914aab24b35fe5d926fa7f8e60ee313b884c30a870218e4b6662be729ab18bba  internal/cli/document_test.go
 9da36e3767afab58a85dce2753abbb9ee0c306b730a3e019c8a4384ccf5db887  internal/cli/run_test.go
