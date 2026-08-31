@@ -788,6 +788,7 @@ func graphCensus(t *testing.T, s *Store) map[string]int {
 		"snapshot", "document", "node", "feature_vector", "feature_value",
 		"profile", "profile_stat", "profile_head", "reference", "reference_value",
 		"threshold", "eval_result", "exemplar_selection", "exemplar_member",
+		"distractor_pool", "distractor_pool_member",
 		"rewrite_attempt", "rewrite_attempt_identifier",
 	} {
 		var count int

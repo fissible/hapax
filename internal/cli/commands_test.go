@@ -19,10 +19,18 @@ import (
 type fakeService struct {
 	indexRequest   workflow.IndexRequest
 	profileRequest workflow.ProfileRequest
+	evalRequest    workflow.EvalRequest
 	indexResult    workflow.IndexResult
 	profileResult  workflow.ProfileResult
+	evalResult     workflow.EvalResult
 	err            error
 	calls          int
+}
+
+func (f *fakeService) Eval(_ context.Context, request workflow.EvalRequest) (workflow.EvalResult, error) {
+	f.calls++
+	f.evalRequest = request
+	return f.evalResult, f.err
 }
 
 func (f *fakeService) Index(_ context.Context, request workflow.IndexRequest) (workflow.IndexResult, error) {

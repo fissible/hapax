@@ -215,7 +215,14 @@ func TestTheAttemptVocabulariesIncludeTheEmptyValue(t *testing.T) {
 // must refuse. A column added without a grammar fails the first test; a grammar
 // that constrains nothing fails the second.
 var textualColumnGrammars = map[string]string{
-	"snapshot.id": "hex", "snapshot.policy_digest": "hex", "snapshot.created_at": "time",
+	// The distractor pool holds identities and digests and nothing else, so
+	// every textual column of it is hex. A column that accepted arbitrary text
+	// is where a filename would eventually go.
+	"distractor_pool.id": "hex", "distractor_pool.policy_digest": "hex",
+	"distractor_pool.created_at":          "time",
+	"distractor_pool_member.pool_id":      "hex",
+	"distractor_pool_member.content_hash": "hex",
+	"snapshot.id":                         "hex", "snapshot.policy_digest": "hex", "snapshot.created_at": "time",
 	"document.document_id": "hex", "document.snapshot_id": "hex", "document.content_hash": "hex",
 	"document.path": "rel", "document.register": "register", "document.split": "enum",
 	"document.admission": "enum", "document.language": "enum", "document.unavailable_at": "time",
