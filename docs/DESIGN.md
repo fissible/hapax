@@ -2105,6 +2105,18 @@ merged: a version newer than the binary knows, a checksum that differs from the 
 migration of that version, and a schema with no ledger at all — the last being a
 pre-ledger or externally-created database, which is refused rather than adopted.
 
+**Migrations apply as one transaction, with foreign keys enforced.** All pending versions
+run on one connection inside one transaction, so a partial upgrade is impossible rather than
+merely unlikely, and each version still records its own ledger row. Foreign keys stay on
+throughout: migration 2 only adds and drops columns, so nothing needs them off, and leaving
+them enforced beats disabling them and auditing afterwards with `foreign_key_check`. A future
+migration that genuinely needs a table rebuild reintroduces both, scoped to itself.
+
+The cost is real and measured: migration 2 adds ~3.6ms to every fresh database open — the
+same in `ALTER` form as in table-rebuild form, because each statement reparses the schema.
+Paid once per database in production; paid thousands of times by a suite that opens a fresh
+store per test, which is why the store race suite runs about 50s longer than before it.
+
 **`index` is one transaction, and it is not four writers composed.** `store.Index` writes the
 aggregate, advances the profile head, reads every head **on that same connection after the
 advance**, and prunes from those — inside one `BEGIN IMMEDIATE`. Composing `PutSnapshot`,
