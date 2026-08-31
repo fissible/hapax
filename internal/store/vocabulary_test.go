@@ -538,19 +538,19 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			return err
 		},
 		"rewrite_attempt.provider_id": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.current_band": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.candidate_band": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		"rewrite_attempt.rejection": func(s *store.Store, ids seededIDs) error {
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},
 		// Every column of the release reaches the reader through one loader.

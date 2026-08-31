@@ -287,7 +287,12 @@ func notANumber() float64 { return math.NaN() }
 // can load exactly the one it damaged.
 type seededIDs struct {
 	Snapshot, Profile, Reference, Threshold, EvalResult, Selection, Invocation string
-	Nodes                                                                      []string
+	// AttemptNode is the node the seeded rewrite attempt is about. An attempt is
+	// identified by its invocation AND its node, so a loader cannot be reached
+	// without it; Nodes below is the exemplar selection's membership, which is
+	// not the same set.
+	AttemptNode string
+	Nodes       []string
 }
 
 // seedEveryArtifact writes one valid instance of each artifact this slice owns.
@@ -332,7 +337,7 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	return seededIDs{
 		Snapshot: snapshot.ID, Profile: prof.ID, Reference: ref.ID,
 		Threshold: threshold.ID, EvalResult: result.ID, Selection: selection.ID,
-		Invocation: attempt.InvocationID, Nodes: selection.Members,
+		Invocation: attempt.InvocationID, AttemptNode: attempt.NodeID, Nodes: selection.Members,
 	}
 }
 

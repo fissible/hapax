@@ -267,7 +267,7 @@ func TestATruncatedRowStreamIsAnErrorAndNotCorruption(t *testing.T) {
 			return len(got.Members) == 3, err
 		}},
 		{"preserve identifiers", "rewrite_attempt_identifier", func(s *Store, ids seamIDs) (bool, error) {
-			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, 0)
+			got, err := s.LoadRewriteAttempt(context.Background(), ids.Invocation, ids.AttemptNode, 0)
 			return len(got.PreserveIdentifiers) == 3, err
 		}},
 		{"a snapshot's documents", "document", func(s *Store, ids seamIDs) (bool, error) {
@@ -623,6 +623,9 @@ func driverNamesSoFar() []string { return sql.Drivers() }
 
 type seamIDs struct {
 	Snapshot, Profile, Reference, Selection, Invocation, Orphan string
+	// AttemptNode completes the attempt's identity, which is its invocation and
+	// its node together.
+	AttemptNode string
 }
 
 // seededSeamStore builds one of every artifact whose loader iterates a row
@@ -711,7 +714,7 @@ func seededSeamStore(t *testing.T, driverName string) (*Store, seamIDs) {
 
 	return s, seamIDs{
 		Snapshot: write.ID, Profile: prof.ID, Reference: ref.ID,
-		Selection: selection.ID, Invocation: attempt.InvocationID, Orphan: orphan.ID,
+		Selection: selection.ID, Invocation: attempt.InvocationID, AttemptNode: attempt.NodeID, Orphan: orphan.ID,
 	}
 }
 

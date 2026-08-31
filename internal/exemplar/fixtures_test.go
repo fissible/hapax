@@ -145,19 +145,31 @@ func selectWith(t *testing.T, prof *profile.Profile, candidates []exemplar.Candi
 		before[i].Vector.Values = append([]features.FeatureValue(nil), c.Vector.Values...)
 	}
 
-	var profileBefore *profile.Profile
+	// Select takes the fitted projection, not the build artifact: it reads only
+	// the profile's ID and its Fitted(), and taking the artifact forced every
+	// caller holding a stored profile to reconstruct one it does not have. The
+	// fixtures project here so the cases below keep reading as profiles.
+	//
+	// A nil profile becomes the zero projection, which says the same thing in the
+	// narrowed signature's terms: Select was given nothing usable.
+	var fitted profile.Fitted
 	if prof != nil {
-		copied := *prof
-		copied.Stats = append([]profile.Stats(nil), prof.Stats...)
-		profileBefore = &copied
+		var err error
+		if fitted, err = prof.Fitted(); err != nil {
+			t.Fatalf("Fitted: %v", err)
+		}
 	}
+	// Fitted is a value, but its Stats is a slice: Select can still write through
+	// the caller's backing array, which is what this guards.
+	fittedBefore := fitted
+	fittedBefore.Stats = append([]profile.Stats(nil), fitted.Stats...)
 
-	got, err := exemplar.Select(prof, candidates, cfg)
+	got, err := exemplar.Select(fitted, candidates, cfg)
 	if len(candidates) > 0 && !reflect.DeepEqual(candidates, before) {
 		t.Fatalf("Select modified the caller's candidates")
 	}
-	if prof != nil && !reflect.DeepEqual(prof, profileBefore) {
-		t.Fatalf("Select modified the caller's profile")
+	if !reflect.DeepEqual(fitted, fittedBefore) {
+		t.Fatalf("Select modified the caller's projection")
 	}
 	return got, err
 }

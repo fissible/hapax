@@ -138,7 +138,7 @@ func TestPruneRemovesOnlyWhatNoRootReaches(t *testing.T) {
 		}},
 		{"the eval result", func() error { _, err := s.LoadEvalResult(ctx(), f.EvalResult.ID); return err }},
 		{"the rewrite attempt", func() error {
-			_, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.Index)
+			_, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.NodeID, f.Attempt.Index)
 			return err
 		}},
 	} {
@@ -167,7 +167,7 @@ func TestPruneKeepsTheSnapshotAnAuditRecordPointsInto(t *testing.T) {
 	if _, err := s.Snapshot(ctx(), f.Drafted.ID); err != nil {
 		t.Errorf("the drafted snapshot was removed: %v", err)
 	}
-	if _, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.Index); err != nil {
+	if _, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.NodeID, f.Attempt.Index); err != nil {
 		t.Errorf("the audit record went with it: %v", err)
 	}
 	span, err := s.Span(ctx(), f.Attempt.NodeID)
@@ -384,7 +384,7 @@ func loadKeptGraph(t *testing.T, s *store.Store, f pruneFixture) []any {
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
 	}
-	attempt, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.Index)
+	attempt, err := s.LoadRewriteAttempt(ctx(), f.Attempt.InvocationID, f.Attempt.NodeID, f.Attempt.Index)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}

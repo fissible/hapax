@@ -321,7 +321,7 @@ func TestARewriteAttemptRoundTrips(t *testing.T) {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}
 
-	got, err := s.LoadRewriteAttempt(ctx(), want.InvocationID, want.Index)
+	got, err := s.LoadRewriteAttempt(ctx(), want.InvocationID, want.NodeID, want.Index)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}
@@ -442,7 +442,7 @@ func TestAnUnscoreableAttemptStoresNoBand(t *testing.T) {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}
 
-	got, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, attempt.Index)
+	got, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, attempt.NodeID, attempt.Index)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}
@@ -473,7 +473,9 @@ func TestARecorderSatisfiesTheRewriteStore(t *testing.T) {
 		t.Fatalf("RecordAttempt: %v", err)
 	}
 
-	got, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, attempt.Index)
+	// SpanRef is what a rewrite.Attempt calls the node it applied to, and it is
+	// what the store keys on.
+	got, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, attempt.SpanRef, attempt.Index)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}
@@ -773,7 +775,7 @@ func TestLoadingAnArtifactThatIsNotThereIsNotFound(t *testing.T) {
 		{"threshold", func() error { _, err := s.LoadThreshold(ctx(), absent); return err }},
 		{"eval result", func() error { _, err := s.LoadEvalResult(ctx(), absent); return err }},
 		{"exemplar selection", func() error { _, err := s.LoadExemplarSelection(ctx(), absent); return err }},
-		{"rewrite attempt", func() error { _, err := s.LoadRewriteAttempt(ctx(), absent, 0); return err }},
+		{"rewrite attempt", func() error { _, err := s.LoadRewriteAttempt(ctx(), absent, absent, 0); return err }},
 		{"profile head", func() error { _, err := s.ProfileHead(ctx(), "essays"); return err }},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -940,13 +942,13 @@ func TestDamageTheSchemaCannotPreventIsCorruptNotSmaller(t *testing.T) {
 			}},
 		{"an attempt claiming preservation while naming a difference", "UPDATE rewrite_attempt SET preserved = 1",
 			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 				return err
 			}},
 		{"an attempt identifier naming an undeclared class",
 			"UPDATE rewrite_attempt_identifier SET identifier = 'preserve-v1:sentiment:lost:0123456789abcdef'",
 			func(s *store.Store, ids seededIDs) error {
-				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+				_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 				return err
 			}},
 	} {
@@ -1123,7 +1125,7 @@ func TestARefusedConflictLeavesTheStoredArtifactUntouched(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadExemplarSelection: %v", err)
 	}
-	attemptBefore, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+	attemptBefore, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}
@@ -1172,7 +1174,7 @@ func TestARefusedConflictLeavesTheStoredArtifactUntouched(t *testing.T) {
 			return got, selectionBefore
 		},
 		"rewrite attempt": func() (any, any) {
-			got, _ := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+			got, _ := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return got, attemptBefore
 		},
 	} {
@@ -1291,7 +1293,7 @@ func loadEverything(t *testing.T, s *store.Store, ids seededIDs) []any {
 	if err != nil {
 		t.Fatalf("LoadExemplarSelection: %v", err)
 	}
-	attempt, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, 0)
+	attempt, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 	if err != nil {
 		t.Fatalf("LoadRewriteAttempt: %v", err)
 	}
