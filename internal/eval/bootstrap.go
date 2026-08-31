@@ -21,6 +21,9 @@ const (
 	ClusterByDocumentAndAuthor Clustering = "document-and-author"
 )
 
+func Clusterings() []Clustering { return []Clustering{ClusterByDocument} }
+func Classes() []Class          { return []Class{ClassAuthor, ClassDistractor} }
+
 // BootstrapSpec declares a reproducible clustered bootstrap.
 type BootstrapSpec struct {
 	Confidence   float64

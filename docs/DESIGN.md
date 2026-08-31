@@ -2072,6 +2072,11 @@ recorded checksum differs from the migration this binary carries), `ErrSchemaInc
 gap, or a ledger missing a version this binary has), and `ErrSchemaForeign` (a database with
 tables but no ledger at all). Every one of them leaves the file and its sidecars byte-identical.
 
+**A valid prefix is migrated forward, not refused.** A ledger recording versions 0..n for an
+n below what this binary carries is a database written by an older build, and applying the
+remaining migrations in order is the whole point of having them. `ErrSchemaIncomplete` is for
+a ledger with a **gap**, or one with no rows at all — not for one that is merely behind.
+
 **The migration ledger is the only authority on version.** Versions are contiguous from zero;
 the checksum is over the exact migration bytes the binary carries; and the ledger, not the
 schema, answers "what version is this". Three disagreements are distinguished rather than

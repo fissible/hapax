@@ -16,6 +16,8 @@ import (
 // DiscriminationAlgorithm identifies the declared clustered AUC gate.
 const DiscriminationAlgorithm = "clustered-auc-lower-bound-v1"
 
+func DiscriminationReasons() []string { return []string{"", "lower-bound-below-floor"} }
+
 // DiscriminationSpec declares a reproducible one-sided AUC bound.
 type DiscriminationSpec struct {
 	Floor      float64

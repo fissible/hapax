@@ -110,6 +110,17 @@ func open(path, driverName string, d deps) (*Store, error) {
 			db.Close()
 			return nil, err
 		}
+		var installed int
+		if err := db.QueryRow("SELECT count(*) FROM migration").Scan(&installed); err != nil {
+			db.Close()
+			return nil, err
+		}
+		for version := installed; version < len(migrations); version++ {
+			if err := s.applyMigration(context.Background(), version, migrations[version]); err != nil {
+				db.Close()
+				return nil, err
+			}
+		}
 	} else {
 		for version, ddl := range migrations {
 			if err := s.applyMigration(context.Background(), version, ddl); err != nil {
@@ -160,7 +171,7 @@ func (s *Store) checkLedger(ctx context.Context) error {
 	if err := rows.Err(); err != nil {
 		return err
 	}
-	if i != len(migrations) {
+	if i == 0 {
 		return ErrSchemaIncomplete
 	}
 	return nil
