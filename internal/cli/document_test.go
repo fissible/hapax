@@ -57,11 +57,16 @@ func TestTheStatusVocabularyIsThree(t *testing.T) {
 	}
 }
 
-// A1 implements one command, and the surface says so rather than promising the
-// five that do not exist yet.
+// The surface says what is built rather than promising the six DESIGN names.
+// This list is hand-maintained ON PURPOSE: there is no way to derive "what is
+// implemented" from the code, so the only honest source is a slice adding its
+// own command here when it lands. It going stale is the test doing its job.
 func TestTheCommandSurfaceIsWhatIsImplemented(t *testing.T) {
-	if got := cli.Commands(); !reflect.DeepEqual(got, []string{"tells"}) {
-		t.Errorf("commands = %v, want [tells]", got)
+	want := []string{"index", "profile", "tells"}
+	got := append([]string(nil), cli.Commands()...)
+	sort.Strings(got)
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("commands = %v, want %v", got, want)
 	}
 }
 
