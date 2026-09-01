@@ -1,0 +1,91 @@
+package store
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// The template is built once, and everything a fresh open needs after that is a
+// copy of it. Nothing else should accumulate.
+//
+// Added after the freeze, because it is a contract the frozen tests did not
+// state and the first implementation therefore did not have to meet: it created
+// a template directory on every call rather than on every build, and obtained
+// the template twice per open, so a process leaked two directories for every
+// store it created. Measured at 21,575 of them in one temp directory after a
+// session's test runs.
+//
+// Nothing in the frozen set could see it. Those tests assert what a store
+// contains and which route built it; a directory nobody deletes is neither.
+func TestFreshOpensLeaveNoTemplateDirectoriesBehind(t *testing.T) {
+	dir := t.TempDir()
+
+	// Warm the cache first, so what this counts is the per-open cost rather than
+	// the one directory the process's single template legitimately occupies.
+	warm, err := Open(filepath.Join(dir, "warm.db"))
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	if err := warm.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	before := templateDirectories(t)
+	const opens = 5
+	for i := 0; i < opens; i++ {
+		s, err := Open(filepath.Join(dir, fmt.Sprintf("store%d.db", i)))
+		if err != nil {
+			t.Fatalf("open %d: %v", i, err)
+		}
+		if err := s.Close(); err != nil {
+			t.Fatalf("close %d: %v", i, err)
+		}
+	}
+
+	if after := templateDirectories(t); after != before {
+		t.Errorf("%d fresh opens left %d template directories behind, %.1f per open",
+			opens, after-before, float64(after-before)/opens)
+	}
+}
+
+// And the cache owns what it creates: resetting it takes the directory too, not
+// just the database inside.
+func TestResettingTheTemplateCacheRemovesItsDirectory(t *testing.T) {
+	resetTemplateCache()
+	t.Cleanup(resetTemplateCache)
+
+	before := templateDirectories(t)
+	template, err := freshTemplate()
+	if err != nil {
+		t.Fatalf("freshTemplate: %v", err)
+	}
+	if built := templateDirectories(t); built <= before {
+		t.Fatalf("building a template created %d directories", built-before)
+	}
+
+	resetTemplateCache()
+	if _, err := os.Stat(template); !os.IsNotExist(err) {
+		t.Errorf("the template file survived the reset: %v", err)
+	}
+	if after := templateDirectories(t); after != before {
+		t.Errorf("resetting left %d directories behind", after-before)
+	}
+}
+
+func templateDirectories(t *testing.T) int {
+	t.Helper()
+	entries, err := os.ReadDir(os.TempDir())
+	if err != nil {
+		t.Fatalf("read temp: %v", err)
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() && strings.HasPrefix(entry.Name(), "hapax-template") {
+			count++
+		}
+	}
+	return count
+}
