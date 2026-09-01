@@ -17,7 +17,10 @@ import (
 	"github.com/fissible/hapax/internal/features"
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/ingest"
+	"github.com/fissible/hapax/internal/llm"
+	"github.com/fissible/hapax/internal/mode"
 	"github.com/fissible/hapax/internal/profile"
+	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/score"
 	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/store"
@@ -837,6 +840,39 @@ type Runner struct {
 	Discrimination eval.DiscriminationSpec
 	BandFloor      eval.BandFloor
 	Bootstrap      eval.BootstrapSpec
+	Providers      ProviderFactory
+}
+
+type ProviderChoice struct{ Provider, Model, Endpoint string }
+type ProviderFactory struct {
+	Local func(ProviderChoice) (rewrite.Provider, error)
+	Cloud func(ProviderChoice) (rewrite.Provider, error)
+}
+
+var (
+	ErrLocalOnlyForbidsProvider = errors.New("local-only mode forbids this provider")
+	ErrUnknownProvider          = errors.New("unknown provider")
+	ErrNoProviderFactory        = errors.New("provider factory is not configured")
+)
+
+func (r *Runner) Provider(m mode.Mode, choice ProviderChoice) (rewrite.Provider, error) {
+	switch llm.ProviderID(choice.Provider) {
+	case llm.ProviderOllama:
+		if r.Providers.Local == nil {
+			return nil, ErrNoProviderFactory
+		}
+		return r.Providers.Local(choice)
+	case llm.ProviderAnthropic:
+		if m.LocalOnly {
+			return nil, ErrLocalOnlyForbidsProvider
+		}
+		if r.Providers.Cloud == nil {
+			return nil, ErrNoProviderFactory
+		}
+		return r.Providers.Cloud(choice)
+	default:
+		return nil, ErrUnknownProvider
+	}
 }
 
 func Default() *Runner { return New(profile.DefaultRequirements(), deviation.DefaultMinSegments()) }

@@ -56,8 +56,10 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 			dir:         "../../cmd/hapax",
 			allowGetenv: true,
 			allowedImports: []string{
-				"context", "os", "time",
+				"context", "errors", "net", "os", "time",
 				"github.com/fissible/hapax/internal/cli",
+				"github.com/fissible/hapax/internal/llm",
+				"github.com/fissible/hapax/internal/rewrite",
 				// The binary names workflow to construct the real one. It still
 				// may not name internal/store: what it hands cli is a service,
 				// not a database.
