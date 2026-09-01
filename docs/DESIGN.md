@@ -389,6 +389,46 @@ read from a remote host is the same problem pointed the other way.
 proves the former. It cannot prove the latter, because the author's own prose may contain a
 string equal to a profile ID, and no filter should be pretending otherwise.
 
+**The boundary is a signature, and two other shapes were tried first.** Two types in one
+package, one holding a credential factory and one not, is not a boundary: both can name the
+type, and both can call a constructor a later edit widens. Separate packages, the local one
+unable to *name* a credential, is not one either — a named function type accepts a matching
+literal, so a package can populate a credential-typed field without importing the package that
+defines it, and an import allowlist would pass while the boundary was absent.
+
+```go
+package user            // imports cred, never names cred.Factory
+func Build() cred.Deps {
+    return cred.Deps{Credentials: func(context.Context) (string, error) { ... }}
+}
+```
+
+So `NewLocal(LocalConfig, DialFunc, *x509.CertPool)` has nowhere to put a credential and
+`NewCloud(CloudConfig, CloudDeps)` owns them. A local construction cannot supply one at any
+call site, present or future, and adding the parameter back is a build failure rather than a
+test failure. `LocalConfig` and `CloudConfig` are distinct types rather than one struct with a
+provider selector, because `NewLocal` must not be handed a cloud choice either.
+
+**It holds inward as well.** The package-private constructor takes transport only and returns
+the concrete provider; credential attachment belongs to the cloud path. An earlier version
+passed a credential-bearing struct from the local path with the field left nil, which is the
+first rejected design reappearing where nothing was watching — the guarantee became that the
+local path *happened not to* supply a credential rather than that it *could not*.
+
+**What the tests hold that a signature cannot.** Five other channels reach past it: a type
+hidden behind an allowed field name, what the local path puts on the wire, *where* it sends it
+— a credential travels as well in `?api_key=` or in userinfo as in a header — a package-level
+setter invoked by the local constructor, and an exported method, declared or promoted from an
+embedding, which a caller reaches structurally through the returned interface. Each is closed
+by a test rather than by the compiler, and each was found by review rather than by writing
+them.
+
+**Resolution happens once, above the constructors.** Exactly one arm runs; local-only refuses
+the cloud arm before it runs rather than after; an unknown provider is refused before either;
+a selected arm that is absent refuses rather than substituting the other. `cmd/hapax` supplies
+both arms and closes over the environment lookup on the cloud one, so the binary remains the
+sole environment boundary and `cli` never holds a key.
+
 ### Commands
 
 - `hapax index ~/writing/ --profile essays` — build corpus and profile; report contamination
