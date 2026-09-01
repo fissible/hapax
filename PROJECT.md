@@ -52,8 +52,7 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#63](https://github.com/fissible/hapax/issues/63) | The distractor pool cannot get its author-clustering protection | needs a schema decision, not just a workflow one |
 | [#64](https://github.com/fissible/hapax/issues/64) | `paragraphs_below_floor` is always zero at the declared floor | a stylometry decision about the floor |
 | [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view |
-| [#68](https://github.com/fissible/hapax/issues/68) | B2 — the provider, the loop, assembly, and the command | #67, which is done |
-| [#70](https://github.com/fissible/hapax/issues/70) | Every store open pays for two table rebuilds it does not need | nothing; measured, and the fix is #61's named follow-up |
+| [#68](https://github.com/fissible/hapax/issues/68) | B2 — the provider, the loop, assembly, and the command | #67 and #70, both done |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
@@ -144,6 +143,50 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### 2026-08-31 (#70: a fresh store stops replaying the migration chain)
+
+Done before B2 because B2 adds more store-backed tests to a critical path B1 had just grown
+by 73%.
+
+**A brand-new database was spending 92% of its open replaying the chain** — 11.7ms of 12.7ms,
+against 0.97ms to reopen — on migrations whose later steps exist to move data that is not
+there. A fresh store is now a copy of a template the chain itself produced, published by
+staging beside the destination and linking with a primitive that fails rather than overwrites.
+
+**Copying rather than replaying was the reviewer's call and it was right.** I had proposed
+replaying `sqlite_master` into a fresh file; that claims a projection of the chain's output is
+faithful, and after a table rebuild the catalogue holds `CREATE` text no migration contains.
+Copying claims nothing, because the bytes are the output — and it carries forward for free
+anything a future migration does that a schema comparison would miss.
+
+**It also closes an ownership race rather than inheriting one.** `open` has always stat-ed a
+path before opening it, so two processes could create the same absent path at once. Staged
+no-clobber publication means the loser opens the winner's database instead of replacing it.
+
+| | before | after |
+|---|---|---|
+| fresh `store.Open` | 11.9ms | 8.98ms |
+| `internal/store` under race | 242s | **92s** |
+| whole suite under race | 4m09s | 3m13s |
+
+**The two numbers disagree, and the reason is worth keeping.** The staging fsync is 5.15ms of
+an 8.98ms open — two thirds of the per-open gain — but it is I/O wait, which `-race` does not
+amplify, while the chain's CPU is amplified about twelvefold. So the sync costs almost nothing
+where CI cost is decided. I nearly reopened the durability decision on the strength of the 25%
+per-open figure, which does not bear on the question at all.
+
+**Ten review rounds, and every finding was one habit:** an assertion a correct implementation
+satisfies, where an incorrect one satisfies it too. Rows counted not compared; links counted
+not bound to a destination; a template named not read; a sync logged not identified; a file
+matched by pathname not inode; a reader opened not drained; a build counted sequentially not
+concurrently; a barrier inside the build rather than at the decision that leads to one. The
+seams now observe effects — bytes moving through a reader, inodes compared by `SameFile`,
+migrations actually executed — and every remaining claim is cross-checked against one.
+
+**The critical path has moved to `internal/workflow`, 186s.** That is B1's +57s, and it is
+test count rather than migration cost — twenty-one tests that each build a real store. A
+different problem, and not one to solve by trimming tests that each found something.
 
 ### 2026-08-31 (B1: everything `rewrite` decides before it spends anything)
 

@@ -2599,3 +2599,58 @@ The store carries a schema version, migrated forward only. A migration that chan
 *meaning* of a stored artifact must also bump the relevant semantic contract version from
 Section 2 — otherwise migrated artifacts are silently reinterpreted under new rules, which is
 the stale-reuse failure the cache identity exists to prevent.
+
+**A brand-new database does not replay the chain.** It spends 92% of its open doing so — 11.7ms
+of 12.7ms measured, against 0.97ms to reopen an existing one — on migrations whose later steps
+exist to move data that is not there. A fresh store is instead a **copy of a template the chain
+itself produced**, built once per process.
+
+The distinction between copying and replaying is the whole safety argument. Replaying
+`sqlite_master` into a fresh file would claim that a projection of the chain's output is
+faithful, and after a table rebuild the catalogue holds `CREATE` text no migration contains.
+Copying claims nothing: the bytes are the output. It also carries forward, for free, anything
+a future migration does that a schema comparison would miss — seeded rows, a persistent
+setting — which is what made the alternative fragile rather than merely larger.
+
+**What proves they cannot diverge** is a test that builds one store each way and compares the
+ordered catalogue, the ledger's versions and checksums, every non-ledger row, the persistent
+pragmas, `integrity_check` and `foreign_key_check`. The chained side is built through a seam
+the materialised path cannot reach; without that, both sides take the same route and agree
+with themselves about any defect.
+
+**Publication is staged and refuses to clobber.** The template is copied to a staging file in
+the destination's own directory, its ledger restamped, and the file synced; only then is it
+linked into place with a primitive that fails if the destination exists. A collision means
+somebody else won the race, so the loser discards its staging and opens theirs — including
+refusing it if it turns out to be foreign. Any other publication failure removes the staging
+file and returns the error rather than falling back to building the destination in place,
+because a non-atomic second attempt after a failed atomic one is worse than a refusal.
+
+This *closes* an ownership race rather than inheriting one. `open` has always stat-ed the path
+before opening it, and an absent path could previously be created by two processes at once.
+
+**Existing files keep their classification**, including an existing empty SQLite file, which is
+initialised in place through the chain. Reclassifying it as an absent path is how a file
+somebody else created gets replaced.
+
+**`applied_at` means when this binary established this version in this store** — by migration
+or by materialisation. A materialised store's rows share one timestamp because they were
+established together, and they are restamped in staging rather than carrying the template's,
+so the column never records when some earlier process built a cache.
+
+**Durability is bounded, and the bound is stated rather than left to inference.** A published
+database is complete, and a failed publication leaves nothing behind. After a power loss the
+destination may simply be absent: no guarantee is made about the persistence of the directory
+entry. The staging file is still synced before it is linked, because that is what stops a
+destination that *does* persist from containing unwritten data. The chain never promised more
+— a crash part-way through it left a half-migrated database that the next open refuses.
+
+**An environmental failure to build the template falls back to the chain and is reported.** A
+migration or validation failure does not: availability is worth trading speed for, correctness
+is not.
+
+**The cache owns the directory it creates.** It is made only when a build is actually going to
+happen, and removed when the build fails or the cache is reset — not created on every request
+for the template and abandoned on the cache hits, which leaked two directories for every store
+a process created before it was caught. What remains is one directory per process, for as long
+as that process may still open a store, which is the template's whole reason for existing.

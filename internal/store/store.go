@@ -6,12 +6,15 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fissible/hapax/internal/corpus"
@@ -73,24 +76,104 @@ type Store struct {
 }
 
 type deps struct {
-	ReadFile func(string) ([]byte, error)
-	Now      func() time.Time
+	ReadFile            func(string) ([]byte, error)
+	Now                 func() time.Time
+	TemplateDir         func() (string, error)
+	TemplateSource      func() (io.ReadCloser, string, error)
+	Sync                func(*os.File) error
+	Link                func(string, string) error
+	Open                func(string) (*os.File, error)
+	TemplateNeeded      func()
+	TemplateUnavailable func(error)
+	Initialised         func(string, bool)
+	MigrationApplied    func(int)
+	ForceMigrationChain bool
 }
 
-func realDeps() deps { return deps{ReadFile: os.ReadFile, Now: time.Now} }
+func realDeps() deps {
+	d := deps{
+		ReadFile:    os.ReadFile,
+		Now:         time.Now,
+		TemplateDir: func() (string, error) { return "", nil },
+		Sync:        func(f *os.File) error { return f.Sync() },
+		Link:        os.Link,
+		Open:        os.Open,
+	}
+	d.TemplateSource = func() (io.ReadCloser, string, error) {
+		templates.Lock()
+		path := templates.path
+		templates.Unlock()
+		if path == "" {
+			return nil, "", errTemplateUnavailable
+		}
+		reader, err := os.Open(path)
+		return reader, path, err
+	}
+	return d
+}
+
+var defaultDeps = realDeps
+
+type templateCache struct {
+	sync.Mutex
+	path   string
+	dir    string
+	schema string
+	builds int
+}
+
+func newTemplateCache() *templateCache { return &templateCache{} }
+
+var templates = newTemplateCache()
 
 // Migrations returns exact SQL payloads, ordered by their zero-based version.
 func Migrations() []string { return append([]string(nil), migrations...) }
 
-func Open(path string) (*Store, error) { return open(path, "sqlite", realDeps()) }
+func Open(path string) (*Store, error) { return open(path, "sqlite", defaultDeps()) }
 
 func open(path, driverName string, d deps) (*Store, error) {
-	newFile := false
+	d = completeDeps(d)
 	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-		newFile = true
+		if !d.ForceMigrationChain {
+			return materialise(path, driverName, d)
+		}
+		return openInPlace(path, driverName, d, true, true)
 	} else if err != nil {
 		return nil, err
 	}
+	return openInPlace(path, driverName, d, false, true)
+}
+
+func completeDeps(d deps) deps {
+	defaults := realDeps()
+	if d.ReadFile == nil {
+		d.ReadFile = defaults.ReadFile
+	}
+	if d.Now == nil {
+		d.Now = defaults.Now
+	}
+	if d.TemplateDir == nil {
+		d.TemplateDir = defaults.TemplateDir
+	}
+	if d.TemplateSource == nil {
+		d.TemplateSource = defaults.TemplateSource
+	}
+	if d.Sync == nil {
+		d.Sync = defaults.Sync
+	}
+	if d.Link == nil {
+		d.Link = defaults.Link
+	}
+	if d.Open == nil {
+		d.Open = defaults.Open
+	}
+	return d
+}
+
+// openInPlace retains the established path for existing files and for callers
+// explicitly forcing the migration chain. report is false while validating a
+// file another process published, or one this call has just published.
+func openInPlace(path, driverName string, d deps, newFile, report bool) (*Store, error) {
 	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=foreign_keys(1)&_pragma=busy_timeout(10)"}).String()
 	db, err := sql.Open(driverName, dsn)
 	if err != nil {
@@ -101,6 +184,9 @@ func open(path, driverName string, d deps) (*Store, error) {
 	var tables int
 	if err := db.QueryRow("SELECT count(*) FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").Scan(&tables); err != nil {
 		db.Close()
+		if !newFile {
+			return nil, ErrSchemaForeign
+		}
 		return nil, err
 	}
 	if !newFile && tables != 0 {
@@ -136,7 +222,164 @@ func open(path, driverName string, d deps) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	if report && d.Initialised != nil {
+		d.Initialised(path, false)
+	}
 	return s, nil
+}
+
+// materialise copies the process template into a sibling staging file. Link is
+// deliberately used for publication: unlike rename it cannot replace a file
+// that appeared after the absence check.
+func materialise(path, driverName string, d deps) (*Store, error) {
+	if d.TemplateNeeded != nil {
+		d.TemplateNeeded()
+	}
+	_, err := templateFor(d, driverName)
+	if err != nil {
+		if errors.Is(err, errTemplateUnavailable) {
+			cause := errors.Unwrap(err)
+			if d.TemplateUnavailable != nil {
+				d.TemplateUnavailable(cause)
+			}
+			return openInPlace(path, driverName, d, true, true)
+		}
+		return nil, err
+	}
+
+	reader, _, err := d.TemplateSource()
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	staging, err := os.CreateTemp(filepath.Dir(path), ".hapax-staging-*")
+	if err != nil {
+		return nil, err
+	}
+	stagingPath := staging.Name()
+	defer os.Remove(stagingPath)
+	if _, err := io.Copy(staging, reader); err != nil {
+		_ = staging.Close()
+		return nil, err
+	}
+	if err := staging.Close(); err != nil {
+		return nil, err
+	}
+	if err := restampLedger(stagingPath, driverName, d.Now); err != nil {
+		return nil, err
+	}
+	staging, err = d.Open(stagingPath)
+	if err != nil {
+		return nil, err
+	}
+	if err := d.Sync(staging); err != nil {
+		_ = staging.Close()
+		return nil, err
+	}
+	if err := staging.Close(); err != nil {
+		return nil, err
+	}
+	if err := d.Link(stagingPath, path); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return openInPlace(path, driverName, d, false, false)
+		}
+		return nil, err
+	}
+	s, err := openInPlace(path, driverName, d, false, false)
+	if err != nil {
+		return nil, err
+	}
+	if d.Initialised != nil {
+		d.Initialised(path, true)
+	}
+	return s, nil
+}
+
+func restampLedger(path, driverName string, now func() time.Time) error {
+	dsn := (&url.URL{Scheme: "file", Path: path, RawQuery: "_pragma=foreign_keys(1)&_pragma=busy_timeout(10)"}).String()
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	_, err = db.Exec("UPDATE migration SET applied_at = ?", now().UTC().Format(time.RFC3339))
+	return err
+}
+
+var errTemplateUnavailable = errors.New("store: template unavailable")
+
+func freshTemplate() (string, error) { return templateFor(realDeps(), "sqlite") }
+
+func templateFor(d deps, driverName string) (string, error) {
+	// TemplateDir supplies the parent directory. It is deliberately not the
+	// allocation itself: the cache creates its owned directory only after the
+	// lock has established that a build is necessary.
+	parent, err := d.TemplateDir()
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errTemplateUnavailable, err)
+	}
+	templates.Lock()
+	defer templates.Unlock()
+	schema := strings.Join(migrations, "\x00")
+	if templates.path != "" && templates.schema == schema {
+		return templates.path, nil
+	}
+	resetTemplateCacheLocked()
+	dir, err := os.MkdirTemp(parent, "hapax-template-")
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errTemplateUnavailable, err)
+	}
+	file, err := os.CreateTemp(dir, "hapax-template-*.db")
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	path := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	build := d
+	build.ForceMigrationChain = true
+	// Building the cache is not an initialisation of the caller's store.
+	build.Initialised = nil
+	build.MigrationApplied = nil
+	s, err := open(path, driverName, build)
+	if err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	if err := s.Close(); err != nil {
+		_ = os.RemoveAll(dir)
+		return "", err
+	}
+	templates.path = path
+	templates.dir = dir
+	templates.schema = schema
+	templates.builds++
+	return path, nil
+}
+
+func templateBuilds() int {
+	templates.Lock()
+	defer templates.Unlock()
+	return templates.builds
+}
+
+func resetTemplateCache() {
+	templates.Lock()
+	defer templates.Unlock()
+	resetTemplateCacheLocked()
+}
+
+func resetTemplateCacheLocked() {
+	if templates.dir != "" {
+		_ = os.RemoveAll(templates.dir)
+	}
+	templates.path = ""
+	templates.dir = ""
+	templates.schema = ""
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -254,7 +497,13 @@ func (s *Store) applyTableRebuildMigration(ctx context.Context, version int) err
 		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.deps.MigrationApplied != nil {
+		s.deps.MigrationApplied(version)
+	}
+	return nil
 }
 
 func (s *Store) applyMigrationBatch(ctx context.Context, version int, ddls []string) error {
@@ -273,6 +522,7 @@ func (s *Store) applyMigrationBatch(ctx context.Context, version int, ddls []str
 	if err != nil {
 		return err
 	}
+	firstVersion := version
 	for _, ddl := range ddls {
 		if _, err = tx.ExecContext(ctx, ddl); err != nil {
 			break
@@ -286,7 +536,15 @@ func (s *Store) applyMigrationBatch(ctx context.Context, version int, ddls []str
 		_ = tx.Rollback()
 		return err
 	}
-	return tx.Commit()
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if s.deps.MigrationApplied != nil {
+		for applied := firstVersion; applied < version; applied++ {
+			s.deps.MigrationApplied(applied)
+		}
+	}
+	return nil
 }
 
 func (s *Store) PutSnapshot(ctx context.Context, w SnapshotWrite) error {
