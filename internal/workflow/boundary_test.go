@@ -60,6 +60,7 @@ var (
 
 // And an empty request is an error rather than a plan over nothing.
 func TestPlanRefusesARequestWithNoDraft(t *testing.T) {
+	t.Parallel()
 	if _, err := workflow.Default().Plan(ctx(), workflow.RewriteRequest{}); err == nil {
 		t.Error("Plan accepted an empty request")
 	}
@@ -78,6 +79,7 @@ func TestPlanRefusesARequestWithNoDraft(t *testing.T) {
 // met a narrowing that was satisfied in letter by a type union: every test
 // passed a Fitted, so nothing caught it.
 func TestSelectTakesTheFittedProjectionAndNotTheBuildArtifact(t *testing.T) {
+	t.Parallel()
 	packages, err := parser.ParseDir(token.NewFileSet(), "../exemplar", func(info fs.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
 	}, 0)
@@ -141,6 +143,7 @@ func typeOf(expression ast.Expr) string {
 // the same wrong answer and they would agree. The built profile is the
 // independent side — it never touches the store at all.
 func TestTheStoredProjectionEqualsTheBuiltOne(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 6)
 	snapshot, err := corpus.Walk(root, corpus.DefaultPolicy("essays"))
 	if err != nil {
@@ -199,6 +202,7 @@ func TestTheStoredProjectionEqualsTheBuiltOne(t *testing.T) {
 // payload whose members are only ever checked by the tests that happen to read
 // them grows members nobody checks.
 func TestTheRewritePlanSurfaceIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	assertShape(t, reflect.TypeOf(workflow.RewritePlan{}), [][2]string{
 		{"StorePath", "string"},
 		{"CorpusRoot", "string"},
@@ -221,6 +225,7 @@ func TestTheRewritePlanSurfaceIsExactlyThis(t *testing.T) {
 }
 
 func TestThePlannedSegmentSurfaceIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	assertShape(t, reflect.TypeOf(workflow.PlannedSegment{}), [][2]string{
 		{"Index", "int"},
 		{"NodeID", "string"},

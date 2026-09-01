@@ -17,6 +17,7 @@ import (
 // head is an unmet precondition — the ordinary first-run state — and a name that
 // does not exist is a typo the caller can fix.
 func TestHowAProfileIsSelected(t *testing.T) {
+	t.Parallel()
 	// Each case builds its own store, because the no-head case needs a store
 	// that EXISTS and holds no head — a snapshot-only index of a corpus too
 	// small to fit anything, which is the ordinary first-run state. Pointing at
@@ -124,6 +125,7 @@ func TestHowAProfileIsSelected(t *testing.T) {
 // never do is create one: answering "is there a profile" by writing a database
 // makes the answer wrong the next time it is asked.
 func TestProfileDiscoversUpwardAndCreatesNothing(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 
 	deep := filepath.Join(root, "a", "b", "c")
@@ -145,6 +147,7 @@ func TestProfileDiscoversUpwardAndCreatesNothing(t *testing.T) {
 // A directory with no store above it anywhere is the no-profile refusal, and
 // the filesystem is left exactly as it was.
 func TestProfileWithNoStoreAnywhereRefusesWithoutWriting(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	before := entries(t, dir)
 
@@ -164,6 +167,7 @@ func TestProfileWithNoStoreAnywhereRefusesWithoutWriting(t *testing.T) {
 // ancestor would answer with a different corpus's profile, which is worse than
 // answering with none.
 func TestAnEmptyMarkerStopsTheSearchRatherThanFallingThrough(t *testing.T) {
+	t.Parallel()
 	outer := indexedCorpus(t)
 
 	inner := filepath.Join(outer, "inner")
@@ -182,6 +186,7 @@ func TestAnEmptyMarkerStopsTheSearchRatherThanFallingThrough(t *testing.T) {
 // A .hapax that is a file is not a marker and not a store. Skipping past it
 // would quietly answer from somewhere else.
 func TestAMarkerThatIsAFileIsAFailure(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, ".hapax"), []byte("not a directory"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
@@ -194,6 +199,7 @@ func TestAMarkerThatIsAFileIsAFailure(t *testing.T) {
 // An explicit --store is exact: no upward search, and a path that is not there
 // is a failure rather than a refusal, because the caller named it.
 func TestAnExplicitStoreIsNotSearchedFor(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	nested := filepath.Join(root, "nested")
 	if err := os.MkdirAll(nested, 0o755); err != nil {
@@ -217,6 +223,7 @@ func TestAnExplicitStoreIsNotSearchedFor(t *testing.T) {
 // there is no second source for it, so a report that omitted it would be
 // reporting less than the database knows.
 func TestAProfileReportsWhatTheStoreHolds(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	written := indexed(t, indexRequest(root))
 

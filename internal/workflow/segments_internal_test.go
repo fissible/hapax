@@ -21,6 +21,7 @@ import (
 // This fixture puts half of every document below the floor, so the numberings
 // diverge from the second admitted paragraph of each document onward.
 func TestSegmentIndexCountsAdmittedParagraphsAndNotNodes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// Long paragraphs clear a floor of twelve; short ones do not. Alternated,

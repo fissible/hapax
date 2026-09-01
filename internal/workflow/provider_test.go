@@ -52,6 +52,7 @@ func (stubProvider) Rewrite(context.Context, rewrite.RewriteRequest) (string, er
 
 // Exactly one arm runs, and it is the one the choice names.
 func TestTheResolverRunsExactlyOneArm(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name         string
 		provider     string
@@ -86,6 +87,7 @@ func TestTheResolverRunsExactlyOneArm(t *testing.T) {
 // This is the guarantee DESIGN calls tested rather than documented, and the
 // zero on the cloud arm is what tests it.
 func TestLocalOnlyRefusesTheCloudArmWithoutRunningIt(t *testing.T) {
+	t.Parallel()
 	spy := &factorySpy{}
 	runner := workflow.Default()
 	runner.Providers = spy.factory()
@@ -108,6 +110,7 @@ func TestLocalOnlyRefusesTheCloudArmWithoutRunningIt(t *testing.T) {
 // And local-only still resolves a local provider: it forbids the cloud, not
 // rewriting.
 func TestLocalOnlyStillResolvesTheLocalArm(t *testing.T) {
+	t.Parallel()
 	spy := &factorySpy{}
 	runner := workflow.Default()
 	runner.Providers = spy.factory()
@@ -126,6 +129,7 @@ func TestLocalOnlyStillResolvesTheLocalArm(t *testing.T) {
 // set Config.Provider = "gpt"; there is no such field now, so the property moved
 // up here rather than disappearing with the field that expressed it.
 func TestAnUnknownProviderIsRefusedBeforeEitherArmRuns(t *testing.T) {
+	t.Parallel()
 	spy := &factorySpy{}
 	runner := workflow.Default()
 	runner.Providers = spy.factory()
@@ -144,6 +148,7 @@ func TestAnUnknownProviderIsRefusedBeforeEitherArmRuns(t *testing.T) {
 // leaves them nil: the environment is cmd/hapax's to supply and a library
 // constructing a cloud provider on its own would be a second boundary.
 func TestARunnerWithNoFactoryRefusesRatherThanImprovises(t *testing.T) {
+	t.Parallel()
 	_, err := workflow.Default().Provider(mode.Mode{}, workflow.ProviderChoice{
 		Provider: string(llm.ProviderOllama), Model: "llama3",
 	})
@@ -158,6 +163,7 @@ func TestARunnerWithNoFactoryRefusesRatherThanImprovises(t *testing.T) {
 // checked, because supplying only the local one is the plausible mistake and
 // supplying only the cloud one is the dangerous one.
 func TestASelectedArmThatIsAbsentIsRefusedRatherThanSubstituted(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		provider string
@@ -194,6 +200,7 @@ func TestASelectedArmThatIsAbsentIsRefusedRatherThanSubstituted(t *testing.T) {
 // The choice reaches the arm intact. A resolver that picked the right arm and
 // handed it the wrong model would satisfy every count above.
 func TestTheChoiceReachesTheArmItSelected(t *testing.T) {
+	t.Parallel()
 	for _, want := range []workflow.ProviderChoice{
 		{Provider: string(llm.ProviderOllama), Model: "llama3", Endpoint: "http://127.0.0.1:9999"},
 		{Provider: string(llm.ProviderAnthropic), Model: "claude-sonnet-5"},
@@ -220,6 +227,7 @@ func TestTheChoiceReachesTheArmItSelected(t *testing.T) {
 // cloud failure that fell back to local would send prose to a different provider
 // than the one the user chose.
 func TestAFailingArmIsNotAReasonToTryTheOther(t *testing.T) {
+	t.Parallel()
 	// Both directions. A cloud failure falling back to local would send the
 	// author's prose to a provider they did not choose, which is the worse of
 	// the two and was the one this test did not cover.

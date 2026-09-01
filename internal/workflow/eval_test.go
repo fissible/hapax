@@ -20,6 +20,7 @@ import (
 // change what eval reports. Nothing else in the suite would notice the
 // difference, because both paths produce plausible numbers.
 func TestEvalMeasuresTheIndexedGraphAndNotTheFilesOnDisk(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
@@ -68,6 +69,7 @@ func TestEvalMeasuresTheIndexedGraphAndNotTheFilesOnDisk(t *testing.T) {
 // back at MINUS TWO because the cap is 1 - 3/clusters and one cluster makes it
 // negative. The AUC was a perfect 1.000 the whole time.
 func TestEveryDistractorContributesToTheComparison(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	const members = 20
 	distractors := distractorCorpus(t, members)
@@ -96,6 +98,7 @@ func TestEveryDistractorContributesToTheComparison(t *testing.T) {
 // all. A fixture that cannot supply them cannot ship however separable its prose
 // is — which is why the cap is reported and not just the bound.
 func TestTheBoundIsCappedByTheNumberOfClusters(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 
@@ -122,6 +125,7 @@ func TestTheBoundIsCappedByTheNumberOfClusters(t *testing.T) {
 // identity and its members' content hashes. Adding one file changes the pool,
 // and therefore the release.
 func TestTheDistractorPoolIdentifiesTheReleaseItCalibrated(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
@@ -144,6 +148,7 @@ func TestTheDistractorPoolIdentifiesTheReleaseItCalibrated(t *testing.T) {
 // The same pool, unchanged, is the same release. A rerun that produced a new
 // identity every time would make the head churn and the audit record meaningless.
 func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
@@ -167,6 +172,7 @@ func TestARerunOverTheSameEvidenceIsTheSameRelease(t *testing.T) {
 // the rule — and a test that skips when it does not is a test that can quietly
 // never run.
 func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 
@@ -193,6 +199,7 @@ func TestTheHeadMovesExactlyWhenTheReleaseShips(t *testing.T) {
 // Sixty held-out documents is a corpus of about seven hundred, which is a slow
 // fixture to pay for one assertion about whether a head moved.
 func TestAnAdverseEvaluationDoesNotClearAnExistingHead(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 
 	// A first evaluation, persisted but not shipped.
@@ -223,6 +230,7 @@ func TestAnAdverseEvaluationDoesNotClearAnExistingHead(t *testing.T) {
 // Omitting --distractors is a declared outcome rather than a usage error: ADR
 // 0005 says eval reports uncalibrated without them. It completes and is adverse.
 func TestNoDistractorsIsACompletedUncalibratedMeasurement(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 
 	result := evaluated(t, evalRequest(root, ""))
@@ -249,6 +257,7 @@ func TestNoDistractorsIsACompletedUncalibratedMeasurement(t *testing.T) {
 // why none of them noticed that a bare `hapax eval` failed outright — found by
 // running the binary, not by reading the suite.
 func TestEvalDiscoversTheStoreTheWayProfileDoes(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	deep := filepath.Join(root, "a", "b")
 	if err := os.MkdirAll(deep, 0o755); err != nil {
@@ -273,6 +282,7 @@ func TestEvalDiscoversTheStoreTheWayProfileDoes(t *testing.T) {
 // And with nowhere to discover, it is the same refusal profile makes rather than
 // an operational failure: an unmet precondition, not a broken invocation.
 func TestEvalWithNoStoreAnywhereRefuses(t *testing.T) {
+	t.Parallel()
 	result, err := workflow.Default().Eval(ctx(), workflow.EvalRequest{
 		StartDir: t.TempDir(), Register: "essays", DistractorRoot: distractorCorpus(t, 20),
 	})
@@ -292,6 +302,7 @@ func TestEvalWithNoStoreAnywhereRefuses(t *testing.T) {
 // names. Every eval test above indexes a corpus that DOES produce a reference,
 // which is why none of them saw it.
 func TestEvaluatingAProfileWithNoReferenceRefusesCleanly(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 3)
 	requireComposition(t, root, 3, 0, 0)
 	written := indexed(t, indexRequest(root))
@@ -318,6 +329,7 @@ func TestEvaluatingAProfileWithNoReferenceRefusesCleanly(t *testing.T) {
 // Nothing indexed yet is the ordinary first-run state and the same refusal
 // profile makes: an unmet precondition, not a failure.
 func TestEvaluatingWithNoProfileIsARefusalAndNotAFailure(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 2)
 	indexed(t, indexRequest(root)) // too small to fit a profile: a store with no head
 
@@ -336,6 +348,7 @@ func TestEvaluatingWithNoProfileIsARefusalAndNotAFailure(t *testing.T) {
 // A distractor directory that is not there is operational: nothing was
 // measured, so there is nothing to report about it.
 func TestAMissingDistractorDirectoryIsAFailure(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 
 	request := evalRequest(root, filepath.Join(t.TempDir(), "absent"))
@@ -347,6 +360,7 @@ func TestAMissingDistractorDirectoryIsAFailure(t *testing.T) {
 // Two members with identical content would be one cluster pretending to be two,
 // and the bootstrap groups by content hash because a pool keeps no paths.
 func TestADistractorPoolRefusesDuplicateContent(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 
@@ -385,6 +399,7 @@ func TestADistractorPoolRefusesDuplicateContent(t *testing.T) {
 // only in the return value. A release whose evidence cannot be identified after
 // the fact is not an audit record.
 func TestThePersistedReleaseNamesItsPool(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	result := evaluated(t, evalRequest(root, distractorCorpus(t, 20)))
 	if result.ReleaseID == "" {
@@ -423,6 +438,7 @@ func TestThePersistedReleaseNamesItsPool(t *testing.T) {
 //
 // So the specs are followed into the artifact the run persists.
 func TestTheRunnersSpecsReachTheMeasurement(t *testing.T) {
+	t.Parallel()
 	root := indexedCorpus(t)
 	distractors := distractorCorpus(t, 20)
 

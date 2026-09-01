@@ -22,6 +22,7 @@ import (
 // not-performed, because none is implemented. Those are two different claims and
 // the result has to make both.
 func TestAFullCorpusIndexesAndStillReportsEveryCheckNotPerformed(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	requireComposition(t, root, 51, 6, 3)
 	// Six calibrate documents of ten paragraphs each. If the declared minimum
@@ -77,6 +78,7 @@ func TestAFullCorpusIndexesAndStillReportsEveryCheckNotPerformed(t *testing.T) {
 // persisted, because "indexed, nothing fits yet" has to leave something to look
 // at, and because an operational failure would commit nothing at all.
 func TestACorpusTooSmallForAProfileIsAdverseAndStillPersisted(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 2)
 	requireComposition(t, root, 2, 0, 0)
 
@@ -106,6 +108,7 @@ func TestACorpusTooSmallForAProfileIsAdverseAndStillPersisted(t *testing.T) {
 // And a corpus that fits a profile but cannot fill a reference is the middle
 // mode: the profile is kept and headed, the reference is not invented.
 func TestACorpusThatCannotFillAReferenceKeepsItsProfile(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 3)
 	requireComposition(t, root, 3, 0, 0)
 
@@ -139,6 +142,7 @@ func TestACorpusThatCannotFillAReferenceKeepsItsProfile(t *testing.T) {
 // would still pass if segmentation changed and the corpus supplied fewer than
 // anyone thought.
 func TestTheReferenceMinimumDecidesWhetherAReferenceIsBuilt(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	requireComposition(t, root, 51, 6, 3)
 
@@ -180,6 +184,7 @@ func TestTheReferenceMinimumDecidesWhetherAReferenceIsBuilt(t *testing.T) {
 
 // Adversity and the flag are one fact, not two that can disagree.
 func TestAdversityAndItsFlagCannotDisagree(t *testing.T) {
+	t.Parallel()
 	for _, size := range []int{2, 3, 60} {
 		result := indexed(t, indexRequest(corpusOf(t, size)))
 		if result.Adverse != (result.Adversity != "") {
@@ -199,6 +204,7 @@ func TestAdversityAndItsFlagCannotDisagree(t *testing.T) {
 // corpus.Walk skips dot-prefixed entries, so a second index over the same root
 // must not discover the first one's database as a document.
 func TestTheStoreLivesUnderTheRootAndIsNotIndexedByIt(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	first := indexed(t, indexRequest(root))
 	if _, err := os.Stat(defaultStorePath(root)); err != nil {
@@ -219,6 +225,7 @@ func TestTheStoreLivesUnderTheRootAndIsNotIndexedByIt(t *testing.T) {
 // An explicit --store is an exact file, and creating directories for it would
 // turn a typo into a directory somewhere the user did not ask for.
 func TestAnExplicitStorePathCreatesNoDirectory(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	absent := filepath.Join(t.TempDir(), "no", "such", "dir", "hapax.sqlite3")
 
@@ -239,6 +246,7 @@ func TestAnExplicitStorePathCreatesNoDirectory(t *testing.T) {
 // An explicit --store that IS reachable is used, and the default is not created
 // beside it.
 func TestAnExplicitStoreIsTheOneWritten(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	elsewhere := filepath.Join(t.TempDir(), "chosen.sqlite3")
 
@@ -272,6 +280,7 @@ func TestAnExplicitStoreIsTheOneWritten(t *testing.T) {
 // half its paragraphs below the raised floor and half above, so the two answers
 // differ by a factor of two if the floors diverge.
 func TestOneParagraphFloorGovernsBothTheGraphAndTheProfile(t *testing.T) {
+	t.Parallel()
 	root := mixedCorpusOf(t, 60)
 	requireComposition(t, root, 50, 3, 7)
 
@@ -342,6 +351,7 @@ func TestOneParagraphFloorGovernsBothTheGraphAndTheProfile(t *testing.T) {
 // defaults were anything else would make every test above a statement about the
 // test's own configuration.
 func TestTheDefaultRunnerUsesTheDeclaredMinimums(t *testing.T) {
+	t.Parallel()
 	runner := workflow.Default()
 	if runner.Requirements != profile.DefaultRequirements() {
 		t.Errorf("requirements = %+v, want %+v", runner.Requirements, profile.DefaultRequirements())
@@ -358,6 +368,7 @@ func TestTheDefaultRunnerUsesTheDeclaredMinimums(t *testing.T) {
 // A corpus root that is not there is an operational failure, not an adverse
 // result: nothing was measured, so there is nothing to report about it.
 func TestAMissingCorpusRootIsAFailureAndNotAnAdverseResult(t *testing.T) {
+	t.Parallel()
 	request := indexRequest(filepath.Join(t.TempDir(), "absent"))
 	result, err := workflow.Default().Index(ctx(), request)
 	if err == nil {
@@ -374,6 +385,7 @@ func TestAMissingCorpusRootIsAFailureAndNotAnAdverseResult(t *testing.T) {
 // The register names the profile head, so it cannot be defaulted: two unrelated
 // corpora sharing an invented default would overwrite each other's head.
 func TestIndexRequiresARegister(t *testing.T) {
+	t.Parallel()
 	request := indexRequest(corpusOf(t, 60))
 	request.Register = ""
 	if _, err := workflow.Default().Index(ctx(), request); err == nil {
@@ -395,6 +407,7 @@ func contains[T comparable](values []T, wanted T) bool {
 // a Default that quietly resampled twenty-four times would satisfy every other
 // assertion in the package.
 func TestTheDefaultRunnerUsesTheDeclaredBootstrap(t *testing.T) {
+	t.Parallel()
 	runner := workflow.Default()
 	if runner.Discrimination != eval.DefaultDiscrimination() {
 		t.Errorf("discrimination spec = %+v, want %+v", runner.Discrimination, eval.DefaultDiscrimination())

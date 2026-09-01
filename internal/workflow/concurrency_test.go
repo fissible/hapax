@@ -81,6 +81,7 @@ func contendedIndex(t *testing.T, wait time.Duration) (time.Duration, error) {
 // would pass an implementation that returned the driver's busy error at once,
 // and accepting any duration would pass one whose budget is hard-coded.
 func TestAnIndexSpendsTheLockBudgetItWasGivenAndThenGivesUp(t *testing.T) {
+	t.Parallel()
 	const wait = 750 * time.Millisecond
 	elapsed, err := contendedIndex(t, wait)
 
@@ -105,6 +106,7 @@ func TestAnIndexSpendsTheLockBudgetItWasGivenAndThenGivesUp(t *testing.T) {
 // forever". Timed, not merely bounded: an implementation that ignored the
 // default and gave up after a millisecond would satisfy a bound alone.
 func TestAnUnsetLockWaitIsTheDeclaredDefault(t *testing.T) {
+	t.Parallel()
 	// Pinned, not merely positive. This test WAITS the default out in order to
 	// prove the acquisition path honours it, so the value is a standing cost on
 	// every suite run and choosing it is a decision rather than a detail. One
@@ -134,6 +136,7 @@ func TestAnUnsetLockWaitIsTheDeclaredDefault(t *testing.T) {
 // an index that gets the lock immediately is not cut short by a small one, so
 // setting a budget cannot make an otherwise fine index fail.
 func TestASmallLockWaitDoesNotCutShortAnIndexThatGetsTheLock(t *testing.T) {
+	t.Parallel()
 	root := corpusOf(t, 60)
 	request := indexRequest(root)
 	request.LockWait = time.Millisecond
