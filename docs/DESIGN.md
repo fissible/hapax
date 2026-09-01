@@ -654,9 +654,10 @@ plan's, **in order**.
 
 **Freshness is the admitted byte-content hash, checked twice.** Not path, mtime, snapshot ID or
 file identity — the hash of the bytes, before the loop and again before assembly, because a
-long provider run is exactly when a file changes underneath. The refusal is `stale-draft` and
-deliberately not `stale-exemplars`: the exemplars are fine, the draft moved. Assembly uses the
-document from the *first* read, which is what was scored and rewritten; the second read only
+long provider run is exactly when a file changes underneath. Failure to admit either read is
+also `stale-draft`: the draft is no longer the admissible snapshot that was planned. The refusal
+is deliberately not `stale-exemplars`: the exemplars are fine, the draft moved. Assembly uses
+the document from the *first* read, which is what was scored and rewritten; the second read only
 guards it.
 
 That hash cannot see a BOM, because admission strips one before hashing — so a BOM added or
@@ -667,7 +668,9 @@ reads and a mismatch is `stale-draft` as well.
 **Every seam is built before the first provider call, and a target that will not score is a
 broken precondition.** `score.Score` bound to the release is the `Scorer`; the persisted
 exemplar selection rehydrated **once**, immutable, returned identically on every per-segment
-call, is the `Selector`; `preserve` and `tells` composed are the `Gate`. Planning scores the
+call, is the `Selector`; `preserve` and `tells` composed are the `Gate`.
+`tells.ErrIncomparable` becomes a non-comparable gate verdict; any other gate error is
+operational and propagates. Planning scores the
 whole document, while the loop rescores each paragraph's raw span standing alone, so every
 target is scored standalone in a preflight: one that will not score is an error naming the
 segment, before anything is spent, rather than a quiet `none-improved`.
@@ -711,6 +714,17 @@ suppressing them would make the result disagree with the store.
 would collide: `PutRewriteAttempt` refuses a differing record under an existing key, so
 re-running the same rewrite against a non-deterministic provider would fail on the second run
 with an operational error. A caller-supplied ID has the same defect.
+
+**A plan can under-claim, and that is not a hole the capability checks close.** Every check
+above stops a plan reaching something it has no business touching. None stops one doing *less*
+than the planner intended: a caller can demote a planned target to a non-target disposition,
+decrement `Targets`, and execute a subset. `Execute` accepts that, and should — the result
+reports one target, one outcome and one improvement, and the omitted paragraph is returned
+exactly as its author wrote it, so nothing untrue is recorded. The harm is provenance rather
+than integrity, and it only appears when someone needs to prove what an execution *omitted*.
+#76 owns it, by binding the complete planned target set to the invocation record. It follows
+that `improved` is not a claim that a document is fully remediated, and the command must publish
+the counts as returned rather than translating them into a stronger one.
 
 **Cancellation leaves a valid prefix, and the audit record has a stated gap.** `ctx` is checked
 before each costly phase and each target; each persisted attempt is individually atomic, so a

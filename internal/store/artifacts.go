@@ -1010,6 +1010,15 @@ func releaseFromStored(x EvalResult) (eval.Release, error) {
 	return eval.NewRelease(d, c)
 }
 
+// LoadRelease returns a persisted release in the domain form used for scoring.
+func (s *Store) LoadRelease(ctx context.Context, id string) (eval.Release, error) {
+	x, err := s.LoadEvalResult(ctx, id)
+	if err != nil {
+		return eval.Release{}, err
+	}
+	return releaseFromStored(x)
+}
+
 // PutRelease persists the domain release through the same codec used by score.
 func (s *Store) PutRelease(ctx context.Context, release eval.Release, poolID string, policy HeadPolicy) error {
 	x := EvalResult{ID: release.ID, ProfileID: release.Discrimination.ProfileID, ReferenceID: release.Discrimination.ReferenceID, DistractorPoolID: poolID, Shippable: release.Shippable, Reason: eval.ReleaseReason(release.Reason)}
