@@ -3,6 +3,8 @@ package workflow
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -10,6 +12,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/fissible/hapax/internal/assemble"
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
 	"github.com/fissible/hapax/internal/eval"
@@ -19,11 +22,13 @@ import (
 	"github.com/fissible/hapax/internal/ingest"
 	"github.com/fissible/hapax/internal/llm"
 	"github.com/fissible/hapax/internal/mode"
+	"github.com/fissible/hapax/internal/preserve"
 	"github.com/fissible/hapax/internal/profile"
 	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/score"
 	"github.com/fissible/hapax/internal/snapshot"
 	"github.com/fissible/hapax/internal/store"
+	"github.com/fissible/hapax/internal/tells"
 	"github.com/fissible/hapax/internal/text"
 )
 
@@ -204,16 +209,69 @@ type RewritePlan struct {
 }
 
 const (
-	RefusalNoProfile            = "no-profile"
-	RefusalNoReference          = "no-reference"
-	RefusalAmbiguousReference   = "ambiguous-reference"
-	RefusalUncalibrated         = "uncalibrated"
-	RefusalInsufficientEvidence = "insufficient-evidence"
+	RefusalNoProfile                = "no-profile"
+	RefusalNoReference              = "no-reference"
+	RefusalAmbiguousReference       = "ambiguous-reference"
+	RefusalUncalibrated             = "uncalibrated"
+	RefusalInsufficientEvidence     = "insufficient-evidence"
+	RefusalStaleDraft               = "stale-draft"
+	RefusalStaleExemplars           = "stale-exemplars"
+	RefusalLocalOnlyForbidsProvider = "local-only-forbids-provider"
 )
 
 func Refusals() []string {
-	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence}
+	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence, RefusalStaleDraft, RefusalStaleExemplars, RefusalLocalOnlyForbidsProvider}
 }
+
+func Terminals() []string {
+	out := make([]string, 0, len(rewrite.Terminals()))
+	for _, x := range rewrite.Terminals() {
+		out = append(out, string(x))
+	}
+	return out
+}
+func RejectionCodes() []string {
+	out := make([]string, 0, len(rewrite.RejectionCodes()))
+	for _, x := range rewrite.RejectionCodes() {
+		out = append(out, string(x))
+	}
+	return out
+}
+
+type RewriteState string
+
+const (
+	RewriteNoTargets    RewriteState = "no-targets"
+	RewriteImproved     RewriteState = "improved"
+	RewriteNoneImproved RewriteState = "none-improved"
+)
+
+func RewriteStates() []RewriteState {
+	return []RewriteState{RewriteNoTargets, RewriteImproved, RewriteNoneImproved}
+}
+
+type ExecuteRequest struct {
+	Plan     RewritePlan
+	Choice   ProviderChoice
+	Mode     mode.Mode
+	Attempts int
+}
+type TargetOutcome struct {
+	Index      int
+	NodeID     string
+	Changed    bool
+	Terminal   string
+	Rejections []string
+}
+type ExecuteResult struct {
+	Bytes             []byte
+	InvocationID      string
+	State             RewriteState
+	Targets, Improved int
+	Refusal           string
+	Outcomes          []TargetOutcome
+}
+
 func Bands() []string { return []string{"in-range", "drifting", "not-you"} }
 
 // EvalReasonNoReference names a completed evaluation that cannot measure a
@@ -835,12 +893,13 @@ func calibrationReport(x eval.Calibration) CalibrationReport {
 }
 
 type Runner struct {
-	Requirements   profile.Requirements
-	MinSegments    int
-	Discrimination eval.DiscriminationSpec
-	BandFloor      eval.BandFloor
-	Bootstrap      eval.BootstrapSpec
-	Providers      ProviderFactory
+	Requirements    profile.Requirements
+	MinSegments     int
+	Discrimination  eval.DiscriminationSpec
+	BandFloor       eval.BandFloor
+	Bootstrap       eval.BootstrapSpec
+	Providers       ProviderFactory
+	NewInvocationID func() (string, error)
 }
 
 type ProviderChoice struct{ Provider, Model, Endpoint string }
@@ -878,12 +937,341 @@ func (r *Runner) Provider(m mode.Mode, choice ProviderChoice) (rewrite.Provider,
 func Default() *Runner { return New(profile.DefaultRequirements(), deviation.DefaultMinSegments()) }
 func New(requirements profile.Requirements, minSegments int) *Runner {
 	return &Runner{
-		Requirements:   requirements,
-		MinSegments:    minSegments,
-		Discrimination: eval.DefaultDiscrimination(),
-		BandFloor:      eval.DefaultBandFloor(),
-		Bootstrap:      eval.DefaultBootstrap(),
+		Requirements:    requirements,
+		MinSegments:     minSegments,
+		Discrimination:  eval.DefaultDiscrimination(),
+		BandFloor:       eval.DefaultBandFloor(),
+		Bootstrap:       eval.DefaultBootstrap(),
+		NewInvocationID: newInvocationID,
 	}
+}
+
+func newInvocationID() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+type executionScorer struct {
+	fitted    profile.Fitted
+	reference *deviation.Reference
+	release   eval.Release
+}
+
+func (s executionScorer) Score(source []byte) (score.Report, error) {
+	return score.Score(source, s.fitted, s.reference, s.release)
+}
+
+type executionSelector struct{ texts []string }
+
+func (s executionSelector) Exemplars(n int) ([]string, error) {
+	if n != len(s.texts) {
+		return nil, errors.New("unexpected exemplar count")
+	}
+	return append([]string(nil), s.texts...), nil
+}
+
+type executionGate struct{ register string }
+
+func (g executionGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+	x, err := preserve.Check(current, candidate)
+	return rewrite.Preservation{Preserved: x.Preserved, Identifiers: x.Identifiers()}, err
+}
+func (g executionGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
+	a, e := text.Admit([]byte(current))
+	if e != nil {
+		return rewrite.TellsVerdict{}, e
+	}
+	b, e := text.Admit([]byte(candidate))
+	if e != nil {
+		return rewrite.TellsVerdict{}, e
+	}
+	rs := tells.Default()
+	comparison, e := rs.Check(b, tells.Options{Register: g.register}).Comparison().Compare(rs.Check(a, tells.Options{Register: g.register}).Comparison())
+	if errors.Is(e, tells.ErrIncomparable) {
+		return rewrite.TellsVerdict{Comparison: comparison, Comparable: false}, nil
+	}
+	if e != nil {
+		return rewrite.TellsVerdict{}, e
+	}
+	return rewrite.TellsVerdict{Comparison: comparison, Comparable: true}, nil
+}
+
+// Execute runs a previously qualified plan, retaining no authority to write its
+// assembled bytes anywhere.
+func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteResult, error) {
+	if err := ctx.Err(); err != nil {
+		return ExecuteResult{}, err
+	}
+	p := request.Plan
+	if err := validateExecutePlan(p); err != nil {
+		return ExecuteResult{}, err
+	}
+	// A public plan is a capability: prove its stored references before even
+	// constructing a provider.
+	s, err := store.Open(p.StorePath)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	if err := validateStoredExecutePlan(ctx, s, p); err != nil {
+		_ = s.Close()
+		return ExecuteResult{}, err
+	}
+	defer s.Close()
+	result := ExecuteResult{Targets: p.Targets}
+	var provider rewrite.Provider
+	if p.Targets != 0 {
+		var err error
+		provider, err = r.Provider(request.Mode, request.Choice)
+		if errors.Is(err, ErrLocalOnlyForbidsProvider) {
+			result.Refusal = RefusalLocalOnlyForbidsProvider
+			return result, nil
+		}
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return ExecuteResult{}, err
+	}
+	prof, err := s.LoadProfile(ctx, p.ProfileID)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	fitted, err := prof.Fitted()
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	storedRef, err := s.LoadReference(ctx, p.ReferenceID)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	ref := &deviation.Reference{ID: storedRef.ID, ProfileID: storedRef.ProfileID, FeatureManifestDigest: storedRef.ManifestDigest, Split: storedRef.Split, MinSegments: storedRef.MinSegments, Values: storedRef.Values}
+	release, err := s.LoadRelease(ctx, p.ReleaseID)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	draftSnapshot, err := s.Snapshot(ctx, p.DraftSnapshotID)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	if len(draftSnapshot.Documents) != 1 || draftSnapshot.Documents[0].Split != corpus.Draft {
+		return ExecuteResult{}, errors.New("invalid draft snapshot")
+	}
+	doc, fresh, err := readFresh(p.Path, draftSnapshot.Documents[0].ContentHash)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	if !fresh {
+		result.Refusal = RefusalStaleDraft
+		return result, nil
+	}
+	if p.Targets == 0 {
+		after, fresh, err := readFresh(p.Path, draftSnapshot.Documents[0].ContentHash)
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+		if !fresh || after.HadBOM() != doc.HadBOM() {
+			result.Refusal = RefusalStaleDraft
+			return result, nil
+		}
+		bytes, err := assemble.Assemble(doc, nil)
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+		result.Bytes, result.State = bytes, RewriteNoTargets
+		return result, nil
+	}
+	selection, err := s.LoadExemplarSelection(ctx, p.ExemplarSelectionID)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	rehydrated, err := s.Rehydrate(ctx, p.CorpusRoot, selection.Members)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	texts := make([]string, len(rehydrated))
+	for i, x := range rehydrated {
+		if x.Outcome != store.OutcomeOK {
+			result.Refusal = RefusalStaleExemplars
+			return result, nil
+		}
+		texts[i] = x.Text
+	}
+	if r.NewInvocationID == nil {
+		return ExecuteResult{}, errors.New("invocation id generator is required")
+	}
+	id, err := r.NewInvocationID()
+	if err != nil || id == "" {
+		if err == nil {
+			err = errors.New("empty invocation id")
+		}
+		return ExecuteResult{}, err
+	}
+	result.InvocationID = id
+	scorer := executionScorer{fitted, ref, release}
+	for _, target := range p.Segments {
+		if target.Disposition != DispositionTarget {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		report, err := scorer.Score(doc.Raw()[target.Offset : target.Offset+target.Length])
+		if err != nil {
+			return ExecuteResult{}, fmt.Errorf("preflight segment %d: %w", target.Index, err)
+		}
+		if len(report.Segments) != 1 || !report.Segments[0].Distance.Defined || !report.Calibrated || !report.Segments[0].Band.Defined {
+			return ExecuteResult{}, fmt.Errorf("preflight segment %d cannot score", target.Index)
+		}
+	}
+	var replacements []assemble.Replacement
+	options := rewrite.DefaultOptions()
+	options.ProfileID = p.ProfileID
+	options.InvocationID = id
+	options.ProviderID = request.Choice.Provider
+	options.LocalOnly = request.Mode.LocalOnly
+	if request.Attempts < 0 {
+		return ExecuteResult{}, errors.New("negative attempts")
+	}
+	if request.Attempts > 0 {
+		options.Attempts = request.Attempts
+	}
+	options.Exemplars = len(texts)
+	for _, target := range p.Segments {
+		if target.Disposition != DispositionTarget {
+			continue
+		}
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		passage := string(doc.Raw()[target.Offset : target.Offset+target.Length])
+		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register}, Provider: provider, Store: s.Recorder(ctx), Options: options}
+		out, err := loop.Rewrite(ctx, rewrite.Segment{Text: passage, SpanRef: target.NodeID})
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+		if out.Terminal == rewrite.TerminalNotEntered {
+			return ExecuteResult{}, errors.New("preflight target was not entered")
+		}
+		x := TargetOutcome{Index: target.Index, NodeID: target.NodeID, Changed: out.Changed, Terminal: string(out.Terminal)}
+		for _, a := range out.Attempts {
+			x.Rejections = append(x.Rejections, string(a.Rejection))
+		}
+		result.Outcomes = append(result.Outcomes, x)
+		if out.Changed {
+			result.Improved++
+			replacements = append(replacements, assemble.Replacement{Span: text.Span{Offset: target.Offset, Length: target.Length}, Text: out.Text})
+		}
+	}
+	after, fresh, err := readFresh(p.Path, draftSnapshot.Documents[0].ContentHash)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	if !fresh || after.HadBOM() != doc.HadBOM() {
+		result.Refusal = RefusalStaleDraft
+		return result, nil
+	}
+	bytes, err := assemble.Assemble(doc, replacements)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	result.Bytes = bytes
+	if result.Improved > 0 {
+		result.State = RewriteImproved
+	} else {
+		result.State = RewriteNoneImproved
+	}
+	return result, nil
+}
+
+// readFresh reports whether the draft on disk is still the one that was planned.
+//
+// Only the two ways a draft can have MOVED are a refusal: it no longer admits,
+// or its admitted bytes hash differently. Any other failure propagates, because
+// a future error class silently becoming stale-draft would turn an operational
+// problem into a refusal the user is told is their file's fault.
+func readFresh(path, hash string) (*text.Document, bool, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, false, err
+	}
+	doc, err := snapshot.VerifyAdmitted(raw, hash)
+	if err == nil {
+		return doc, true, nil
+	}
+	var admission *text.AdmissionError
+	if errors.As(err, &admission) || errors.Is(err, snapshot.ErrContentChanged) {
+		return nil, false, nil
+	}
+	return nil, false, err
+}
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+func validateExecutePlan(p RewritePlan) error {
+	if p.Refusal != "" || (p.State != StateNothingToChange && p.State != StateTargetsPlanned) {
+		return errors.New("invalid rewrite plan")
+	}
+	n := 0
+	seen := map[string]bool{}
+	for _, x := range p.Segments {
+		if x.Disposition == DispositionTarget {
+			n++
+			if x.NodeID == "" || x.Length <= 0 || seen[x.NodeID] {
+				return errors.New("invalid rewrite target")
+			}
+			seen[x.NodeID] = true
+		}
+	}
+	if n != p.Targets || (p.State == StateNothingToChange) != (p.Targets == 0) {
+		return errors.New("invalid rewrite plan")
+	}
+	return nil
+}
+
+func validateStoredExecutePlan(ctx context.Context, s *store.Store, p RewritePlan) error {
+	snap, err := s.Snapshot(ctx, p.DraftSnapshotID)
+	if err != nil {
+		return err
+	}
+	if len(snap.Documents) != 1 || snap.Documents[0].Split != corpus.Draft {
+		return errors.New("invalid draft snapshot")
+	}
+	nodes := map[string]store.Node{}
+	for _, n := range snap.Documents[0].Nodes {
+		nodes[n.ID] = n
+	}
+	for _, segment := range p.Segments {
+		if segment.Disposition != DispositionTarget {
+			continue
+		}
+		n, ok := nodes[segment.NodeID]
+		if !ok || n.Vector == nil || n.Offset != segment.Offset || n.Length != segment.Length {
+			return errors.New("invalid rewrite target")
+		}
+	}
+	if p.Targets == 0 {
+		return nil
+	}
+	selection, err := s.LoadExemplarSelection(ctx, p.ExemplarSelectionID)
+	if err != nil {
+		return err
+	}
+	if selection.ProfileID != p.ProfileID || !sameStrings(selection.Members, p.ExemplarNodes) {
+		return errors.New("invalid exemplar selection")
+	}
+	return nil
 }
 
 func (r *Runner) Index(ctx context.Context, request IndexRequest) (IndexResult, error) {

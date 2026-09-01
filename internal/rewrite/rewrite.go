@@ -53,6 +53,20 @@ const (
 	RejectionNotImproved          RejectionCode = "not-improved"
 )
 
+// Terminal explains how a loop ended. It is deliberately separate from
+// RejectionCode, which belongs to a single recorded candidate.
+type Terminal string
+
+const (
+	TerminalNotEntered    Terminal = "not-entered"
+	TerminalEmptyResponse Terminal = "empty-provider-response"
+	TerminalExhausted     Terminal = "attempts-exhausted"
+)
+
+func Terminals() []Terminal {
+	return []Terminal{TerminalNotEntered, TerminalEmptyResponse, TerminalExhausted}
+}
+
 type Segment struct {
 	Text, SpanRef string
 }
@@ -120,6 +134,7 @@ type Outcome struct {
 	Text     string
 	Changed  bool
 	Reason   RejectionCode
+	Terminal Terminal
 	Attempts []Attempt
 }
 
@@ -146,7 +161,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 	}
 	currentScored, reason := judged(currentReport, false)
 	if reason != "" {
-		return Outcome{Text: current, Reason: reason}, nil
+		return Outcome{Text: current, Reason: reason, Terminal: TerminalNotEntered}, nil
 	}
 
 	exemplars, err := l.Selector.Exemplars(l.Options.Exemplars)
@@ -169,7 +184,8 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			return Outcome{}, err
 		}
 		if candidate == "" {
-			break
+			outcome.Terminal = TerminalEmptyResponse
+			return outcome, nil
 		}
 
 		candidateReport, err := l.Scorer.Score([]byte(candidate))
@@ -220,6 +236,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			outcome.Text, outcome.Changed = current, true
 		}
 	}
+	outcome.Terminal = TerminalExhausted
 	return outcome, nil
 }
 

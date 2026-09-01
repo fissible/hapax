@@ -29,6 +29,7 @@ import (
 // nothing. So every attempt of every rewrite would have been refused as an
 // invalid artifact, after the provider had already been paid.
 func TestPlanningPutsTheDraftsParagraphsInTheStore(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -44,6 +45,7 @@ func TestPlanningPutsTheDraftsParagraphsInTheStore(t *testing.T) {
 // walked, and labelling it train or test would put the user's unfinished writing
 // into a population something else measures against.
 func TestTheDraftIsStoredAsADraft(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -70,6 +72,7 @@ func TestTheDraftIsStoredAsADraft(t *testing.T) {
 // other lets one shared ordinal mistake agree with itself — every segment could
 // name some other valid paragraph and the comparison would still pass.
 func TestEachPlannedSegmentSpansTheParagraphItClaims(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	// Headings and a code block between the paragraphs, so the admitted sequence
 	// and the leaf sequence cannot agree by accident.
@@ -128,6 +131,7 @@ func TestEachPlannedSegmentSpansTheParagraphItClaims(t *testing.T) {
 // draft and the user sees both. Asserted separately from the mapping above, so
 // a failure says which of the two things went wrong.
 func TestThePlanAndTheScoreAgreeAboutTheDraft(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, interleavedDraft)
 
@@ -158,6 +162,7 @@ func TestThePlanAndTheScoreAgreeAboutTheDraft(t *testing.T) {
 // snapshot identity is content-derived, so the second run must replay it rather
 // than insert it again.
 func TestPlanningTheSameDraftTwiceIsTheSamePlan(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -179,6 +184,7 @@ func TestPlanningTheSameDraftTwiceIsTheSamePlan(t *testing.T) {
 // store.Index prunes everything unreachable from the profile heads whenever it
 // advances one; a draft is reachable from no head at all.
 func TestPlanningADraftLeavesTheProfileAndItsCorpusAlone(t *testing.T) {
+	t.Parallel()
 	root, releaseID := calibratedStore(t)
 	path := defaultStorePath(root)
 	head := profileHead(t, root)
@@ -215,6 +221,7 @@ func TestPlanningADraftLeavesTheProfileAndItsCorpusAlone(t *testing.T) {
 // snapshot in the draft split. An implementation that indexed the wrong file, or
 // a stale copy of the right one, satisfies every count and every split check.
 func TestTheStoredDraftIsTheFileThatWasAsked(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, interleavedDraft)
 
@@ -248,6 +255,7 @@ func TestTheStoredDraftIsTheFileThatWasAsked(t *testing.T) {
 // range is not improved by being rewritten, and sending it costs the user tokens
 // to be told what they already knew.
 func TestOnlyDriftingAndNotYouParagraphsAreTargets(t *testing.T) {
+	t.Parallel()
 	for _, want := range []string{"in-range", "drifting", "not-you"} {
 		t.Run(want, func(t *testing.T) {
 			root := bandedStore(t, want)
@@ -291,6 +299,7 @@ func TestOnlyDriftingAndNotYouParagraphsAreTargets(t *testing.T) {
 // recording it as a rewrite rejection would put an attempt that never happened
 // into the audit record.
 func TestAParagraphAssembleCannotSpliceIsNotATarget(t *testing.T) {
+	t.Parallel()
 	// Both excision constructs the DESIGN table measured, because they reach the
 	// refusal by different routes through the structure parser and an
 	// implementation can get one without the other.
@@ -349,6 +358,7 @@ func assertExcisionsAreNotTargets(t *testing.T, body string) {
 // values are members of Dispositions() proves nothing: an implementation that
 // declared one disposition and used it everywhere would pass.
 func TestTheDispositionVocabularyIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	want := []workflow.Disposition{
 		workflow.DispositionTarget,
 		workflow.DispositionInRange,
@@ -383,6 +393,7 @@ func TestTheDispositionVocabularyIsExactlyThis(t *testing.T) {
 // and are deliberately not these: a plan has not run anything yet, so it can
 // only say whether there is anything to run.
 func TestThePlanStateVocabularyIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	want := []workflow.PlanState{workflow.StateNothingToChange, workflow.StateTargetsPlanned}
 	if got := workflow.PlanStates(); !reflect.DeepEqual(got, want) {
 		t.Errorf("plan states = %v, want %v", got, want)
@@ -405,6 +416,7 @@ func TestThePlanStateVocabularyIsExactlyThis(t *testing.T) {
 // selected, nothing rehydrated, and — once B2 exists — no provider and no
 // socket.
 func TestADraftWithNothingToChangeSelectsNoExemplars(t *testing.T) {
+	t.Parallel()
 	root := bandedStore(t, "in-range")
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -481,6 +493,7 @@ func assertRefusedPlanClaimsNothing(t *testing.T, plan workflow.RewritePlan) {
 // so. The corpus is deleted after indexing, so an implementation that rehydrates
 // in order to select cannot pass, and no assertion about call counts is needed.
 func TestExemplarsAreSelectedFromTheStoreWithTheCorpusGone(t *testing.T) {
+	t.Parallel()
 	root := bandedStore(t, "not-you")
 	draft := writeDraft(t, root, twoParagraphs)
 	// Deleted BEFORE the first plan, not between two of them. Planning twice and
@@ -514,6 +527,7 @@ func TestExemplarsAreSelectedFromTheStoreWithTheCorpusGone(t *testing.T) {
 // rehydrate exactly those and refuse when it cannot, rather than choosing again
 // from whatever survived.
 func TestThePersistedSelectionNamesTheProfilesOwnNodesInOrder(t *testing.T) {
+	t.Parallel()
 	root := bandedStore(t, "not-you")
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -578,6 +592,7 @@ func TestThePersistedSelectionNamesTheProfilesOwnNodesInOrder(t *testing.T) {
 // so a discovered store names its own corpus, and B2 needs that root to
 // rehydrate the exemplars from.
 func TestPlanningFindsTheStoreAndItsCorpusFromAWorkingDirectory(t *testing.T) {
+	t.Parallel()
 	root := bandedStore(t, "not-you")
 	draft := writeDraft(t, root, twoParagraphs)
 	told := planned(t, planRequest(root, draft))
@@ -620,6 +635,7 @@ func TestPlanningFindsTheStoreAndItsCorpusFromAWorkingDirectory(t *testing.T) {
 // thing as a paragraph that needs rewriting. Refusing here rather than after
 // indexing the draft is the difference between a refusal and a side effect.
 func TestAnUncalibratedProfileIsRefusedBeforeTheDraftIsTouched(t *testing.T) {
+	t.Parallel()
 	root := uncalibratedStore(t)
 	draft := writeDraft(t, root, twoParagraphs)
 
@@ -652,6 +668,7 @@ func TestAnUncalibratedProfileIsRefusedBeforeTheDraftIsTouched(t *testing.T) {
 // It also writes nothing. There are no segments, so there are no nodes to name
 // and nothing an audit record could ever point at.
 func TestADraftWithNothingMeasurableRefusesAndKeepsWhatItResolved(t *testing.T) {
+	t.Parallel()
 	root, releaseID := calibratedStore(t)
 	// Digits and punctuation: admitted as text, but carrying no lexical tokens,
 	// so no paragraph clears the floor and there is nothing to measure.
@@ -704,6 +721,7 @@ func TestADraftWithNothingMeasurableRefusesAndKeepsWhatItResolved(t *testing.T) 
 // The refusals that ARE facts about the store, where the plan has resolved
 // nothing and so can claim nothing.
 func TestPlanRefusesEverythingScoreRefuses(t *testing.T) {
+	t.Parallel()
 	for _, row := range []struct {
 		name   string
 		root   func(*testing.T) string

@@ -15,6 +15,7 @@ import (
 // A draft measured against a calibrated release: every admitted paragraph gets a
 // distance and a band, and the bands come from the release the head names.
 func TestScoringADraftAgainstACalibratedRelease(t *testing.T) {
+	t.Parallel()
 	root, release := calibratedStore(t)
 	draft := writeDraft(t, root, authorLikeDraft)
 
@@ -52,6 +53,7 @@ func TestScoringADraftAgainstACalibratedRelease(t *testing.T) {
 // The per-feature deltas are the part a person acts on, so they are present
 // wherever a distance is, banded or not.
 func TestEveryMeasuredSegmentCarriesItsDeltas(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	result := scored(t, scoreRequest(root, writeDraft(t, root, authorLikeDraft)))
 
@@ -77,6 +79,7 @@ func TestEveryMeasuredSegmentCarriesItsDeltas(t *testing.T) {
 // ADR 0005 and DESIGN agree once you notice a refusal carries a document: with
 // no release, score still measures. The refusal is the BAND.
 func TestAnUncalibratedProfileStillMeasures(t *testing.T) {
+	t.Parallel()
 	root := uncalibratedStore(t)
 	draft := writeDraft(t, root, authorLikeDraft)
 
@@ -117,6 +120,7 @@ func TestAnUncalibratedProfileStillMeasures(t *testing.T) {
 
 // The refusals score can make, and which of them follow a measurement.
 func TestTheRefusalsScoreCanMake(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		store    func(*testing.T) string
@@ -180,6 +184,7 @@ func TestTheRefusalsScoreCanMake(t *testing.T) {
 // So ParagraphsBelowFloor is zero here and that is correct. It becomes non-zero
 // only for a profile fitted at a raised floor, which #64 records.
 func TestADraftWithNothingToMeasureIsInsufficientEvidence(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, "123 456.\n\n789 1011.\n\n")
 
@@ -213,6 +218,7 @@ func TestADraftWithNothingToMeasureIsInsufficientEvidence(t *testing.T) {
 // look at what they handed over, where uncalibrated would send them to run eval
 // and leave them no better off.
 func TestNothingToMeasureOutranksNothingToBandWith(t *testing.T) {
+	t.Parallel()
 	root := uncalibratedStore(t)
 	draft := writeDraft(t, root, "123 456.\n\n789 1011.\n\n")
 
@@ -231,6 +237,7 @@ func TestNothingToMeasureOutranksNothingToBandWith(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestAMissingDraftIsAFailure(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	request := scoreRequest(root, filepath.Join(t.TempDir(), "absent.md"))
 	if _, err := workflow.Default().Score(ctx(), request); err == nil {
@@ -243,6 +250,7 @@ func TestAMissingDraftIsAFailure(t *testing.T) {
 // nothing exercised resolution, and `hapax score draft.md` came back no-profile
 // against a store that had one — it was looking up the empty register.
 func TestScoreWithNoRegisterSelectsTheSoleHead(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	draft := writeDraft(t, root, authorLikeDraft)
 
@@ -264,6 +272,7 @@ func TestScoreWithNoRegisterSelectsTheSoleHead(t *testing.T) {
 // And with several heads and none named it is the same correctable invocation
 // profile makes, not a refusal and not a guess.
 func TestScoreWithSeveralHeadsAndNoneNamedIsAmbiguous(t *testing.T) {
+	t.Parallel()
 	root := twoRegisterCorpus(t)
 	draft := writeDraft(t, root, authorLikeDraft)
 
@@ -284,6 +293,7 @@ func TestScoreWithSeveralHeadsAndNoneNamedIsAmbiguous(t *testing.T) {
 
 // A register that does not exist is the same correctable invocation too.
 func TestScoreWithAnUnknownRegisterListsWhatThereIs(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	request := scoreRequest(root, writeDraft(t, root, authorLikeDraft))
 	request.Register = "reviews"
@@ -300,6 +310,7 @@ func TestScoreWithAnUnknownRegisterListsWhatThereIs(t *testing.T) {
 // score takes a draft operand but no corpus, so like profile and eval it finds
 // the store rather than being told where it is.
 func TestScoreDiscoversTheStore(t *testing.T) {
+	t.Parallel()
 	root, _ := calibratedStore(t)
 	deep := filepath.Join(root, "a", "b")
 	if err := os.MkdirAll(deep, 0o755); err != nil {

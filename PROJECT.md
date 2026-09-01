@@ -33,7 +33,7 @@ model, then review.
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
 | 13 | `ingest` | **built** | PR #54. Verified snapshot to a deterministic node/vector graph; one tree per call |
-| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 offline planning #67. Only **B2 `rewrite`** remains |
+| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 planning #67, B2a the credential boundary #73. **B2b-1 #75** then **B2b-2 #68** remain |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -52,7 +52,8 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#63](https://github.com/fissible/hapax/issues/63) | The distractor pool cannot get its author-clustering protection | needs a schema decision, not just a workflow one |
 | [#64](https://github.com/fissible/hapax/issues/64) | `paragraphs_below_floor` is always zero at the declared floor | a stylometry decision about the floor |
 | [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view |
-| [#68](https://github.com/fissible/hapax/issues/68) | B2 — the provider, the loop, assembly, and the command | #67 and #70, both done |
+| [#75](https://github.com/fissible/hapax/issues/75) | B2b-1 — execution: freshness, the loop, assembled bytes | #67, #70, #73, all merged |
+| [#68](https://github.com/fissible/hapax/issues/68) | B2b-2 — the command, and publication | #75 |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
@@ -143,6 +144,103 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### What the duet process caught this session, and what it cost
+
+Four slices, four merged PRs, and it is worth recording which findings the process produced
+rather than the code, because that is the argument for keeping it.
+
+**Things nothing else would have found.** #70's *consensus gate* found a resource leak — two
+temporary directories per fresh store open, 21,598 accumulated over one session — after the
+freeze verified, the suite was green, three mutations passed and the CI gain was measured. I
+had concluded it was done. B2a's boundary reappeared one level down in the implementation with
+every test green. Two defects in B1 were found at design time, before a line was written:
+attempts colliding across paragraphs, and a draft that had never been in the store at all.
+
+**A shipped bug a fixture found.** #69: `joinContainers` joins with a pipe and the column's
+grammar admitted only lower case and hyphen, so every leaf with two or more containers was
+unstorable — every paragraph inside a list, a quote, a table cell or a footnote. `hapax index`
+failed on most real Markdown. Twelve slices missed it because every corpus fixture here is
+plain top-level paragraphs.
+
+**My own recurring failures, named so they stop recurring.** Assertions a correct
+implementation satisfies that an incorrect one also satisfies — ten rounds of #70 were one
+habit wearing different clothes. Bulk textual refactors, fixed by making them compiler-checked.
+Comments that overstate what a test proves, which cost a channel in B2a. Verifying with
+`go test -c`, which never runs the assertion. And three performance hypotheses wrong before
+measurement, one of which nearly reopened a settled durability decision on a number that did
+not bear on it.
+
+**What it cost.** Ten review rounds on #70, six on B2a, eight on B1. Most rounds found
+something real; the marginal ones were about how a broken implementation reports itself rather
+than whether it is caught. The stopping rule that works: freeze when what remains needs the
+implementer to *deliberately construct* an escape rather than make a plausible mistake.
+
+### 2026-08-31 (B2a: the credential boundary, and what a boundary actually is)
+
+`--local-only` is the one guarantee DESIGN calls tested rather than documented, and until this
+slice nothing exercised it: no command had ever constructed a provider. PR #74.
+
+**Two designs were rejected before the one that shipped, and the reasons are the useful part.**
+Two unexported types in `workflow`, one holding a credential factory and one not, is not a
+boundary — both can name the type and both can call a constructor a later edit widens.
+Separate `ollama`/`anthropic` packages, the local one unable to *name* a credential, is not one
+either. I checked that premise rather than asserting it, and it is false: a named function type
+accepts a matching literal, so a package can populate a credential-typed field without
+importing the package that defines it. The import guard would have passed while the boundary
+was absent.
+
+What holds is the signature. `NewLocal(LocalConfig, DialFunc, *x509.CertPool)` has nowhere to
+put a credential, at every call site, now and after any later edit. **Two of the four verifying
+mutations are build failures rather than test failures**, which is the distinction the slice
+was for: a test says an implementation does not do the wrong thing, a compile error says none
+can.
+
+**The boundary did not propagate inward on its own.** The first implementation passed
+`CloudDeps{Dial, RootCAs}` from the local path into the shared constructor — a struct with a
+credential field, left nil. The rejected design, reappearing one level down, where the
+guarantee degrades from *cannot* to *happens not to*. Every test was green and would have
+stayed green if a later edit set it. Found by reading the implementation.
+
+**Six review rounds, and every finding was a channel rather than a behaviour.** A type hidden
+behind an allowed field name; what the local path puts on the wire; *where* it sends it, since
+a credential travels as well in `?api_key=` as in a header; a package-level setter; an exported
+method, declared or promoted from an embedding, reachable structurally through the returned
+interface. Auditing what tests assert does not find these, because assertions describe
+behaviour and capabilities describe access.
+
+**Three properties nearly went missing relocating tests**, which is the risk that refactor
+always had: the nil-dialer test stopped supplying a nil dialer, the configured-model test
+asserted a model it no longer set — an implementation hard-coding that string would have passed
+— and an obsolete default-config test survived against fields that no longer exist. All three
+were found in review, none by me. The 48 call sites themselves were converted compiler-checked
+rather than textually, so the wrong arm failed to build.
+
+**And a failure in my own method.** I verified five rounds with `go test -c`, which compiles
+without running, so a wrong expected value was invisible to my entire verification step. A
+sorting bug survived until the reviewer ran the tests. Verification now runs what can be run.
+
+### 2026-08-31 (B2 split into three, on the publication boundary)
+
+`rewrite` was one issue, then two, then three, and each cut was the reviewer's:
+
+- **#73 B2a** — provider construction and the credential boundary. Merged.
+- **#75 B2b-1** — execution: freshness, the loop, assembled bytes. **It cannot write anywhere.**
+- **#68 B2b-2** — the command, and the only slice with filesystem publication authority.
+
+The last cut is the best of the three. Everything in B2b-1 is testable without a destination
+existing, so the slice that can overwrite a user's file is small and reviewed alone.
+
+Three decisions from those rounds that shaped the remaining work. `rewrite.Outcome` gains its
+own closed **terminal-reason** enum rather than extending `RejectionCode` — three situations are
+currently indistinguishable (empty provider response, attempts exhausted, loop never entered),
+and per-attempt reasons and whole-loop outcomes are different vocabularies. The freshness
+refusal is **`stale-draft`** and deliberately not `stale-exemplars`: the exemplars are fine, the
+draft moved. And exit 1 is a *completed decision that did not improve* — including an empty
+response, exhaustion and ordinary gate rejections — while exit 3 is a component error or a
+planned target now unscoreable, because that violates a precondition rather than being a result.
+
+**Next: #75, then #68.** Both issue bodies carry the settled design in full and are the spec.
 
 ### 2026-08-31 (#70: a fresh store stops replaying the migration chain)
 

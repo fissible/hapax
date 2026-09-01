@@ -10,6 +10,7 @@ import (
 // in the author's band was never a target, so its user-facing disposition must
 // remain in-range.
 func TestInRangeParagraphWithExcisionsStaysInRange(t *testing.T) {
+	t.Parallel()
 	root := bandedStore(t, "in-range")
 	draft := writeDraft(t, root, excisionDraft)
 	plan := planned(t, planRequest(root, draft))
