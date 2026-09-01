@@ -668,10 +668,17 @@ reads and a mismatch is `stale-draft` as well.
 broken precondition.** `score.Score` bound to the release is the `Scorer`; the persisted
 exemplar selection rehydrated **once**, immutable, returned identically on every per-segment
 call, is the `Selector`; `preserve` and `tells` composed are the `Gate`. Planning scores the
-whole document, while the loop rescores each paragraph's raw span standing alone, and a
-paragraph can measure differently out of its container. So every target is scored standalone in
-a preflight: one that will not score is an error naming the segment, before anything is spent,
-rather than a quiet `none-improved`. A selected exemplar that will not rehydrate refuses
+whole document, while the loop rescores each paragraph's raw span standing alone, so every
+target is scored standalone in a preflight: one that will not score is an error naming the
+segment, before anything is spent, rather than a quiet `none-improved`.
+
+That divergence is currently unreachable, and it was measured rather than assumed. An included
+leaf's raw span excludes its container's syntax, so a paragraph inside a list item, a table cell
+or a quote parses back to exactly one paragraph and measures the identical distance it measured
+in the document. The preflight is therefore defence in depth against a structure-parser change
+rather than a live path, and a test asserts the invariant directly — every admitted leaf of
+every draft fixture measures the same alone as in place — because that is the assertion that
+would notice if it ever stopped holding. A selected exemplar that will not rehydrate refuses
 `stale-exemplars` at the same point. A rehydration failure *after* that is operational, because
 by then it is impossible by construction.
 
