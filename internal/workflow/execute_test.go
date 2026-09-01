@@ -47,6 +47,7 @@ import (
 // rewrite's own accessors, and the test compares against rewrite rather than
 // against a literal, because a literal here would be the second copy.
 func TestTheExecutionVocabulariesAreDerivedFromRewrite(t *testing.T) {
+	t.Parallel()
 	t.Run("terminals", func(t *testing.T) {
 		var want []string
 		for _, terminal := range rewrite.Terminals() {
@@ -84,6 +85,7 @@ func TestTheExecutionVocabulariesAreDerivedFromRewrite(t *testing.T) {
 }
 
 func TestTheRewriteStateVocabularyIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	want := []workflow.RewriteState{
 		workflow.RewriteNoTargets,
 		workflow.RewriteImproved,
@@ -116,6 +118,7 @@ func TestTheRewriteStateVocabularyIsExactlyThis(t *testing.T) {
 // one. Freezing the field list is what holds that; a rule against integers
 // generally would forbid a future member that is not this mistake.
 func TestTheTargetOutcomeSurfaceIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	assertShape(t, reflect.TypeOf(workflow.TargetOutcome{}), [][2]string{
 		{"Index", "int"},
 		{"NodeID", "string"},
@@ -128,6 +131,7 @@ func TestTheTargetOutcomeSurfaceIsExactlyThis(t *testing.T) {
 // Bytes is the one member that carries prose, and it is the document the caller
 // asked for rather than anything a provider said about a paragraph.
 func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
+	t.Parallel()
 	assertShape(t, reflect.TypeOf(workflow.ExecuteResult{}), [][2]string{
 		{"Bytes", "[]uint8"},
 		{"InvocationID", "string"},
@@ -148,6 +152,7 @@ func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
 // file and substituting for it, so an implementation splicing at the wrong
 // offsets cannot agree with it.
 func TestAnAcceptedRewriteReplacesExactlyTheTargets(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -192,6 +197,7 @@ func TestAnAcceptedRewriteReplacesExactlyTheTargets(t *testing.T) {
 // right. Here the same paragraph appears twice, only the first is rewritten, and
 // the second must come through untouched.
 func TestARepeatedParagraphIsReplacedWhereItWasTargeted(t *testing.T) {
+	t.Parallel()
 	root := installRelease(t, 0.05, 5.0)
 	requireCandidates(t, root)
 	draft := writeDraftBytes(t, root, repeatedDraft())
@@ -224,6 +230,7 @@ func TestARepeatedParagraphIsReplacedWhereItWasTargeted(t *testing.T) {
 // runs: the plan chose a release, and the audit record has to name what was
 // actually used.
 func TestTheReleaseIsThePlansAndNotWhateverIsCurrent(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -267,6 +274,7 @@ func TestTheReleaseIsThePlansAndNotWhateverIsCurrent(t *testing.T) {
 // default would pass every other test in this file, because every other test
 // uses it.
 func TestTheAttemptCapComesFromTheRequest(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name string
 		cap  int
@@ -309,6 +317,7 @@ func TestTheAttemptCapComesFromTheRequest(t *testing.T) {
 // substitution of the default. Failing closed matters here: a negative cap that
 // quietly became three would spend money nobody asked for.
 func TestANegativeAttemptCapIsAnError(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -328,6 +337,7 @@ func TestANegativeAttemptCapIsAnError(t *testing.T) {
 // paragraph's own bytes. The passage is recovered from the prompt rather than
 // read off a field, because the prompt is what a provider is actually sent.
 func TestTheProviderIsAskedForEachTargetInPlanOrder(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -422,6 +432,7 @@ func TestTheProviderIsAskedForEachTargetInPlanOrder(t *testing.T) {
 // segment it belongs to. A result that reported outcomes positionally would let
 // a caller attribute a rejection to the wrong paragraph.
 func TestEveryTargetGetsAnOutcomeAndNothingElseDoes(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -460,6 +471,7 @@ func TestEveryTargetGetsAnOutcomeAndNothingElseDoes(t *testing.T) {
 // that both exit zero, which is why it comes with counts, and why the counts and
 // the state are asserted against each other rather than each on its own.
 func TestTheStateAndTheCountsAgree(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name     string
 		replies  map[string][]string
@@ -545,6 +557,7 @@ func TestTheStateAndTheCountsAgree(t *testing.T) {
 // says which guard refused it and that the budget was spent. Bytes are still
 // returned: nothing improved is a completed decision.
 func TestARefusedRewriteReturnsTheDraftAndNamesTheRefusal(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -580,6 +593,7 @@ func TestARefusedRewriteReturnsTheDraftAndNamesTheRefusal(t *testing.T) {
 // ending with the least evidence anywhere else: the loop records no attempt for
 // it, so a provider call was spent that leaves no trace in the store.
 func TestAnEmptyResponseIsNamedRatherThanSilent(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -618,6 +632,7 @@ func TestAnEmptyResponseIsNamedRatherThanSilent(t *testing.T) {
 // question is whether the record a caller is pointed at is actually there and
 // says the same thing.
 func TestEveryReportedAttemptIsInTheStoreWhereTheResultSaysItIs(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -672,6 +687,7 @@ func TestEveryReportedAttemptIsInTheStoreWhereTheResultSaysItIs(t *testing.T) {
 // from the draft, and no prose from any candidate, appears anywhere in the
 // result except in the assembled document itself.
 func TestNoProseReachesTheOutcomes(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))

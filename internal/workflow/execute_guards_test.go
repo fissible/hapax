@@ -57,6 +57,7 @@ func requireUnpublishable(t *testing.T, result workflow.ExecuteResult, want stri
 // provider call. Without this the persisted audit describes one draft while the
 // bytes handed back describe another.
 func TestADraftChangedBeforeTheLoopRefusesAndSpendsNothing(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 	seeded := seedAttempt(t, root, plan)
@@ -88,6 +89,7 @@ func TestADraftChangedBeforeTheLoopRefusesAndSpendsNothing(t *testing.T) {
 // made are real and already persisted, so the outcomes are still returned — what
 // is withheld is the bytes.
 func TestADraftChangedDuringTheLoopRefusesAndKeepsTheAudit(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -135,6 +137,7 @@ func TestADraftChangedDuringTheLoopRefusesAndKeepsTheAudit(t *testing.T) {
 // bytes moves its modification time and changes nothing that matters, and an
 // implementation guarding on mtime or size would refuse a run it should not.
 func TestFreshnessIsTheContentAndNotTheTimestamp(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -160,6 +163,7 @@ func TestFreshnessIsTheContentAndNotTheTimestamp(t *testing.T) {
 // arriving through a rename with identical bytes is ordinary rather than
 // suspicious — and an implementation guarding on inode would refuse it.
 func TestFreshnessIsNotFileIdentity(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -195,6 +199,7 @@ func TestFreshnessIsNotFileIdentity(t *testing.T) {
 // comparing sizes would miss it, and the result would be a document assembled
 // against text nobody wrote.
 func TestAChangeOfTheSameLengthIsStillStale(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -215,6 +220,7 @@ func TestAChangeOfTheSameLengthIsStillStale(t *testing.T) {
 // the draft "fresh" while assembly restores the state of the FIRST read — which
 // would silently rewrite the file's first three bytes.
 func TestABOMChangingMidRunIsStale(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct{ name, before, after string }{
 		{"a BOM appears", executableDraft(), "\xef\xbb\xbf" + executableDraft()},
 		{"a BOM disappears", "\xef\xbb\xbf" + executableDraft(), executableDraft()},
@@ -254,6 +260,7 @@ func TestABOMChangingMidRunIsStale(t *testing.T) {
 // spans are into the bytes after it. Byte ownership is the risk this slice
 // carries and a BOM is where an off-by-three lives.
 func TestABOMPresentThroughoutSurvivesAssembly(t *testing.T) {
+	t.Parallel()
 	root := installRelease(t, 0.05, 5.0)
 	requireCandidates(t, root)
 	draft := writeDraftBytes(t, root, "\xef\xbb\xbf"+executableDraft())
@@ -293,6 +300,7 @@ func TestABOMPresentThroughoutSurvivesAssembly(t *testing.T) {
 // a corpus already gone refuses before a single call — that is the whole of what
 // a caller can observe.
 func TestTheExemplarsAreInHandBeforeTheFirstCallAndNotReadAgain(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -327,6 +335,7 @@ func TestTheExemplarsAreInHandBeforeTheFirstCallAndNotReadAgain(t *testing.T) {
 // order. Order is load-bearing: the selection is an ordered artifact and a
 // prompt that reorders it is a different prompt.
 func TestTheExemplarsAreThePersistedSelectionInItsOrder(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 	// The exemplars' documents gain a byte-order mark, which the content hash
@@ -372,6 +381,7 @@ func TestTheExemplarsAreThePersistedSelectionInItsOrder(t *testing.T) {
 // The refusal is stale-exemplars and not stale-draft: the draft is fine, the
 // corpus moved.
 func TestAnExemplarThatWillNotRehydrateRefusesBeforeAnythingIsSpent(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 	permitted := exemplarPaths(t, root, plan.ExemplarSelectionID)
@@ -404,6 +414,7 @@ func TestAnExemplarThatWillNotRehydrateRefusesBeforeAnythingIsSpent(t *testing.T
 // needs the same reason every time. The order is the design's: validate the
 // plan, resolve the provider, read the draft, then the exemplars.
 func TestTheOrderOfTheChecksIsPinned(t *testing.T) {
+	t.Parallel()
 	t.Run("an invalid plan beats an unknown provider", func(t *testing.T) {
 		root, draft := targetStore(t)
 		plan := planned(t, planRequest(root, draft))
@@ -496,6 +507,7 @@ func TestTheOrderOfTheChecksIsPinned(t *testing.T) {
 // draft is deleted, so an implementation that opened the file first would report
 // an operational failure instead of the refusal the user is owed.
 func TestLocalOnlyRefusesTheCloudArmBeforeReadingTheDraft(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 	if err := os.Remove(draft); err != nil {
@@ -517,6 +529,7 @@ func TestLocalOnlyRefusesTheCloudArmBeforeReadingTheDraft(t *testing.T) {
 // An unknown provider is an invalid invocation rather than a refusal, and it is
 // an error so cli can classify it as one. Neither arm runs.
 func TestAnUnknownProviderIsAnErrorAndNeitherArmRuns(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -535,6 +548,7 @@ func TestAnUnknownProviderIsAnErrorAndNeitherArmRuns(t *testing.T) {
 // draft to a provider the user did not choose, which under local-only would send
 // it off the machine.
 func TestAFailingArmNeverFallsBackToTheOther(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -553,6 +567,7 @@ func TestAFailingArmNeverFallsBackToTheOther(t *testing.T) {
 // loop that treated it as "no improvement" would report a paragraph as judged
 // when nothing judged it.
 func TestAProviderFailureIsAnErrorAndReturnsNoBytes(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 
@@ -578,6 +593,7 @@ func TestAProviderFailureIsAnErrorAndReturnsNoBytes(t *testing.T) {
 // exactly, which is where B2b-2's exact copy comes from — through the same
 // freshness check as a real rewrite rather than a bare copy that skips it.
 func TestANoTargetPlanConstructsNoProviderAndCopiesExactly(t *testing.T) {
+	t.Parallel()
 	root, draft := settledStore(t)
 	plan := planned(t, planRequest(root, draft))
 	if plan.State != workflow.StateNothingToChange {
@@ -611,6 +627,7 @@ func TestANoTargetPlanConstructsNoProviderAndCopiesExactly(t *testing.T) {
 // And it still takes the freshness check, which is the reason it goes through
 // Execute rather than being copied by the caller.
 func TestANoTargetPlanIsStillCheckedForFreshness(t *testing.T) {
+	t.Parallel()
 	root, draft := settledStore(t)
 	plan := planned(t, planRequest(root, draft))
 	if err := os.WriteFile(draft, []byte("Something else entirely, long enough to be admitted and measured "+
@@ -632,6 +649,7 @@ func TestANoTargetPlanIsStillCheckedForFreshness(t *testing.T) {
 // the same node twice. Each case is an error, and none of them reaches a
 // provider or the store.
 func TestAHandBuiltPlanCannotReachWhatItDoesNotOwn(t *testing.T) {
+	t.Parallel()
 	for _, c := range []struct {
 		name   string
 		tamper func(t *testing.T, root string, plan *workflow.RewritePlan)
@@ -735,6 +753,7 @@ func TestAHandBuiltPlanCannotReachWhatItDoesNotOwn(t *testing.T) {
 // it is what would notice if a structure-parser change ever made the preflight's
 // error path live.
 func TestEveryAdmittedLeafMeasuresTheSameAloneAsInPlace(t *testing.T) {
+	t.Parallel()
 	root := installRelease(t, 0.05, 5.0)
 	for name, body := range map[string]string{
 		"plain paragraphs": executableDraft(),
@@ -803,6 +822,7 @@ func TestEveryAdmittedLeafMeasuresTheSameAloneAsInPlace(t *testing.T) {
 // key, so re-running the same rewrite against a provider that answered
 // differently would fail as an operational error the second time.
 func TestTwoRunsOfOnePlanGetDifferentInvocations(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -833,6 +853,7 @@ func TestTwoRunsOfOnePlanGetDifferentInvocations(t *testing.T) {
 // no bytes. Each persisted attempt is individually atomic, so what is left
 // behind is a valid prefix — the store is consistent, not complete.
 func TestACancelledRunStopsAndReturnsNoBytes(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -867,6 +888,7 @@ func TestACancelledRunStopsAndReturnsNoBytes(t *testing.T) {
 // assertion is that no result ever carries the terminal reason that would mean
 // it happened.
 func TestNoOutcomeEverReportsALoopThatWasNeverEntered(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -910,6 +932,7 @@ func TestNoOutcomeEverReportsALoopThatWasNeverEntered(t *testing.T) {
 // would surface as ErrConflict from the store, which is an operational failure
 // on a run that did nothing wrong.
 func TestTwoRunsOfOnePlanAtOnceDoNotCollide(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	plan := planned(t, planRequest(root, draft))
@@ -955,6 +978,7 @@ func TestTwoRunsOfOnePlanAtOnceDoNotCollide(t *testing.T) {
 // would have every attempt refused by the store as an invalid artifact — after
 // the provider had been paid, which is precisely the defect B1 found.
 func TestAnInvocationThatCannotBeMintedSpendsNothing(t *testing.T) {
+	t.Parallel()
 	root, draft := targetStore(t)
 	plan := planned(t, planRequest(root, draft))
 	seeded := seedAttempt(t, root, plan)
