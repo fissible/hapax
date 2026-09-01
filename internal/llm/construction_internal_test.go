@@ -5,8 +5,6 @@ import (
 	"crypto/x509"
 	"net"
 	"testing"
-
-	"github.com/fissible/hapax/internal/rewrite"
 )
 
 // The exported boundary is a signature, and the signature guard in shape_test.go
@@ -27,7 +25,12 @@ import (
 // In-package because the thing being pinned is unexported, and compile-time
 // because that is what makes reintroducing the slot a build failure rather than
 // a review catch.
-var _ func(ProviderID, string, Limits, int, bool, string, DialFunc, *x509.CertPool) rewrite.Provider = newProvider
+// Returning the concrete type, not rewrite.Provider. The constructor is the
+// package's own and always builds one thing, so erasing it there bought nothing
+// and cost NewCloud an unchecked assertion — which would have panicked in a
+// user's process the day anything else in this package implemented the
+// interface.
+var _ func(ProviderID, string, Limits, int, bool, string, DialFunc, *x509.CertPool) *provider = newProvider
 
 // And the local path's provider genuinely holds no credential afterwards, which
 // the signature alone cannot say: the constructor could take no credential and

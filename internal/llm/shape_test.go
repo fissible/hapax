@@ -111,6 +111,9 @@ func TestTheLocalPathSendsNoCredentialAndDialsOnlyLoopback(t *testing.T) {
 		t.Fatalf("Rewrite: %v", err)
 	}
 
+	// These are the channels a credential is actually carried on, not every
+	// channel it could be: an exhaustive header and body inventory is a
+	// different and larger test, and this one should not be read as being it.
 	request, _ := h.onlyRequest(t)
 	for _, header := range []string{"X-Api-Key", "Authorization", "Anthropic-Version", "Proxy-Authorization"} {
 		if got := request.Header.Get(header); got != "" {
@@ -135,10 +138,14 @@ func TestTheLocalPathSendsNoCredentialAndDialsOnlyLoopback(t *testing.T) {
 	}
 }
 
-// The credential type exists and is reachable only through the cloud
-// dependencies. Named explicitly so that deleting it, or moving it onto the
-// local path, is a visible change rather than a quiet one.
-func TestTheCredentialFactoryIsCloudDepsOnly(t *testing.T) {
+// CloudDeps carries the credential factory, under that name and that type.
+//
+// It does NOT establish "only" — the field inventory and the constructor
+// signature guards are what do that, and this is redundant with them. It is
+// kept because it names the type explicitly, so deleting or renaming
+// CredentialFactory is a visible change; the earlier name and comment claimed
+// the boundary itself, which is more than one FieldByName can prove.
+func TestCloudDepsNamesTheCredentialFactory(t *testing.T) {
 	deps := reflect.TypeOf(llm.CloudDeps{})
 	field, ok := deps.FieldByName("Credentials")
 	if !ok {
