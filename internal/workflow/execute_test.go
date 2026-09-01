@@ -358,13 +358,7 @@ func TestTheProviderIsAskedForEachTargetInPlanOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read draft: %v", err)
 	}
-	var offered []string
-	seen := map[string]bool{}
 	for _, call := range provider.calls {
-		if !seen[call.Passage] {
-			seen[call.Passage] = true
-			offered = append(offered, call.Passage)
-		}
 		if call.Request.ProfileID != plan.ProfileID {
 			t.Errorf("a request carried profile %q, want the plan's %q", call.Request.ProfileID, plan.ProfileID)
 		}
@@ -372,13 +366,54 @@ func TestTheProviderIsAskedForEachTargetInPlanOrder(t *testing.T) {
 			t.Errorf("a request carried invocation %q, want %q", call.Request.InvocationID, invocation)
 		}
 	}
-	if len(offered) != len(targets) {
-		t.Fatalf("%d distinct passages were offered and the plan has %d targets", len(offered), len(targets))
-	}
+
+	// A target's own bytes are what OPENS its run of calls. What comes after
+	// them inside that run is the loop's business and not this test's: the loop
+	// is a hill climber, so an accepted candidate becomes the next attempt's
+	// passage. ADR 0006 says so and internal/rewrite pins it.
+	//
+	// So the calls must partition into one contiguous block per target, in plan
+	// order, each opened by that target's own bytes. Contiguity is the load
+	// bearing half: without it the calls
+	//
+	//	target 0, target 1, improved 0, improved 1
+	//
+	// would satisfy "each target's first call is its own bytes, in order" while
+	// interleaving two loops that must not overlap.
+	opens := make([]int, len(targets))
+	body := make([]string, len(targets))
 	for i, target := range targets {
-		want := string(raw[target.Offset : target.Offset+target.Length])
-		if offered[i] != want {
-			t.Errorf("passage %d was %q, want the target's own bytes %q", i, offered[i], want)
+		body[i] = string(raw[target.Offset : target.Offset+target.Length])
+		opens[i] = -1
+		for at, call := range provider.calls {
+			if call.Passage == body[i] {
+				opens[i] = at
+				break
+			}
+		}
+		if opens[i] < 0 {
+			t.Fatalf("target %d was never offered its own bytes %q", i, body[i])
+		}
+		if i == 0 && opens[i] != 0 {
+			t.Errorf("the first call carried %q, want target 0's own bytes", provider.calls[0].Passage)
+		}
+		if i > 0 && opens[i] <= opens[i-1] {
+			t.Errorf("target %d opens at call %d and target %d at call %d; targets are not visited in plan order",
+				i, opens[i], i-1, opens[i-1])
+		}
+	}
+	for i := range targets {
+		end := len(provider.calls)
+		if i+1 < len(targets) {
+			end = opens[i+1]
+		}
+		for at := opens[i]; at < end; at++ {
+			for j, other := range body {
+				if j != i && provider.calls[at].Passage == other {
+					t.Errorf("call %d, inside target %d's run, carries target %d's bytes; the two loops interleave",
+						at, i, j)
+				}
+			}
 		}
 	}
 }
