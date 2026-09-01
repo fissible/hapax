@@ -24,6 +24,7 @@ import (
 	"time"
 
 	"github.com/fissible/hapax/internal/llm"
+	"github.com/fissible/hapax/internal/rewrite"
 )
 
 // Headers the transport owns. Everything else in an outbound request is the
@@ -139,12 +140,33 @@ func (h *harness) roots() *x509.CertPool {
 	return pool
 }
 
-func (h *harness) deps() llm.Deps {
-	d := llm.Deps{Dial: h.dial, Credentials: h.credentials}
-	if h.kind != plainServer {
-		d.RootCAs = h.roots()
+// newLocal and newCloud replace a single New(cfg, Deps). The boundary this
+// slice is about is that a local construction has nowhere to put a credential:
+// NewLocal takes a dialer and a root pool and no credential of any kind, so no
+// caller can supply one — now or after a later edit — and no import allowlist
+// has to be maintained to keep that true.
+//
+// The refactor is deliberately compiler-checked rather than textual. Each call
+// site below picks newLocal or newCloud by the type of its configuration, and
+// choosing wrongly fails to build rather than passing quietly, which is what a
+// find-and-replace over forty-eight sites would otherwise risk.
+func (h *harness) newLocal(cfg llm.LocalConfig) (rewrite.Provider, error) {
+	return llm.NewLocal(cfg, h.dial, h.rootsOrNil())
+}
+
+func (h *harness) newCloud(cfg llm.CloudConfig) (rewrite.Provider, error) {
+	return llm.NewCloud(cfg, h.cloudDeps())
+}
+
+func (h *harness) cloudDeps() llm.CloudDeps {
+	return llm.CloudDeps{Dial: h.dial, Credentials: h.credentials, RootCAs: h.rootsOrNil()}
+}
+
+func (h *harness) rootsOrNil() *x509.CertPool {
+	if h.kind == plainServer {
+		return nil
 	}
-	return d
+	return h.roots()
 }
 
 func (h *harness) counts() (dials, requests, creds int) {
@@ -272,18 +294,18 @@ func mint(t *testing.T, dnsNames []string, ips []net.IP) *authority {
 // Configurations
 // ---------------------------------------------------------------------------
 
-func localConfig(endpoint string) llm.Config {
-	cfg := llm.DefaultConfig()
-	cfg.Provider, cfg.Model, cfg.LocalEndpoint, cfg.LocalOnly = llm.ProviderOllama, "llama3", endpoint, true
+// The two configurations are distinct types rather than one struct with a
+// provider selector: NewLocal must not be handed a cloud choice either, and a
+// shared Config with a Provider field would let it be.
+func localConfig(endpoint string) llm.LocalConfig {
+	cfg := llm.DefaultLocalConfig()
+	cfg.Model, cfg.Endpoint = "llama3", endpoint
 	return cfg
 }
 
-func cloudConfig() llm.Config {
-	cfg := llm.DefaultConfig()
-	cfg.Provider, cfg.Model, cfg.LocalOnly = llm.ProviderAnthropic, "claude-sonnet-5", false
-	// DefaultConfig carries the local endpoint, and a cloud provider carrying
-	// one is a construction error — so a cloud configuration must clear it.
-	cfg.LocalEndpoint = ""
+func cloudConfig() llm.CloudConfig {
+	cfg := llm.DefaultCloudConfig()
+	cfg.Model = "claude-sonnet-5"
 	return cfg
 }
 
@@ -321,8 +343,44 @@ var providers = []struct {
 	kind  serverKind
 	addr  string
 	reply string
-	cfg   llm.Config
+	build func(*harness) (rewrite.Provider, error)
+	// localOnly is the mode a request to this arm must declare. It used to be
+	// read off the configuration; a provider no longer carries one, because the
+	// mode is resolved once above and the provider is chosen from it.
+	localOnly bool
 }{
-	{"ollama", plainServer, "127.0.0.1:11434", `{"response":"rewritten"}`, localConfig("http://127.0.0.1:11434")},
-	{"anthropic", cloudCertServer, "api.anthropic.com:443", `{"content":[{"type":"text","text":"rewritten"}]}`, cloudConfig()},
+	{"ollama", plainServer, "127.0.0.1:11434", `{"response":"rewritten"}`, buildLocal("http://127.0.0.1:11434"), true},
+	{"anthropic", cloudCertServer, "api.anthropic.com:443", `{"content":[{"type":"text","text":"rewritten"}]}`, buildCloud(), false},
+}
+
+// buildLocal and buildCloud are how a table row names an arm. The tables used
+// to carry a `cfg llm.Config` column, which is exactly what let one row hold a
+// local configuration and the next a cloud one — a heterogeneous shape this
+// slice removes from the production types and should not leave standing in the
+// harness.
+func buildLocal(endpoint string) func(*harness) (rewrite.Provider, error) {
+	return func(h *harness) (rewrite.Provider, error) { return h.newLocal(localConfig(endpoint)) }
+}
+
+func buildCloud() func(*harness) (rewrite.Provider, error) {
+	return func(h *harness) (rewrite.Provider, error) { return h.newCloud(cloudConfig()) }
+}
+
+// withLocal and withCloud build a deliberately invalid configuration for one
+// arm. They exist so a refusal table cannot hold a heterogeneous config: each
+// row names the arm it is about.
+func withLocal(mutate func(*llm.LocalConfig)) func(*harness) (rewrite.Provider, error) {
+	return func(h *harness) (rewrite.Provider, error) {
+		cfg := localConfig(loopback)
+		mutate(&cfg)
+		return h.newLocal(cfg)
+	}
+}
+
+func withCloud(mutate func(*llm.CloudConfig)) func(*harness) (rewrite.Provider, error) {
+	return func(h *harness) (rewrite.Provider, error) {
+		cfg := cloudConfig()
+		mutate(&cfg)
+		return h.newCloud(cfg)
+	}
 }

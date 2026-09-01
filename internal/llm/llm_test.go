@@ -41,36 +41,30 @@ func request(prompt string, localOnly bool) rewrite.RewriteRequest {
 // A nil dialer must not fall back to http.DefaultTransport: that is the one
 // path to a socket no test supplied, and it would make every other assertion
 // here decorative.
+// A provider with no way to dial cannot be constructed. The builders elsewhere
+// supply the harness's dialer, so this one names the absence explicitly rather
+// than going through them — an earlier revision of this file routed it through
+// buildLocal/buildCloud and quietly stopped testing anything.
 func TestANilDialerIsRefused(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		cfg  llm.Config
-	}{{"local", localConfig(loopback)}, {"cloud", cloudConfig()}} {
+		name  string
+		build func(*harness) (rewrite.Provider, error)
+	}{
+		{"local", func(h *harness) (rewrite.Provider, error) {
+			return llm.NewLocal(localConfig(loopback), nil, nil)
+		}},
+		{"cloud", func(h *harness) (rewrite.Provider, error) {
+			return llm.NewCloud(cloudConfig(), llm.CloudDeps{Credentials: h.credentials})
+		}},
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, plainServer, "127.0.0.1:11434")
-			_, err := llm.New(c.cfg, llm.Deps{Credentials: h.credentials})
+			_, err := c.build(h)
 			if !errors.Is(err, llm.ErrMissingInput) {
 				t.Errorf("error = %v, want ErrMissingInput", err)
 			}
 			h.nothingLeft(t)
 		})
-	}
-}
-
-// The headline guarantee: local mode refuses the cloud provider at
-// construction, and the credential factory is never called. Zero, not "did not
-// obviously leak" — an instance would already have read the environment.
-func TestLocalOnlyRefusesTheCloudProviderWithoutReadingCredentials(t *testing.T) {
-	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	cfg := cloudConfig()
-	cfg.LocalOnly = true
-
-	_, err := llm.New(cfg, h.deps())
-	if !errors.Is(err, llm.ErrLocalOnly) {
-		t.Fatalf("error = %v, want ErrLocalOnly", err)
-	}
-	if dials, requests, creds := h.counts(); dials != 0 || requests != 0 || creds != 0 {
-		t.Errorf("dials=%d requests=%d credentialCalls=%d, want all zero", dials, requests, creds)
 	}
 }
 
@@ -101,7 +95,7 @@ func TestTheLocalEndpointMustBeALiteralLoopbackAddress(t *testing.T) {
 	} {
 		t.Run(c.endpoint, func(t *testing.T) {
 			h := newHarness(t, plainServer, "127.0.0.1:11434")
-			_, err := llm.New(localConfig(c.endpoint), h.deps())
+			_, err := h.newLocal(localConfig(c.endpoint))
 			if c.ok && err != nil {
 				t.Errorf("rejected %q: %v", c.endpoint, err)
 			}
@@ -126,30 +120,51 @@ func TestNonPositiveLimitsAreRefused(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, plainServer, "127.0.0.1:11434")
 			cfg := localConfig(loopback)
-			cfg.MaxRequestBytes, cfg.MaxResponseBytes = c.request, c.respons
-			if _, err := llm.New(cfg, h.deps()); !errors.Is(err, llm.ErrInvalidConfig) {
+			cfg.Limits.MaxRequestBytes, cfg.Limits.MaxResponseBytes = c.request, c.respons
+			if _, err := h.newLocal(cfg); !errors.Is(err, llm.ErrInvalidConfig) {
 				t.Errorf("error = %v, want ErrInvalidConfig", err)
 			}
 		})
 	}
 }
 
-func TestAnUnknownProviderIsRefused(t *testing.T) {
-	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	cfg := localConfig(loopback)
-	cfg.Provider = "gpt"
-	if _, err := llm.New(cfg, h.deps()); !errors.Is(err, llm.ErrInvalidConfig) {
-		t.Errorf("error = %v, want ErrInvalidConfig", err)
+// The byte limits are one policy both arms share, so they are declared once and
+// each default configuration is checked against that policy rather than against
+// a literal of its own — two copies of the same invariant drift.
+func TestDefaultLimitsAreDeclared(t *testing.T) {
+	limits := llm.DefaultLimits()
+	if limits.MaxRequestBytes != 256<<10 {
+		t.Errorf("MaxRequestBytes = %d, want %d", limits.MaxRequestBytes, 256<<10)
+	}
+	if limits.MaxResponseBytes != 1<<20 {
+		t.Errorf("MaxResponseBytes = %d, want %d", limits.MaxResponseBytes, 1<<20)
+	}
+	if got := llm.DefaultLocalConfig().Limits; got != limits {
+		t.Errorf("the local default carries %+v, want the shared %+v", got, limits)
+	}
+	if got := llm.DefaultCloudConfig().Limits; got != limits {
+		t.Errorf("the cloud default carries %+v, want the shared %+v", got, limits)
 	}
 }
 
-func TestDefaultLimitsAreDeclared(t *testing.T) {
-	cfg := llm.DefaultConfig()
-	if cfg.MaxRequestBytes != 256<<10 {
-		t.Errorf("MaxRequestBytes = %d, want %d", cfg.MaxRequestBytes, 256<<10)
+// What the old single default declared, now that each arm owns its own. The
+// local endpoint and the token budget were previously asserted together with a
+// provider selector and a LocalOnly flag that no longer exist; those two moved
+// to the resolver, and these are what is left that a configuration still says.
+func TestEachDefaultConfigurationDeclaresItsOwn(t *testing.T) {
+	if got := llm.DefaultLocalConfig().Endpoint; got != llm.DefaultEndpoint {
+		t.Errorf("the local default endpoint is %q, want %q", got, llm.DefaultEndpoint)
 	}
-	if cfg.MaxResponseBytes != 1<<20 {
-		t.Errorf("MaxResponseBytes = %d, want %d", cfg.MaxResponseBytes, 1<<20)
+	if got := llm.DefaultCloudConfig().MaxTokens; got != 4096 {
+		t.Errorf("the cloud default token budget is %d, want 4096", got)
+	}
+	// Neither default names a model: a guessed model produces a provider error
+	// the user cannot act on, which is why --model is always explicit.
+	if got := llm.DefaultLocalConfig().Model; got != "" {
+		t.Errorf("the local default names model %q", got)
+	}
+	if got := llm.DefaultCloudConfig().Model; got != "" {
+		t.Errorf("the cloud default names model %q", got)
 	}
 }
 
@@ -159,7 +174,7 @@ func TestDefaultLimitsAreDeclared(t *testing.T) {
 
 func TestOllamaSendsExactlyTheDeclaredBody(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -197,7 +212,7 @@ func TestOllamaSendsExactlyTheDeclaredBody(t *testing.T) {
 
 func TestAnthropicSendsExactlyTheDeclaredBody(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -247,18 +262,31 @@ func TestAnthropicSendsExactlyTheDeclaredBody(t *testing.T) {
 	}
 }
 
-// The configured model reaches the wire on both paths, not a hard-coded one.
+// The configured model reaches the wire on both paths, not a hard-coded one —
+// so this configures a model no default and no fixture uses, and looks for that.
+// Routing it through the shared builders made it assert a string it no longer
+// set, which an implementation hard-coding that string would have satisfied.
 func TestTheConfiguredModelIsSent(t *testing.T) {
-	for _, p := range providers {
+	for _, p := range []struct {
+		name      string
+		kind      serverKind
+		addr      string
+		reply     string
+		build     func(*harness) (rewrite.Provider, error)
+		localOnly bool
+	}{
+		{"ollama", plainServer, "127.0.0.1:11434", `{"response":"rewritten"}`,
+			withLocal(func(c *llm.LocalConfig) { c.Model = "a-specific-model" }), true},
+		{"anthropic", cloudCertServer, "api.anthropic.com:443", `{"content":[{"type":"text","text":"rewritten"}]}`,
+			withCloud(func(c *llm.CloudConfig) { c.Model = "a-specific-model" }), false},
+	} {
 		t.Run(p.name, func(t *testing.T) {
 			h := newHarness(t, p.kind, p.addr)
-			cfg := p.cfg
-			cfg.Model = "a-specific-model"
-			provider, err := llm.New(cfg, h.deps())
+			provider, err := p.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			if _, err := provider.Rewrite(context.Background(), request("p", cfg.LocalOnly)); err != nil {
+			if _, err := provider.Rewrite(context.Background(), request("p", p.localOnly)); err != nil {
 				t.Fatalf("Rewrite: %v", err)
 			}
 			_, body := h.onlyRequest(t)
@@ -277,7 +305,7 @@ func TestANonPositiveTokenBudgetIsRefused(t *testing.T) {
 			h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 			cfg := cloudConfig()
 			cfg.MaxTokens = tokens
-			if _, err := llm.New(cfg, h.deps()); !errors.Is(err, llm.ErrInvalidConfig) {
+			if _, err := h.newCloud(cfg); !errors.Is(err, llm.ErrInvalidConfig) {
 				t.Errorf("error = %v, want ErrInvalidConfig", err)
 			}
 			h.nothingLeft(t)
@@ -289,7 +317,7 @@ func TestTheTokenBudgetIsConfigurable(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 	cfg := cloudConfig()
 	cfg.MaxTokens = 1234
-	provider, err := llm.New(cfg, h.deps())
+	provider, err := h.newCloud(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -306,7 +334,7 @@ func TestTheTokenBudgetIsConfigurable(t *testing.T) {
 // can be set on a request going anywhere.
 func TestTheCloudHostIsPinned(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -322,18 +350,17 @@ func TestTheCloudHostIsPinned(t *testing.T) {
 // the key sets, and these pin the places a field could hide outside the body.
 func TestNoIdentityFieldsLeaveTheProcess(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		tls  bool
-		cfg  llm.Config
-		req  rewrite.RewriteRequest
+		name  string
+		tls   bool
+		build func(*harness) (rewrite.Provider, error)
+		req   rewrite.RewriteRequest
 	}{
-		{"ollama", false, localConfig(loopback), request("p", true)},
-		{"anthropic", true, cloudConfig(), request("p", false)},
+		{"ollama", false, buildLocal(loopback), request("p", true)},
+		{"anthropic", true, buildCloud(), request("p", false)},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, tlsKind(c.tls), "127.0.0.1:11434", "api.anthropic.com:443")
-			deps := h.deps()
-			provider, err := llm.New(c.cfg, deps)
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -369,16 +396,15 @@ func TestARequestDisagreeingWithTheModeIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name    string
 		tls     bool
-		cfg     llm.Config
+		build   func(*harness) (rewrite.Provider, error)
 		reqFlag bool
 	}{
-		{"local provider, cloud request", false, localConfig(loopback), false},
-		{"cloud provider, local request", true, cloudConfig(), true},
+		{"local provider, cloud request", false, buildLocal(loopback), false},
+		{"cloud provider, local request", true, buildCloud(), true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, tlsKind(c.tls), "127.0.0.1:11434", "api.anthropic.com:443")
-			deps := h.deps()
-			provider, err := llm.New(c.cfg, deps)
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -398,7 +424,7 @@ func TestARequestDisagreeingWithTheModeIsRefused(t *testing.T) {
 // observable at the dial seam and not only at the client.
 func TestOneRewriteIsOneDialAndOneRequest(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -423,7 +449,7 @@ func TestOneRewriteIsOneDialAndOneRequest(t *testing.T) {
 func TestACloudFailureNeverFallsBackToLocal(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 	h.handler = func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) }
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -447,7 +473,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 	h.handler = func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "http://example.com/elsewhere", http.StatusFound)
 	}
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -468,7 +494,7 @@ func TestARedirectIsNotFollowed(t *testing.T) {
 // after decoding.
 func TestCompressionIsDisabled(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -489,8 +515,8 @@ func TestCompressionIsDisabled(t *testing.T) {
 func TestAnOversizedRequestIsRefusedBeforeAnythingLeaves(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 	cfg := cloudConfig()
-	cfg.MaxRequestBytes = 200
-	provider, err := llm.New(cfg, h.deps())
+	cfg.Limits.MaxRequestBytes = 200
+	provider, err := h.newCloud(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -508,8 +534,8 @@ func TestAnOversizedRequestIsRefusedBeforeAnythingLeaves(t *testing.T) {
 func TestTheRequestLimitIsTheSerializedBody(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
 	cfg := localConfig(loopback)
-	cfg.MaxRequestBytes = 1 << 20
-	provider, err := llm.New(cfg, h.deps())
+	cfg.Limits.MaxRequestBytes = 1 << 20
+	provider, err := h.newLocal(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -523,20 +549,20 @@ func TestTheRequestLimitIsTheSerializedBody(t *testing.T) {
 
 	// Now set the limit to one byte under what that body serialized to.
 	h2 := newHarness(t, plainServer, "127.0.0.1:11434")
-	cfg.MaxRequestBytes = len(h.bodies[0]) - 1
-	provider, err = llm.New(cfg, llm.Deps{Dial: h2.dial, Credentials: h2.credentials})
+	cfg.Limits.MaxRequestBytes = len(h.bodies[0]) - 1
+	provider, err = llm.NewLocal(cfg, h2.dial, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if _, err := provider.Rewrite(context.Background(), request("p", true)); !errors.Is(err, llm.ErrRequestTooLarge) {
-		t.Errorf("a body of %d bytes passed a limit of %d: %v", len(h.bodies[0]), cfg.MaxRequestBytes, err)
+		t.Errorf("a body of %d bytes passed a limit of %d: %v", len(h.bodies[0]), cfg.Limits.MaxRequestBytes, err)
 	}
 	h2.nothingLeft(t)
 
 	// And exactly at the limit it must pass.
 	h3 := newHarness(t, plainServer, "127.0.0.1:11434")
-	cfg.MaxRequestBytes = len(h.bodies[0])
-	provider, err = llm.New(cfg, llm.Deps{Dial: h3.dial, Credentials: h3.credentials})
+	cfg.Limits.MaxRequestBytes = len(h.bodies[0])
+	provider, err = llm.NewLocal(cfg, h3.dial, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -573,8 +599,8 @@ func TestAnOversizedResponseIsRefused(t *testing.T) {
 			h := newHarness(t, plainServer, "127.0.0.1:11434")
 			h.handler = c.handler
 			cfg := localConfig(loopback)
-			cfg.MaxResponseBytes = 1000
-			provider, err := llm.New(cfg, h.deps())
+			cfg.Limits.MaxResponseBytes = 1000
+			provider, err := h.newLocal(cfg)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -593,24 +619,24 @@ func TestAnUnusableReplyIsAnError(t *testing.T) {
 	for _, c := range []struct {
 		name, body string
 		tls        bool
-		cfg        llm.Config
+		build      func(*harness) (rewrite.Provider, error)
+		localOnly  bool
 	}{
-		{"ollama empty", `{"response":""}`, false, localConfig(loopback)},
-		{"ollama missing", `{}`, false, localConfig(loopback)},
-		{"ollama not json", `not json`, false, localConfig(loopback)},
-		{"anthropic empty content", `{"content":[]}`, true, cloudConfig()},
-		{"anthropic wrong type", `{"content":[{"type":"tool_use","text":"x"}]}`, true, cloudConfig()},
-		{"anthropic empty text", `{"content":[{"type":"text","text":""}]}`, true, cloudConfig()},
+		{"ollama empty", `{"response":""}`, false, buildLocal(loopback), true},
+		{"ollama missing", `{}`, false, buildLocal(loopback), true},
+		{"ollama not json", `not json`, false, buildLocal(loopback), true},
+		{"anthropic empty content", `{"content":[]}`, true, buildCloud(), false},
+		{"anthropic wrong type", `{"content":[{"type":"tool_use","text":"x"}]}`, true, buildCloud(), false},
+		{"anthropic empty text", `{"content":[{"type":"text","text":""}]}`, true, buildCloud(), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, tlsKind(c.tls), "127.0.0.1:11434", "api.anthropic.com:443")
 			h.handler = func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(c.body)) }
-			deps := h.deps()
-			provider, err := llm.New(c.cfg, deps)
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			got, err := provider.Rewrite(context.Background(), request("p", c.cfg.LocalOnly))
+			got, err := provider.Rewrite(context.Background(), request("p", c.localOnly))
 			if err == nil {
 				t.Fatalf("accepted %q, returning %q", c.body, got)
 			}
@@ -627,7 +653,7 @@ func TestAnUnusableReplyIsAnError(t *testing.T) {
 
 func TestACancelledContextStopsBeforeDialling(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -645,7 +671,7 @@ func TestACancelledContextStopsBeforeDialling(t *testing.T) {
 func TestACredentialFailureIsAnErrorAndNothingIsSent(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 	h.credErr = errors.New("no key configured")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -660,7 +686,7 @@ func TestACredentialFailureIsAnErrorAndNothingIsSent(t *testing.T) {
 // Local mode never reads a credential, even across many rewrites.
 func TestLocalModeNeverReadsACredential(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -678,7 +704,7 @@ func TestLocalModeNeverReadsACredential(t *testing.T) {
 // the component.
 func TestItSatisfiesTheRewriteProviderInterface(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -696,7 +722,7 @@ func TestItSatisfiesTheRewriteProviderInterface(t *testing.T) {
 // prevent.
 func TestTheCloudPathVerifiesThePinnedName(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -716,7 +742,7 @@ func TestAProxyInTheEnvironmentIsIgnored(t *testing.T) {
 	t.Setenv("ALL_PROXY", "http://127.0.0.1:9")
 
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -726,19 +752,6 @@ func TestAProxyInTheEnvironmentIsIgnored(t *testing.T) {
 	if want := []string{"api.anthropic.com:443"}; !reflect.DeepEqual(h.addresses(), want) {
 		t.Errorf("dialled %v, want only the pinned host", h.addresses())
 	}
-}
-
-// A cloud provider has no local endpoint to fall back TO. Making that a
-// construction error is stronger than spying on a factory: the fallback is not
-// merely unused, it is unconstructible.
-func TestACloudProviderCannotCarryALocalEndpoint(t *testing.T) {
-	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	cfg := cloudConfig()
-	cfg.LocalEndpoint = loopback
-	if _, err := llm.New(cfg, h.deps()); !errors.Is(err, llm.ErrInvalidConfig) {
-		t.Errorf("error = %v, want ErrInvalidConfig", err)
-	}
-	h.nothingLeft(t)
 }
 
 // Every non-success status is an error, decided before the body is read as a
@@ -754,7 +767,7 @@ func TestEveryNonSuccessStatusIsAnError(t *testing.T) {
 				// A body that would decode perfectly well as a success.
 				_, _ = w.Write([]byte(`{"response":"looks like a rewrite"}`))
 			}
-			provider, err := llm.New(localConfig(loopback), h.deps())
+			provider, err := h.newLocal(localConfig(loopback))
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -777,21 +790,22 @@ func TestEveryNonSuccessStatusIsAnError(t *testing.T) {
 // added under a name the value-scanning test would never think to look at.
 func TestTheOutboundHeaderSetIsDeclared(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		tls  bool
-		cfg  llm.Config
-		want []string
+		name      string
+		tls       bool
+		build     func(*harness) (rewrite.Provider, error)
+		localOnly bool
+		want      []string
 	}{
-		{"ollama", false, localConfig(loopback), []string{"Content-Type", "User-Agent"}},
-		{"anthropic", true, cloudConfig(), []string{"Anthropic-Version", "Content-Type", "User-Agent", "X-Api-Key"}},
+		{"ollama", false, buildLocal(loopback), true, []string{"Content-Type", "User-Agent"}},
+		{"anthropic", true, buildCloud(), false, []string{"Anthropic-Version", "Content-Type", "User-Agent", "X-Api-Key"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, tlsKind(c.tls), "127.0.0.1:11434", "api.anthropic.com:443")
-			provider, err := llm.New(c.cfg, h.deps())
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			if _, err := provider.Rewrite(context.Background(), request("p", c.cfg.LocalOnly)); err != nil {
+			if _, err := provider.Rewrite(context.Background(), request("p", c.localOnly)); err != nil {
 				t.Fatalf("Rewrite: %v", err)
 			}
 			req, _ := h.onlyRequest(t)
@@ -830,8 +844,8 @@ func TestAnUnboundedResponseIsCutOffNotBuffered(t *testing.T) {
 	}
 
 	cfg := localConfig(loopback)
-	cfg.MaxResponseBytes = 4096
-	provider, err := llm.New(cfg, h.deps())
+	cfg.Limits.MaxResponseBytes = 4096
+	provider, err := h.newLocal(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1114,9 +1128,9 @@ func TestThePackageCannotReachAroundTheSeam(t *testing.T) {
 // the server, the handshake must fail.
 func TestAnUntrustedCloudCertificateIsRefused(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	deps := h.deps()
+	deps := h.cloudDeps()
 	deps.RootCAs = x509.NewCertPool() // trusts nothing
-	provider, err := llm.New(cloudConfig(), deps)
+	provider, err := llm.NewCloud(cloudConfig(), deps)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1146,18 +1160,21 @@ func TestAnUntrustedCloudCertificateIsRefused(t *testing.T) {
 
 func TestConstructionRefusalsHaveNoSideEffects(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		cfg  llm.Config
+		name  string
+		build func(*harness) (rewrite.Provider, error)
 	}{
-		{"bad endpoint", localConfig("http://example.com:11434")},
-		{"zero request limit", func() llm.Config { c := localConfig(loopback); c.MaxRequestBytes = 0; return c }()},
-		{"zero response limit", func() llm.Config { c := localConfig(loopback); c.MaxResponseBytes = 0; return c }()},
-		{"unknown provider", func() llm.Config { c := localConfig(loopback); c.Provider = "gpt"; return c }()},
-		{"empty model", func() llm.Config { c := localConfig(loopback); c.Model = ""; return c }()},
+		{"bad endpoint", buildLocal("http://example.com:11434")},
+		{"zero request limit", withLocal(func(c *llm.LocalConfig) { c.Limits.MaxRequestBytes = 0 })},
+		{"zero response limit", withLocal(func(c *llm.LocalConfig) { c.Limits.MaxResponseBytes = 0 })},
+		{"empty local model", withLocal(func(c *llm.LocalConfig) { c.Model = "" })},
+		{"empty cloud model", withCloud(func(c *llm.CloudConfig) { c.Model = "" })},
+		// "unknown provider" is not a row here any more: there is no provider
+		// field to make unknown. It is a resolver refusal now, in
+		// internal/workflow, asserted with neither arm running.
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, plainServer, "127.0.0.1:11434")
-			if _, err := llm.New(c.cfg, h.deps()); err == nil {
+			if _, err := c.build(h); err == nil {
 				t.Fatal("accepted")
 			}
 			h.nothingLeft(t)
@@ -1178,7 +1195,7 @@ func TestEveryNonSuccessStatusIsAnErrorOnTheCloudPathToo(t *testing.T) {
 				w.WriteHeader(status)
 				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"looks like a rewrite"}]}`))
 			}
-			provider, err := llm.New(cloudConfig(), h.deps())
+			provider, err := h.newCloud(cloudConfig())
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
@@ -1215,11 +1232,11 @@ func TestSuccessIsTheTwoHundredClass(t *testing.T) {
 					w.WriteHeader(c.status)
 					_, _ = w.Write([]byte(p.reply))
 				}
-				provider, err := llm.New(p.cfg, h.deps())
+				provider, err := p.build(h)
 				if err != nil {
 					t.Fatalf("New: %v", err)
 				}
-				got, err := provider.Rewrite(context.Background(), request("p", p.cfg.LocalOnly))
+				got, err := provider.Rewrite(context.Background(), request("p", p.localOnly))
 				if c.ok {
 					if err != nil {
 						t.Errorf("status %d rejected: %v", c.status, err)
@@ -1258,8 +1275,8 @@ func TestTheCloudResponseIsBoundedAndParsed(t *testing.T) {
 			}
 		}
 		cfg := cloudConfig()
-		cfg.MaxResponseBytes = 4096
-		provider, err := llm.New(cfg, h.deps())
+		cfg.Limits.MaxResponseBytes = 4096
+		provider, err := h.newCloud(cfg)
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -1281,7 +1298,7 @@ func TestTheCloudResponseIsBoundedAndParsed(t *testing.T) {
 	t.Run("not json", func(t *testing.T) {
 		h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
 		h.handler = func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`<html>nope</html>`)) }
-		provider, err := llm.New(cloudConfig(), h.deps())
+		provider, err := h.newCloud(cloudConfig())
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
@@ -1310,13 +1327,13 @@ func TestANonSuccessStatusIsDecidedBeforeReadingTheBody(t *testing.T) {
 				case <-r.Context().Done():
 				}
 			}
-			provider, err := llm.New(p.cfg, h.deps())
+			provider, err := p.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := provider.Rewrite(context.Background(), request("p", p.cfg.LocalOnly))
+				_, err := provider.Rewrite(context.Background(), request("p", p.localOnly))
 				done <- err
 			}()
 			select {
@@ -1335,7 +1352,7 @@ func TestANonSuccessStatusIsDecidedBeforeReadingTheBody(t *testing.T) {
 // not only before the dial.
 func TestACancelledContextStopsBeforeReadingACredential(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-	provider, err := llm.New(cloudConfig(), h.deps())
+	provider, err := h.newCloud(cloudConfig())
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1353,13 +1370,14 @@ func TestACancelledContextStopsBeforeReadingACredential(t *testing.T) {
 // context.Canceled without ever making a request cannot pass.
 func TestAnInFlightRequestIsCancelled(t *testing.T) {
 	for _, c := range []struct {
-		name string
-		kind serverKind
-		cfg  llm.Config
-		addr string
+		name      string
+		kind      serverKind
+		build     func(*harness) (rewrite.Provider, error)
+		addr      string
+		localOnly bool
 	}{
-		{"ollama", plainServer, localConfig(loopback), "127.0.0.1:11434"},
-		{"anthropic", cloudCertServer, cloudConfig(), "api.anthropic.com:443"},
+		{"ollama", plainServer, buildLocal(loopback), "127.0.0.1:11434", true},
+		{"anthropic", cloudCertServer, buildCloud(), "api.anthropic.com:443", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, c.kind, c.addr)
@@ -1380,14 +1398,14 @@ func TestAnInFlightRequestIsCancelled(t *testing.T) {
 			}
 			t.Cleanup(func() { close(release) })
 
-			provider, err := llm.New(c.cfg, h.deps())
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			done := make(chan error, 1)
 			go func() {
-				_, err := provider.Rewrite(ctx, request("p", c.cfg.LocalOnly))
+				_, err := provider.Rewrite(ctx, request("p", c.localOnly))
 				done <- err
 			}()
 
@@ -1422,7 +1440,7 @@ func TestAnInFlightRequestIsCancelled(t *testing.T) {
 // Trailers are metadata the header and value scans would never see.
 func TestNoTrailersAreSent(t *testing.T) {
 	h := newHarness(t, plainServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig(loopback), h.deps())
+	provider, err := h.newLocal(localConfig(loopback))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1441,19 +1459,20 @@ func TestAReplyFollowedByGarbageIsRefused(t *testing.T) {
 	for _, c := range []struct {
 		name, body string
 		tls        bool
-		cfg        llm.Config
+		build      func(*harness) (rewrite.Provider, error)
+		localOnly  bool
 	}{
-		{"ollama", `{"response":"rewritten"}{"response":"and more"}`, false, localConfig(loopback)},
-		{"anthropic", `{"content":[{"type":"text","text":"rewritten"}]} trailing garbage`, true, cloudConfig()},
+		{"ollama", `{"response":"rewritten"}{"response":"and more"}`, false, buildLocal(loopback), true},
+		{"anthropic", `{"content":[{"type":"text","text":"rewritten"}]} trailing garbage`, true, buildCloud(), false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t, tlsKind(c.tls), "127.0.0.1:11434", "api.anthropic.com:443")
 			h.handler = func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(c.body)) }
-			provider, err := llm.New(c.cfg, h.deps())
+			provider, err := c.build(h)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
-			if got, err := provider.Rewrite(context.Background(), request("p", c.cfg.LocalOnly)); err == nil {
+			if got, err := provider.Rewrite(context.Background(), request("p", c.localOnly)); err == nil {
 				t.Fatalf("accepted a reply with trailing content, returning %q", got)
 			}
 		})
@@ -1464,7 +1483,7 @@ func TestAReplyFollowedByGarbageIsRefused(t *testing.T) {
 // against a certificate whose IP SAN is 127.0.0.1.
 func TestAnHTTPSLoopbackEndpointWorks(t *testing.T) {
 	h := newHarness(t, loopbackCertServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig("https://127.0.0.1:11434"), h.deps())
+	provider, err := h.newLocal(localConfig("https://127.0.0.1:11434"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -1484,25 +1503,12 @@ func TestAnHTTPSLoopbackEndpointWorks(t *testing.T) {
 // does not authenticate a loopback endpoint.
 func TestAnHTTPSLoopbackEndpointStillVerifiesTheName(t *testing.T) {
 	h := newHarness(t, cloudCertServer, "127.0.0.1:11434")
-	provider, err := llm.New(localConfig("https://127.0.0.1:11434"), h.deps())
+	provider, err := h.newLocal(localConfig("https://127.0.0.1:11434"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
 	if _, err := provider.Rewrite(context.Background(), request("p", true)); err == nil {
 		t.Error("accepted a certificate that does not name 127.0.0.1")
-	}
-}
-
-func TestTheDefaultConfigurationIsDeclared(t *testing.T) {
-	cfg := llm.DefaultConfig()
-	if cfg.Provider != llm.ProviderOllama {
-		t.Errorf("default provider = %q, want %q", cfg.Provider, llm.ProviderOllama)
-	}
-	if cfg.LocalEndpoint != "http://127.0.0.1:11434" {
-		t.Errorf("default endpoint = %q", cfg.LocalEndpoint)
-	}
-	if cfg.LocalOnly {
-		t.Error("default is local-only; the flag should opt IN to the guarantee, not out of the cloud")
 	}
 }
 
@@ -1512,21 +1518,23 @@ func TestTheDefaultConfigurationIsDeclared(t *testing.T) {
 func TestTheCloudPathRequiresACredentialFactory(t *testing.T) {
 	t.Run("cloud refuses nil", func(t *testing.T) {
 		h := newHarness(t, cloudCertServer, "api.anthropic.com:443")
-		deps := h.deps()
+		deps := h.cloudDeps()
 		deps.Credentials = nil
-		if _, err := llm.New(cloudConfig(), deps); !errors.Is(err, llm.ErrMissingInput) {
+		if _, err := llm.NewCloud(cloudConfig(), deps); !errors.Is(err, llm.ErrMissingInput) {
 			t.Errorf("error = %v, want ErrMissingInput", err)
 		}
 		h.nothingLeft(t)
 	})
 
-	t.Run("local accepts nil", func(t *testing.T) {
+	// The local half of this test used to set Credentials to nil and check the
+	// local path did not mind. There is no field to nil now: NewLocal has no
+	// parameter that could carry one, which is the whole point, so what is left
+	// to assert is that it constructs and rewrites without one existing at all.
+	t.Run("local needs none", func(t *testing.T) {
 		h := newHarness(t, plainServer, "127.0.0.1:11434")
-		deps := h.deps()
-		deps.Credentials = nil
-		provider, err := llm.New(localConfig(loopback), deps)
+		provider, err := h.newLocal(localConfig(loopback))
 		if err != nil {
-			t.Fatalf("local mode required a credential factory it never calls: %v", err)
+			t.Fatalf("local construction failed without a credential: %v", err)
 		}
 		if _, err := provider.Rewrite(context.Background(), request("p", true)); err != nil {
 			t.Errorf("Rewrite: %v", err)
