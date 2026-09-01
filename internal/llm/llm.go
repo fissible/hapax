@@ -37,27 +37,35 @@ const (
 type DialFunc func(context.Context, string, string) (net.Conn, error)
 type CredentialFactory func(context.Context) (string, error)
 
-type Deps struct {
+type Limits struct{ MaxRequestBytes, MaxResponseBytes int }
+
+func DefaultLimits() Limits {
+	return Limits{MaxRequestBytes: 256 << 10, MaxResponseBytes: 1 << 20}
+}
+
+type LocalConfig struct {
+	Model, Endpoint string
+	Limits          Limits
+}
+
+func DefaultLocalConfig() LocalConfig {
+	return LocalConfig{Endpoint: DefaultEndpoint, Limits: DefaultLimits()}
+}
+
+type CloudConfig struct {
+	Model     string
+	Limits    Limits
+	MaxTokens int
+}
+
+func DefaultCloudConfig() CloudConfig {
+	return CloudConfig{Limits: DefaultLimits(), MaxTokens: 4096}
+}
+
+type CloudDeps struct {
 	Dial        DialFunc
 	Credentials CredentialFactory
 	RootCAs     *x509.CertPool
-}
-
-type Config struct {
-	Provider                                     ProviderID
-	Model, LocalEndpoint                         string
-	LocalOnly                                    bool
-	MaxRequestBytes, MaxResponseBytes, MaxTokens int
-}
-
-func DefaultConfig() Config {
-	return Config{
-		Provider:         ProviderOllama,
-		LocalEndpoint:    DefaultEndpoint,
-		MaxRequestBytes:  256 << 10,
-		MaxResponseBytes: 1 << 20,
-		MaxTokens:        4096,
-	}
 }
 
 var (
@@ -74,48 +82,54 @@ var (
 
 type provider struct {
 	client      *http.Client
-	cfg         Config
+	provider    ProviderID
+	model       string
+	limits      Limits
+	maxTokens   int
+	localOnly   bool
 	url         string
 	credentials CredentialFactory
 }
 
-// New constructs a provider without reading credentials or opening a socket.
-func New(cfg Config, deps Deps) (rewrite.Provider, error) {
-	if deps.Dial == nil {
+// NewLocal constructs a local provider without opening a socket.
+func NewLocal(cfg LocalConfig, dial DialFunc, roots *x509.CertPool) (rewrite.Provider, error) {
+	if dial == nil {
 		return nil, ErrMissingInput
 	}
-	if cfg.Model == "" || cfg.MaxRequestBytes <= 0 || cfg.MaxResponseBytes <= 0 {
+	if cfg.Model == "" || cfg.Limits.MaxRequestBytes <= 0 || cfg.Limits.MaxResponseBytes <= 0 {
 		return nil, ErrInvalidConfig
 	}
+	if err := validateEndpoint(cfg.Endpoint); err != nil {
+		return nil, err
+	}
+	return newProvider(ProviderOllama, cfg.Model, cfg.Limits, 0, true,
+		strings.TrimRight(cfg.Endpoint, "/")+"/api/generate", dial, roots), nil
+}
 
-	endpoint := ""
-	switch cfg.Provider {
-	case ProviderOllama:
-		if err := validateEndpoint(cfg.LocalEndpoint); err != nil {
-			return nil, err
-		}
-		endpoint = strings.TrimRight(cfg.LocalEndpoint, "/") + "/api/generate"
-	case ProviderAnthropic:
-		if cfg.LocalOnly {
-			return nil, ErrLocalOnly
-		}
-		if cfg.LocalEndpoint != "" || cfg.MaxTokens <= 0 {
-			return nil, ErrInvalidConfig
-		}
-		if deps.Credentials == nil {
-			return nil, ErrMissingInput
-		}
-		endpoint = AnthropicURL
-	default:
+// NewCloud constructs a cloud provider without reading credentials or opening a socket.
+func NewCloud(cfg CloudConfig, deps CloudDeps) (rewrite.Provider, error) {
+	if deps.Dial == nil || deps.Credentials == nil {
+		return nil, ErrMissingInput
+	}
+	if cfg.Model == "" || cfg.Limits.MaxRequestBytes <= 0 || cfg.Limits.MaxResponseBytes <= 0 || cfg.MaxTokens <= 0 {
 		return nil, ErrInvalidConfig
 	}
+	built := newProvider(ProviderAnthropic, cfg.Model, cfg.Limits, cfg.MaxTokens, false,
+		AnthropicURL, deps.Dial, deps.RootCAs)
+	built.credentials = deps.Credentials
 
+	return built, nil
+}
+
+func newProvider(providerID ProviderID, model string, limits Limits, maxTokens int, localOnly bool, endpoint string, dial DialFunc, roots *x509.CertPool) *provider {
 	transport := &http.Transport{
-		DialContext:        deps.Dial,
+		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
+			return dial(ctx, network, address)
+		},
 		Proxy:              nil,
 		DisableKeepAlives:  true,
 		DisableCompression: true,
-		TLSClientConfig:    &tls.Config{RootCAs: deps.RootCAs, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS13},
+		TLSClientConfig:    &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12, MaxVersion: tls.VersionTLS13},
 	}
 	client := &http.Client{
 		Transport: transport,
@@ -123,7 +137,7 @@ func New(cfg Config, deps Deps) (rewrite.Provider, error) {
 			return ErrRedirect
 		},
 	}
-	return &provider{client: client, cfg: cfg, url: endpoint, credentials: deps.Credentials}, nil
+	return &provider{client: client, provider: providerID, model: model, limits: limits, maxTokens: maxTokens, localOnly: localOnly, url: endpoint}
 }
 
 func validateEndpoint(endpoint string) error {
@@ -152,19 +166,19 @@ func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) 
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
-	if request.LocalOnly != p.cfg.LocalOnly {
+	if request.LocalOnly != p.localOnly {
 		return "", ErrModeMismatch
 	}
 	body, err := p.body(request.Prompt)
 	if err != nil {
 		return "", err
 	}
-	if len(body) > p.cfg.MaxRequestBytes {
+	if len(body) > p.limits.MaxRequestBytes {
 		return "", ErrRequestTooLarge
 	}
 
 	key := ""
-	if p.cfg.Provider == ProviderAnthropic {
+	if p.provider == ProviderAnthropic {
 		key, err = p.credentials(ctx)
 		if err != nil {
 			return "", err
@@ -177,7 +191,7 @@ func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) 
 	}
 	httpRequest.Header.Set("content-type", "application/json")
 	httpRequest.Header.Set("user-agent", UserAgent)
-	if p.cfg.Provider == ProviderAnthropic {
+	if p.provider == ProviderAnthropic {
 		httpRequest.Header.Set("x-api-key", key)
 		httpRequest.Header.Set("anthropic-version", AnthropicVersion)
 	}
@@ -190,31 +204,31 @@ func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) 
 	if response.StatusCode < http.StatusOK || response.StatusCode >= 300 {
 		return "", fmt.Errorf("%w: status %d", ErrProvider, response.StatusCode)
 	}
-	if response.ContentLength > int64(p.cfg.MaxResponseBytes) {
+	if response.ContentLength > int64(p.limits.MaxResponseBytes) {
 		return "", ErrResponseTooLarge
 	}
-	reply, err := io.ReadAll(io.LimitReader(response.Body, int64(p.cfg.MaxResponseBytes)+1))
+	reply, err := io.ReadAll(io.LimitReader(response.Body, int64(p.limits.MaxResponseBytes)+1))
 	if err != nil {
 		return "", err
 	}
-	if len(reply) > p.cfg.MaxResponseBytes {
+	if len(reply) > p.limits.MaxResponseBytes {
 		return "", ErrResponseTooLarge
 	}
 	return p.parse(reply)
 }
 
 func (p *provider) body(prompt string) ([]byte, error) {
-	if p.cfg.Provider == ProviderOllama {
-		return json.Marshal(map[string]any{"model": p.cfg.Model, "prompt": prompt, "stream": false})
+	if p.provider == ProviderOllama {
+		return json.Marshal(map[string]any{"model": p.model, "prompt": prompt, "stream": false})
 	}
 	return json.Marshal(map[string]any{
-		"model": p.cfg.Model, "max_tokens": p.cfg.MaxTokens,
+		"model": p.model, "max_tokens": p.maxTokens,
 		"messages": []map[string]string{{"role": "user", "content": prompt}},
 	})
 }
 
 func (p *provider) parse(reply []byte) (string, error) {
-	if p.cfg.Provider == ProviderOllama {
+	if p.provider == ProviderOllama {
 		var decoded struct {
 			Response string `json:"response"`
 		}
