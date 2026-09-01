@@ -629,6 +629,92 @@ reader hapax was blocked when it was not interested. That disposition is deliber
 `rewrite.RejectionCode`, because no attempt happened and recording one would put a provider
 candidate that never existed into the audit record.
 
+### `Execute` runs the plan and hands back bytes it cannot write
+
+B2b-1 makes rewriting happen and has no filesystem authority whatever. `Execute` consumes a
+`RewritePlan`, returns assembled bytes and per-target outcomes, and writes nothing but audit
+records. That is why it is a slice of its own: everything here is testable with no destination
+in existence, so the slice that *can* overwrite a user's file is small and reviewed alone.
+
+**The plan is executed as written, never requalified.** Profile, reference and release are
+loaded by the plan's own IDs, never by resolving the register head again. A head that moved
+between planning and execution must not silently change what runs, and the audit record has to
+name what was actually used. Their cross-binding is left to `score.Score`'s own `validate`,
+which the preflight below calls before anything is spent: a second copy of that check is a
+second authority that can disagree with the first.
+
+**A `RewritePlan` is a public struct, so it is treated as a capability rather than as trusted
+input.** A hand-built plan could otherwise have an attempt recorded against a node it has no
+business touching. `Execute` requires: no refusal and a planned state; `Targets` equal to the
+count of `target` dispositions; the draft snapshot holding exactly one `corpus.Draft` document;
+every target node belonging to that document, carrying a vector, and agreeing with the stored
+node's offset and length; target node IDs unique, so one paragraph cannot be rewritten twice;
+and the persisted exemplar selection bound to the plan's profile with its members equal to the
+plan's, **in order**.
+
+**Freshness is the admitted byte-content hash, checked twice.** Not path, mtime, snapshot ID or
+file identity — the hash of the bytes, before the loop and again before assembly, because a
+long provider run is exactly when a file changes underneath. The refusal is `stale-draft` and
+deliberately not `stale-exemplars`: the exemplars are fine, the draft moved. Assembly uses the
+document from the *first* read, which is what was scored and rewritten; the second read only
+guards it.
+
+That hash cannot see a BOM, because admission strips one before hashing — so a BOM added or
+removed mid-run leaves the run "fresh" while assembly restores the first read's BOM state and
+silently changes the file's first three bytes. `HadBOM` is therefore compared between the two
+reads and a mismatch is `stale-draft` as well.
+
+**Every seam is built before the first provider call, and a target that will not score is a
+broken precondition.** `score.Score` bound to the release is the `Scorer`; the persisted
+exemplar selection rehydrated **once**, immutable, returned identically on every per-segment
+call, is the `Selector`; `preserve` and `tells` composed are the `Gate`. Planning scores the
+whole document, while the loop rescores each paragraph's raw span standing alone, and a
+paragraph can measure differently out of its container. So every target is scored standalone in
+a preflight: one that will not score is an error naming the segment, before anything is spent,
+rather than a quiet `none-improved`. A selected exemplar that will not rehydrate refuses
+`stale-exemplars` at the same point. A rehydration failure *after* that is operational, because
+by then it is impossible by construction.
+
+**Provider construction is target work.** A `nothing-to-change` plan constructs no provider,
+loads no selection, and therefore succeeds under `--local-only` even with a cloud provider
+named: nothing was sent, and refusing would refuse something that never happens. That plan
+still takes both freshness checks and still assembles — with zero replacements, which
+`assemble` guarantees is byte-identical to the input — so the exact copy B2b-2 owes comes from
+the same checked path as a real rewrite rather than from a bare copy that skips it.
+
+**`Outcome` gains a closed terminal reason, and `RejectionCode` stays per-attempt.** Three
+situations were indistinguishable, all leaving `Reason` empty and `Changed` false: an empty
+provider response, attempts exhausted with every candidate rejected, and the loop never
+entered. They are different vocabularies — a rejection describes one scored candidate, and an
+empty response has no candidate to describe — so `Terminal` is its own enum, additive rather
+than a reshaping. `Execute` upgrades `not-entered` to an error, since the preflight has already
+established the target scores.
+
+`Rejections` carries one code per **recorded** attempt, in loop order, with `""` for an
+accepted one. There is deliberately no separate attempt count: the loop records no attempt for
+an empty response, so a count and a list would be two members that can disagree, and `Terminal`
+already says a call was spent without producing one.
+
+**Bytes are publishable only when there is no error, no refusal, and bytes are non-nil.** A
+refusal never carries bytes, exactly as `assemble` returns nil rather than a partial document.
+Outcomes *may* accompany a refusal — the attempts happened and are already persisted, and
+suppressing them would make the result disagree with the store.
+
+**The invocation ID is minted per run, from randomness.** A content-addressed ID over the plan
+would collide: `PutRewriteAttempt` refuses a differing record under an existing key, so
+re-running the same rewrite against a non-deterministic provider would fail on the second run
+with an operational error. A caller-supplied ID has the same defect.
+
+**Cancellation leaves a valid prefix, and the audit record has a stated gap.** `ctx` is checked
+before each costly phase and each target; each persisted attempt is individually atomic, so a
+cancelled run leaves some attempts and no bytes. But `rewrite_attempt` is the *only* durable
+evidence a rewrite leaves, and it is per-attempt: a `nothing-to-change` plan, a `stale-draft`
+refused before the loop, an empty first response, and cancellation before the first attempt
+completes all leave no record at all — and a run that does record attempts does not name the
+reference, release, exemplar selection or draft snapshot it was bound to. Issue #76 owns the
+invocation-level record. It is not in this slice because it is a table, a migration and a
+codec, and this slice was cut precisely so that the code running the loop writes nothing.
+
 ### Exit codes, and the split that produced them
 
 Row 12 originally said `cli` should be built **early**, against stub interfaces, so that
@@ -653,8 +739,8 @@ The codes partition on one question — *did the tool produce a verdict?*
 
 0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
 rather than a failure. A refusal carries a reason from a closed set — `uncalibrated`,
-`insufficient-evidence`, `stale-exemplars`, `local-only-forbids-provider`, `no-profile`,
-`no-reference`, `ambiguous-reference` —
+`insufficient-evidence`, `stale-draft`, `stale-exemplars`, `local-only-forbids-provider`,
+`no-profile`, `no-reference`, `ambiguous-reference` —
 because a script must not have to parse prose to tell them apart.
 
 `no-profile` was added when `cli` was designed. None of the earlier refusal reasons covers
