@@ -37,6 +37,13 @@ func (planless) Profile(context.Context, workflow.ProfileRequest) (workflow.Prof
 func (planless) Eval(context.Context, workflow.EvalRequest) (workflow.EvalResult, error) {
 	return workflow.EvalResult{}, nil
 }
+
+// Rewrite exists because B2b-2b widened Service to carry the command. What this
+// fake is for is the boundary below, not the rewrite path.
+func (planless) Rewrite(context.Context, workflow.RewriteInput) (workflow.RewriteOutcome, error) {
+	return workflow.RewriteOutcome{}, nil
+}
+
 func (planless) Score(context.Context, workflow.ScoreRequest) (workflow.ScoreResult, error) {
 	return workflow.ScoreResult{}, nil
 }

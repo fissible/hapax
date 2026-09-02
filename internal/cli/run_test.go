@@ -322,7 +322,12 @@ func TestTheUnknownCommandDiagnosticPromisesNothing(t *testing.T) {
 			t.Errorf("the diagnostic does not name %q, which exists: %q", implemented, diagnostic)
 		}
 	}
-	for _, unimplemented := range []string{"rewrite"} {
+	// The list of unimplemented names is now empty: B2b-2b shipped rewrite, and
+	// with it every command DESIGN names. The loop stays so the next
+	// unimplemented name has somewhere to go, and so this test keeps saying
+	// what it was for — a diagnostic must not offer something that does not
+	// exist.
+	for _, unimplemented := range []string{} {
 		if strings.Contains(diagnostic, unimplemented) {
 			t.Errorf("the diagnostic offers %q, which is not implemented: %q", unimplemented, diagnostic)
 		}

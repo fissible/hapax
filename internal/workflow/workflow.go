@@ -162,7 +162,13 @@ type ScoreResult struct {
 	ParagraphsBelowFloor                               int
 	Segments                                           []ScoredSegment
 }
-type RewriteRequest struct{ StartDir, StorePath, CorpusRoot, Register, Path string }
+
+// PlanRequest contains the inputs used to qualify a draft for rewriting.
+type PlanRequest struct{ StartDir, StorePath, CorpusRoot, Register, Path string }
+
+// RewriteRequest is retained as a source-compatible name for callers compiled
+// against the B1 planning API. New callers use PlanRequest.
+type RewriteRequest = PlanRequest
 type Disposition string
 
 const (
@@ -272,6 +278,45 @@ type ExecuteResult struct {
 	Outcomes          []TargetOutcome
 }
 
+// RewriteInput is the one request the composition root may use to rewrite a
+// document. Keeping the planning and execution inputs together prevents a
+// caller from opening a freshness window between the two operations.
+type RewriteInput struct {
+	StartDir, StorePath, CorpusRoot, Register, Path string
+	Choice                                          ProviderChoice
+	Mode                                            mode.Mode
+	Attempts                                        int
+}
+
+// RewriteReport is the public, prose-free account of a rewrite.
+type RewriteReport struct {
+	PlanState         PlanState
+	State             RewriteState
+	Targets, Improved int
+	Refusal           string
+	Outcomes          []TargetOutcome
+}
+
+// RewriteOutcome keeps assembled document bytes private to workflow. Content
+// returns a copy so publication cannot mutate the result retained by a caller.
+type RewriteOutcome struct {
+	report  RewriteReport
+	content []byte
+}
+
+func NewRewriteOutcome(report RewriteReport, content []byte) RewriteOutcome {
+	report.Outcomes = append([]TargetOutcome(nil), report.Outcomes...)
+	return RewriteOutcome{report: report, content: append([]byte(nil), content...)}
+}
+
+func (o RewriteOutcome) Report() RewriteReport {
+	r := o.report
+	r.Outcomes = append([]TargetOutcome(nil), r.Outcomes...)
+	return r
+}
+
+func (o RewriteOutcome) Content() []byte { return append([]byte(nil), o.content...) }
+
 func Bands() []string { return []string{"in-range", "drifting", "not-you"} }
 
 // EvalReasonNoReference names a completed evaluation that cannot measure a
@@ -323,6 +368,7 @@ type Service interface {
 	Profile(context.Context, ProfileRequest) (ProfileResult, error)
 	Eval(context.Context, EvalRequest) (EvalResult, error)
 	Score(context.Context, ScoreRequest) (ScoreResult, error)
+	Rewrite(context.Context, RewriteInput) (RewriteOutcome, error)
 }
 
 func heldOutSegments(ctx context.Context, s *store.Store, snapshotID string, fitted profile.Fitted) ([]eval.Segment, error) {
@@ -587,7 +633,7 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 
 // Plan resolves and records every offline rewrite decision before a provider is
 // involved. It deliberately stays off Service: B1 has no CLI surface.
-func (r *Runner) Plan(ctx context.Context, request RewriteRequest) (RewritePlan, error) {
+func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, error) {
 	if request.Path == "" {
 		return RewritePlan{}, errors.New("rewrite draft path is required")
 	}
@@ -1185,6 +1231,36 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		result.State = RewriteNoneImproved
 	}
 	return result, nil
+}
+
+// Rewrite validates provider choice before Plan can persist a draft snapshot,
+// then executes the resulting plan without exposing either intermediate state
+// or assembled bytes to the composition root.
+func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutcome, error) {
+	if _, err := r.Provider(request.Mode, request.Choice); err != nil {
+		if errors.Is(err, ErrLocalOnlyForbidsProvider) {
+			return NewRewriteOutcome(RewriteReport{Refusal: RefusalLocalOnlyForbidsProvider}, nil), nil
+		}
+		return RewriteOutcome{}, err
+	}
+	plan, err := r.Plan(ctx, PlanRequest{
+		StartDir: request.StartDir, StorePath: request.StorePath, CorpusRoot: request.CorpusRoot,
+		Register: request.Register, Path: request.Path,
+	})
+	if err != nil {
+		return RewriteOutcome{}, err
+	}
+	if plan.Refusal != "" {
+		return NewRewriteOutcome(RewriteReport{PlanState: plan.State, Refusal: plan.Refusal}, nil), nil
+	}
+	executed, err := r.Execute(ctx, ExecuteRequest{Plan: plan, Choice: request.Choice, Mode: request.Mode, Attempts: request.Attempts})
+	if err != nil {
+		return RewriteOutcome{}, err
+	}
+	return NewRewriteOutcome(RewriteReport{
+		PlanState: plan.State, State: executed.State, Targets: executed.Targets,
+		Improved: executed.Improved, Refusal: executed.Refusal, Outcomes: executed.Outcomes,
+	}, executed.Bytes), nil
 }
 
 // readFresh reports whether the draft on disk is still the one that was planned.
