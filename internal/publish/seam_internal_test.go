@@ -221,6 +221,29 @@ func (r *recorder) seam() deps {
 	}
 }
 
+// resolvedDir is the directory a publication will actually stage into, which is
+// not always the spelling the caller used.
+//
+// These tests originally compared against the raw path, and on Darwin
+// t.TempDir() returns /var/folders/... which resolves through the system's
+// /private/var alias. That made the implementation carry a helper whose only
+// job was to stop EvalSymlinks resolving one prefix, so an assertion here would
+// pass — production behaviour bent to fit a test, which is the defect this
+// project keeps finding and removing.
+//
+// The assertion was the wrong one. Replace is documented to resolve its source
+// once and rename onto the path that resolution produced; requiring staging to
+// sit in the directory AS THE CALLER SPELLED IT contradicts that. So the
+// expectation resolves too.
+func resolvedDir(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatalf("resolve %s: %v", path, err)
+	}
+	return resolved
+}
+
 func seamSource(t *testing.T, dir, name, body string, mode os.FileMode) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
@@ -388,10 +411,10 @@ func TestCreateNeverRenames(t *testing.T) {
 		t.Errorf("Create called Link %d times, want once", r.count("Link"))
 	}
 	linked := r.argsOf(t, "Link")
-	if len(linked) != 2 || linked[1] != filepath.Join(dir, "out.md") {
+	if len(linked) != 2 || linked[1] != filepath.Join(resolvedDir(t, dir), "out.md") {
 		t.Errorf("Link was called with %v; the second argument must be the destination", linked)
 	}
-	if filepath.Dir(linked[0]) != dir {
+	if filepath.Dir(linked[0]) != resolvedDir(t, dir) {
 		t.Errorf("staging is %q, which is not in the destination's directory; Link would cross devices", linked[0])
 	}
 }
@@ -433,7 +456,7 @@ func TestTheContentIsSyncedBeforePublicationAndTheDirectoryAfter(t *testing.T) {
 			r := newRecorder(t)
 
 			var err error
-			publication, destinationDir := "Link", dir
+			publication, destinationDir := "Link", resolvedDir(t, dir)
 			if name == "create" {
 				err = create(r.seam(), source, filepath.Join(dir, "out.md"), []byte("ours\n"))
 			} else {
@@ -601,8 +624,8 @@ func TestStagingLivesInThePublicationDirectory(t *testing.T) {
 		if err := create(r.seam(), source, filepath.Join(elsewhere, "out.md"), []byte("ours\n")); err != nil {
 			t.Fatalf("create: %v", err)
 		}
-		if got := r.argsOf(t, "CreateTemp")[0]; got != elsewhere {
-			t.Errorf("staged in %q, want the destination's directory %q", got, elsewhere)
+		if got := r.argsOf(t, "CreateTemp")[0]; got != resolvedDir(t, elsewhere) {
+			t.Errorf("staged in %q, want the destination's directory %q", got, resolvedDir(t, elsewhere))
 		}
 	})
 
@@ -616,12 +639,13 @@ func TestStagingLivesInThePublicationDirectory(t *testing.T) {
 		if err := replace(r.seam(), link, []byte("ours\n")); err != nil {
 			t.Fatalf("replace: %v", err)
 		}
-		if got := r.argsOf(t, "CreateTemp")[0]; got != elsewhere {
-			t.Errorf("staged in %q, want the resolved target's directory %q", got, elsewhere)
+		if got := r.argsOf(t, "CreateTemp")[0]; got != resolvedDir(t, elsewhere) {
+			t.Errorf("staged in %q, want the resolved target's directory %q", got, resolvedDir(t, elsewhere))
 		}
-		if got := r.argsOf(t, "Rename")[1]; got != target {
+		wantTarget := filepath.Join(resolvedDir(t, elsewhere), filepath.Base(target))
+		if got := r.argsOf(t, "Rename")[1]; got != wantTarget {
 			t.Errorf("renamed onto %q, want the resolved target %q; renaming onto the link "+
-				"would replace the link with a regular file", got, target)
+				"would replace the link with a regular file", got, wantTarget)
 		}
 	})
 }
