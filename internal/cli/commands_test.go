@@ -25,6 +25,8 @@ type fakeService struct {
 	profileResult  workflow.ProfileResult
 	evalResult     workflow.EvalResult
 	scoreResult    workflow.ScoreResult
+	rewriteRequest workflow.RewriteInput
+	rewriteResult  workflow.RewriteOutcome
 	err            error
 	calls          int
 }
@@ -51,6 +53,14 @@ func (f *fakeService) Profile(_ context.Context, request workflow.ProfileRequest
 	f.calls++
 	f.profileRequest = request
 	return f.profileResult, f.err
+}
+
+// Rewrite exists because B2b-2b widened Service to carry the command. Nothing in
+// this file exercises it; rewrite_test.go has a service of its own.
+func (f *fakeService) Rewrite(_ context.Context, request workflow.RewriteInput) (workflow.RewriteOutcome, error) {
+	f.calls++
+	f.rewriteRequest = request
+	return f.rewriteResult, f.err
 }
 
 type run struct {
