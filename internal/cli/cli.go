@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,22 @@ import (
 	"github.com/fissible/hapax/internal/tells"
 	"github.com/fissible/hapax/internal/text"
 	"github.com/fissible/hapax/internal/workflow"
+)
+
+// The publication refusals this package classifies.
+//
+// They are declared HERE, and the composition root's adapter translates
+// internal/publish's own sentinels into them, because cli importing that package
+// would give it the capability to publish directly — and the import guard exists
+// precisely so this package cannot name a thing it must only reach through a
+// seam. Owning the vocabulary costs one translation and keeps the guarantee.
+var (
+	// ErrDestinationExists reports a destination that was already occupied,
+	// however that was discovered. The preflight and the lost race are one
+	// condition to a caller.
+	ErrDestinationExists = errors.New("publication destination exists")
+	// ErrDestinationIsInput reports a destination naming the draft itself.
+	ErrDestinationIsInput = errors.New("publication destination is the input")
 )
 
 // Schema is the versioned JSON envelope emitted for completed commands.
@@ -33,28 +50,24 @@ const (
 type Reason string
 
 const (
-	ReasonUncalibrated             Reason = "uncalibrated"
-	ReasonInsufficientEvidence     Reason = "insufficient-evidence"
-	ReasonStaleExemplars           Reason = "stale-exemplars"
-	ReasonLocalOnlyForbidsProvider Reason = "local-only-forbids-provider"
-	ReasonNoProfile                Reason = "no-profile"
-	ReasonNoReference              Reason = "no-reference"
-	ReasonAmbiguousReference       Reason = "ambiguous-reference"
+	ReasonUncalibrated         Reason = "uncalibrated"
+	ReasonInsufficientEvidence Reason = "insufficient-evidence"
+	ReasonNoProfile            Reason = "no-profile"
+	ReasonNoReference          Reason = "no-reference"
+	ReasonAmbiguousReference   Reason = "ambiguous-reference"
 )
 
 var statuses = []Status{StatusOK, StatusAdverse, StatusRefused}
-var reasons = []Reason{
-	ReasonUncalibrated,
-	ReasonInsufficientEvidence,
-	ReasonStaleExemplars,
-	ReasonLocalOnlyForbidsProvider,
-	ReasonNoProfile,
-	ReasonNoReference, ReasonAmbiguousReference,
-}
-var commands = []string{"eval", "index", "profile", "score", "tells"}
+var commands = []string{"eval", "index", "profile", "rewrite", "score", "tells"}
 
 // Reasons returns the closed refusal vocabulary.
-func Reasons() []Reason { return append([]Reason(nil), reasons...) }
+func Reasons() []Reason {
+	out := make([]Reason, 0, len(workflow.Refusals()))
+	for _, reason := range workflow.Refusals() {
+		out = append(out, Reason(reason))
+	}
+	return out
+}
 
 // Statuses returns the closed result-status vocabulary.
 func Statuses() []Status { return append([]Status(nil), statuses...) }
@@ -175,9 +188,37 @@ func (d Document) valid() error {
 			return errors.New("incoherent document result")
 		}
 		return validScoreResult(d.Status, d.Reason, result)
+	case RewriteResult:
+		if d.Command != "rewrite" {
+			return errors.New("incoherent document result")
+		}
+		return validRewriteResult(d.Status, d.Reason, result)
 	default:
 		return errors.New("incoherent document result")
 	}
+}
+
+func validRewriteResult(status Status, reason Reason, r RewriteResult) error {
+	if r.Path == "" || r.Targets < 0 || r.Improved < 0 || r.NotImproved < 0 || r.Improved+r.NotImproved != r.Targets {
+		return errors.New("incoherent rewrite result")
+	}
+	if status == StatusRefused {
+		return nil
+	}
+	if reason != "" || !contains(workflow.PlanStates(), r.PlanState) || !contains(workflow.RewriteStates(), r.RewriteState) {
+		return errors.New("incoherent rewrite result")
+	}
+	if r.PlanState == workflow.StateNothingToChange {
+		if r.RewriteState != workflow.RewriteNoTargets || r.Targets != 0 {
+			return errors.New("incoherent rewrite result")
+		}
+	} else if r.RewriteState == workflow.RewriteNoTargets {
+		return errors.New("incoherent rewrite result")
+	}
+	if (status == StatusAdverse) != (r.RewriteState == workflow.RewriteNoneImproved) {
+		return errors.New("incoherent rewrite result")
+	}
+	return nil
 }
 
 func validScoreResult(status Status, reason Reason, r ScoreResult) error {
@@ -374,13 +415,20 @@ func contains[T comparable](values []T, wanted T) bool {
 
 // Deps provides the composition-root seams that A1 is allowed to use.
 type Deps struct {
-	Stdout   io.Writer
-	Stderr   io.Writer
-	Env      func(string) (string, bool)
-	Now      func() time.Time
-	ReadFile func(string) ([]byte, error)
-	Getwd    func() (string, error)
-	Service  workflow.Service
+	Stdout    io.Writer
+	Stderr    io.Writer
+	Env       func(string) (string, bool)
+	Now       func() time.Time
+	ReadFile  func(string) ([]byte, error)
+	Getwd     func() (string, error)
+	Service   workflow.Service
+	Publisher Publisher
+}
+
+// Publisher is the command's narrow authority to make assembled bytes visible.
+type Publisher interface {
+	Create(source, destination string, content []byte) error
+	Replace(source string, content []byte) error
 }
 
 // Run executes one command and returns its process exit code.
@@ -410,6 +458,9 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 	if parsed.command == "score" {
 		return runScore(ctx, parsed, deps)
 	}
+	if parsed.command == "rewrite" {
+		return runRewrite(ctx, parsed, modeValue, deps)
+	}
 	raw, err := deps.ReadFile(parsed.path)
 	if err != nil {
 		diagnostic(deps.Stderr, fmt.Sprintf("cannot read draft %q: %q", parsed.path, err.Error()))
@@ -435,63 +486,93 @@ func Run(ctx context.Context, args []string, deps Deps) int {
 }
 
 type invocation struct {
-	json                     bool
-	localOnly                bool
-	command, register, store string
-	path, distractor         string
+	json                           bool
+	localOnly                      bool
+	command, register, store       string
+	path, distractor               string
+	out, provider, model, endpoint string
+	inPlace                        bool
+	attempts                       int
+	attemptsSet                    bool
 }
 
 func parse(args []string) (invocation, error) {
 	var positional []string
 	flags := true
 	result := invocation{}
+	seen := map[string]bool{}
+
+	// One table, so a value-taking flag behaves the same in both spellings.
+	// The earlier shape handled `--flag value` in a switch and `--flag=value`
+	// in the default branch, which is how rewrite's flags were added to one and
+	// not the other.
+	setters := map[string]func(string) error{
+		"--profile":        func(v string) error { result.register = v; return nil },
+		"--store":          func(v string) error { result.store = v; return nil },
+		"--distractors":    func(v string) error { result.distractor = v; return nil },
+		"--out":            func(v string) error { result.out = v; return nil },
+		"--provider":       func(v string) error { result.provider = v; return nil },
+		"--model":          func(v string) error { result.model = v; return nil },
+		"--local-endpoint": func(v string) error { result.endpoint = v; return nil },
+		"--attempts": func(v string) error {
+			n, err := strconv.Atoi(v)
+			if err != nil {
+				return fmt.Errorf("flag %q requires an integer", "--attempts")
+			}
+			result.attempts, result.attemptsSet = n, true
+			return nil
+		},
+	}
+
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
 		if flags && arg == "--" {
 			flags = false
 			continue
 		}
-		if flags && strings.HasPrefix(arg, "-") {
-			switch arg {
-			case "--json":
-				result.json = true
-			case "--local-only":
-				result.localOnly = true
-			case "--profile", "--store", "--distractors":
-				if i+1 == len(args) || args[i+1] == "--" {
-					return invocation{}, fmt.Errorf("flag %q requires a value", arg)
-				}
-				i++
-				if arg == "--profile" {
-					result.register = args[i]
-				} else if arg == "--store" {
-					result.store = args[i]
-				} else {
-					result.distractor = args[i]
-				}
-			default:
-				if strings.HasPrefix(arg, "--profile=") {
-					result.register = strings.TrimPrefix(arg, "--profile=")
-					if result.register == "" {
-						return invocation{}, fmt.Errorf("flag %q requires a value", "--profile")
-					}
-				} else if strings.HasPrefix(arg, "--store=") {
-					result.store = strings.TrimPrefix(arg, "--store=")
-					if result.store == "" {
-						return invocation{}, fmt.Errorf("flag %q requires a value", "--store")
-					}
-				} else if strings.HasPrefix(arg, "--distractors=") {
-					result.distractor = strings.TrimPrefix(arg, "--distractors=")
-					if result.distractor == "" {
-						return invocation{}, fmt.Errorf("flag %q requires a value", "--distractors")
-					}
-				} else {
-					return invocation{}, fmt.Errorf("invalid flag %q", arg)
-				}
-			}
+		if !flags || !strings.HasPrefix(arg, "-") {
+			positional = append(positional, arg)
 			continue
 		}
-		positional = append(positional, arg)
+
+		name, value, inline := strings.Cut(arg, "=")
+		switch {
+		case !inline && name == "--json":
+			result.json = true
+			continue
+		case !inline && name == "--local-only":
+			result.localOnly = true
+			continue
+		case !inline && name == "--in-place":
+			if seen[name] {
+				return invocation{}, fmt.Errorf("flag %q may not be repeated", name)
+			}
+			seen[name] = true
+			result.inPlace = true
+			continue
+		}
+
+		set, known := setters[name]
+		if !known {
+			return invocation{}, fmt.Errorf("invalid flag %q", arg)
+		}
+		if seen[name] {
+			return invocation{}, fmt.Errorf("flag %q may not be repeated", name)
+		}
+		seen[name] = true
+		if !inline {
+			if i+1 == len(args) || args[i+1] == "--" {
+				return invocation{}, fmt.Errorf("flag %q requires a value", name)
+			}
+			i++
+			value = args[i]
+		}
+		if value == "" {
+			return invocation{}, fmt.Errorf("flag %q requires a value", name)
+		}
+		if err := set(value); err != nil {
+			return invocation{}, err
+		}
 	}
 	if len(positional) == 0 {
 		return invocation{}, errors.New("missing command")
@@ -526,6 +607,25 @@ func parse(args []string) (invocation, error) {
 			return invocation{}, errors.New("score requires exactly one draft")
 		}
 		result.path = positional[1]
+		return result, nil
+	}
+	if result.command == "rewrite" {
+		if len(positional) != 2 || result.path != "" {
+			return invocation{}, errors.New("rewrite requires exactly one draft")
+		}
+		result.path = positional[1]
+		if (result.out == "") == !result.inPlace {
+			return invocation{}, errors.New("rewrite requires exactly one of --out or --in-place")
+		}
+		if result.model == "" {
+			return invocation{}, errors.New("rewrite requires --model")
+		}
+		if result.attemptsSet && result.attempts < 1 {
+			return invocation{}, errors.New("--attempts must be at least 1")
+		}
+		if result.provider == "" {
+			result.provider = "ollama"
+		}
 		return result, nil
 	}
 	if len(positional) != 2 {
@@ -611,6 +711,19 @@ type ScoreResult struct {
 	Calibrated           bool            `json:"calibrated"`
 	ParagraphsBelowFloor int             `json:"paragraphs_below_floor"`
 	Segments             []ScoredSegment `json:"segments"`
+}
+
+// RewriteResult is the rendered receipt. It intentionally contains no document
+// content: that belongs only at the publication destination.
+type RewriteResult struct {
+	Path         string                   `json:"path"`
+	PlanState    workflow.PlanState       `json:"plan_state"`
+	RewriteState workflow.RewriteState    `json:"rewrite_state"`
+	Targets      int                      `json:"targets"`
+	Improved     int                      `json:"improved"`
+	NotImproved  int                      `json:"not_improved"`
+	Refusal      string                   `json:"refusal,omitempty"`
+	Outcomes     []workflow.TargetOutcome `json:"outcomes"`
 }
 
 type EvalDiscrimination struct {
@@ -836,27 +949,127 @@ func runScore(ctx context.Context, parsed invocation, deps Deps) int {
 	}
 	return code
 }
+
+type publicationAction uint8
+
+const (
+	noPublication publicationAction = iota
+	create
+	replace
+)
+
+func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps Deps) int {
+	if deps.Service == nil || deps.Publisher == nil || deps.Getwd == nil {
+		diagnostic(deps.Stderr, "rewrite service unavailable")
+		return 3
+	}
+	cwd, err := deps.Getwd()
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	outcome, err := deps.Service.Rewrite(ctx, workflow.RewriteInput{
+		StartDir: cwd, StorePath: parsed.store, Register: parsed.register, Path: parsed.path,
+		Choice: workflow.ProviderChoice{Provider: parsed.provider, Model: parsed.model, Endpoint: parsed.endpoint},
+		Mode:   resolved, Attempts: parsed.attempts,
+	})
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	report := outcome.Report()
+	if report.Refusal != "" {
+		result := rewriteResultFrom(report, parsed.path)
+		if err := (Document{Schema: Schema, Command: "rewrite", Status: StatusRefused, Reason: Reason(report.Refusal), Result: result}).Render(deps.Stdout, parsed.json); err != nil {
+			diagnostic(deps.Stderr, err.Error())
+			return 3
+		}
+		return 4
+	}
+	content := outcome.Content()
+	if content == nil {
+		diagnostic(deps.Stderr, "rewrite returned no publishable content")
+		return 3
+	}
+	action := create
+	destination := parsed.out
+	if parsed.inPlace {
+		destination = parsed.path
+		if report.PlanState == workflow.StateNothingToChange {
+			action = noPublication
+		} else {
+			action = replace
+		}
+	}
+	if action == create {
+		err = deps.Publisher.Create(parsed.path, destination, content)
+	}
+	if action == replace {
+		err = deps.Publisher.Replace(parsed.path, content)
+	}
+	if err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		if errors.Is(err, ErrDestinationExists) || errors.Is(err, ErrDestinationIsInput) {
+			return 2
+		}
+		return 3
+	}
+	result := rewriteResultFrom(report, destination)
+	status, code := StatusOK, 0
+	if report.State == workflow.RewriteNoneImproved {
+		status, code = StatusAdverse, 1
+	}
+	if err := (Document{Schema: Schema, Command: "rewrite", Status: status, Result: result}).Render(deps.Stdout, parsed.json); err != nil {
+		diagnostic(deps.Stderr, err.Error())
+		return 3
+	}
+	return code
+}
+
+func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult {
+	return RewriteResult{Path: path, PlanState: report.PlanState, RewriteState: report.State,
+		Targets: report.Targets, Improved: report.Improved, NotImproved: report.Targets - report.Improved,
+		Refusal: report.Refusal, Outcomes: append([]workflow.TargetOutcome(nil), report.Outcomes...)}
+}
+
+// fields makes absence different from the zero value of a measurement.
+type fields struct{ values []string }
+
+func (f *fields) Add(key, value string) {
+	if value != "" && !strings.ContainsAny(value, " \t\n=") {
+		f.values = append(f.values, key+"="+value)
+	}
+}
+func (f *fields) AddInt(key string, value int) {
+	f.values = append(f.values, key+"="+strconv.Itoa(value))
+}
+func (f *fields) AddBool(key string, value bool) {
+	f.values = append(f.values, key+"="+strconv.FormatBool(value))
+}
+func (f fields) String() string { return strings.Join(f.values, " ") }
 func humanResult(result any) string {
 	switch x := result.(type) {
 	case TellsResult:
-		return fmt.Sprintf("findings=%d", x.Count)
+		var f fields
+		f.AddInt("findings", x.Count)
+		return f.String()
 	case IndexResult:
-		result := fmt.Sprintf("store=%s mode=%s", x.Store, x.Mode)
-		if x.Adversity != "" {
-			result += fmt.Sprintf(" adversity=%s", x.Adversity)
-		}
-		return result
+		var f fields
+		f.Add("store", x.Store)
+		f.Add("mode", string(x.Mode))
+		f.Add("adversity", string(x.Adversity))
+		return f.String()
 	case ProfileResult:
 		if x.Store == "" {
 			return ""
 		}
 		return fmt.Sprintf("store=%s", x.Store)
 	case EvalResult:
-		result := fmt.Sprintf("store=%s shippable=%t", x.Store, x.Shippable)
-		if x.Reason != "" {
-			result += fmt.Sprintf(" reason=%s", x.Reason)
-		}
-		return result
+		var f fields
+		f.Add("store", x.Store)
+		f.AddBool("shippable", x.Shippable)
+		f.Add("reason", x.Reason)
+		return f.String()
 	case ScoreResult:
 		bands := []string{}
 		for _, s := range x.Segments {
@@ -864,11 +1077,20 @@ func humanResult(result any) string {
 				bands = append(bands, s.Band.Band)
 			}
 		}
-		result := fmt.Sprintf("path=%s", x.Path)
-		if len(bands) != 0 {
-			result += fmt.Sprintf(" bands=%s", strings.Join(bands, ","))
-		}
-		return fmt.Sprintf("%s below-floor=%d", result, x.ParagraphsBelowFloor)
+		var f fields
+		f.Add("path", x.Path)
+		f.Add("bands", strings.Join(bands, ","))
+		f.AddInt("below-floor", x.ParagraphsBelowFloor)
+		return f.String()
+	case RewriteResult:
+		var f fields
+		f.Add("path", x.Path)
+		f.Add("plan_state", string(x.PlanState))
+		f.Add("rewrite_state", string(x.RewriteState))
+		f.AddInt("targets", x.Targets)
+		f.AddInt("improved", x.Improved)
+		f.AddInt("not-improved", x.NotImproved)
+		return f.String()
 	default:
 		return ""
 	}

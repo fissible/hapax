@@ -87,9 +87,10 @@ func TestTheBinaryRewritesADraftForReal(t *testing.T) {
 	// off-by-three lives.
 	const paragraph = "A paragraph of ordinary prose that runs on past a single sentence so the " +
 		"structure pass reads it as prose rather than as a heading; it says a thing about café."
+	const secondParagraph = "A second paragraph doing likewise, at enough length to clear the " +
+		"floor and be measured on its own terms rather than skipped."
 	draft := filepath.Join(root, "draft.md")
-	body := "\xef\xbb\xbf" + paragraph + "\n\nA second paragraph doing likewise, at enough " +
-		"length to clear the floor and be measured on its own terms rather than skipped.\n"
+	body := "\xef\xbb\xbf" + paragraph + "\n\n" + secondParagraph + "\n"
 	write(t, draft, body)
 	// The fixture's release must actually make this draft a target, or the
 	// assertions below hold over a run in which nothing happened.
@@ -164,14 +165,32 @@ func TestTheBinaryRewritesADraftForReal(t *testing.T) {
 		}
 		prompts = append(prompts, prompt)
 	}
-	// EVERY prompt carries the paragraph being rewritten. The loop advances its
-	// current text only on acceptance, and the first candidate was refused, so
-	// the retry must still be asking about the original.
-	for i, prompt := range prompts {
-		if !strings.Contains(prompt, paragraph) {
-			t.Errorf("prompt %d does not carry the paragraph it was supposed to rewrite", i)
+	// Each target OPENS a run of calls with its own bytes. What comes after
+	// inside that run is the loop's business: it is a hill climber, so once a
+	// candidate is accepted the next attempt asks about the ACCEPTED text, not
+	// the original.
+	//
+	// Two earlier versions of this got that wrong — first requiring every
+	// prompt to carry the first paragraph, then requiring every prompt to carry
+	// one of the two targets. Both contradict ADR 0006, and #75's own
+	// amendment pinned exactly this for the same reason. What is true, and
+	// worth asserting, is that every planned target was reached.
+	wanted := []string{paragraph, secondParagraph}
+	for _, target := range wanted {
+		reached := false
+		for _, prompt := range prompts {
+			if strings.Contains(prompt, target) {
+				reached = true
+			}
+		}
+		if !reached {
+			t.Error("a planned target was never sent to the provider")
 		}
 	}
+	if !strings.Contains(prompts[0], paragraph) {
+		t.Error("the first call does not carry the first target's own bytes")
+	}
+
 	// 2. Nothing from the corpus but the exemplars this run actually selected,
 	//    checked against the selection it persisted rather than against an
 	//    assumption about which paragraphs a correct selector would pick.
@@ -286,40 +305,5 @@ func TestTheBinaryNamesBothDestinationsWhenGivenNeither(t *testing.T) {
 	}
 	if strings.TrimSpace(got.stdout) != "" {
 		t.Errorf("an invalid invocation printed %q", got.stdout)
-	}
-}
-
-// Publication succeeded and rendering then failed. The file IS written, so the
-// exit must not suggest otherwise by being 0, and must not suggest nothing
-// happened either — the user has a new file and needs to know.
-//
-// Driven through the real binary with stdout closed, because that is the only
-// way to make a write to it fail without a fake.
-func TestTheBinaryReportsARenderFailureAfterASuccessfulPublication(t *testing.T) {
-	binary := buildBinary(t)
-	root := rewritableCorpus(t)
-	draft := filepath.Join(root, "draft.md")
-	write(t, draft, "A paragraph of ordinary prose that runs on past a single sentence so the "+
-		"structure pass reads it as prose rather than as a heading; it says a thing.\n")
-	requireDraftIsATarget(t, binary, root, draft)
-
-	stub := &ollamaStub{replies: []string{"A paragraph of ordinary prose runs on past a single " +
-		"sentence. The structure pass reads it as prose rather than as a heading, and it says a thing."}}
-	server := httptest.NewServer(stub.handler())
-	defer server.Close()
-
-	destination := filepath.Join(root, "revised.md")
-	got := runBinaryWithClosedStdout(t, binary, root, "rewrite", draft,
-		"--out", destination, "--profile", "essays",
-		"--provider", "ollama", "--model", "llama3",
-		"--local-endpoint", server.URL, "--local-only")
-
-	if got.code != 3 {
-		t.Errorf("exit = %d, want 3; a failure to write the result is operational, and exit 2 "+
-			"would tell a caller they had made an invalid invocation", got.code)
-	}
-	if _, err := os.Stat(destination); err != nil {
-		t.Errorf("the destination is missing: %v; publication came first and had already "+
-			"succeeded, so a render failure must not undo it", err)
 	}
 }

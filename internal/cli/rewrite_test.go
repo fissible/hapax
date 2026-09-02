@@ -34,7 +34,6 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/cli"
-	"github.com/fissible/hapax/internal/publish"
 	"github.com/fissible/hapax/internal/workflow"
 )
 
@@ -523,16 +522,21 @@ func TestTheExitCodeSaysWhetherTheToolWorked(t *testing.T) {
 // reading the wrapped message, which is kernel detail and not API.
 //
 // So an occupied destination is exit 2 however it was discovered.
+//
+// The sentinels are cli's own, not internal/publish's. cli cannot import that
+// package — the import guard forbids it, because naming it would give this
+// package the ability to write to a destination directly rather than only
+// through the seam it was handed. The composition root's adapter translates.
 func TestPublicationErrorsAreClassifiedByIdentity(t *testing.T) {
 	for _, c := range []struct {
 		name string
 		err  error
 		want int
 	}{
-		{"the destination exists", publish.ErrExists, 2},
-		{"the destination exists, discovered by losing the race", fmt.Errorf("%w: link: file exists", publish.ErrExists), 2},
-		{"the destination is the input", publish.ErrAliasesInput, 2},
-		{"the destination is the input, wrapped", fmt.Errorf("%w: /tmp/draft.md", publish.ErrAliasesInput), 2},
+		{"the destination exists", cli.ErrDestinationExists, 2},
+		{"the destination exists, discovered by losing the race", fmt.Errorf("%w: link: file exists", cli.ErrDestinationExists), 2},
+		{"the destination is the input", cli.ErrDestinationIsInput, 2},
+		{"the destination is the input, wrapped", fmt.Errorf("%w: /tmp/draft.md", cli.ErrDestinationIsInput), 2},
 		{"an ordinary write failure", errors.New("read-only file system"), 3},
 		{"a failure whose message merely mentions one", errors.New("publication destination exists"), 3},
 	} {
@@ -847,5 +851,61 @@ func TestAMalformedEnvironmentRunsNothing(t *testing.T) {
 	}
 	if len(publisher.published) != 0 {
 		t.Errorf("a malformed environment published %+v", publisher.published)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// A render that fails after a successful publication
+// ---------------------------------------------------------------------------
+
+// failingWriter accepts nothing. It is how a rendering failure is produced
+// without a real terminal.
+//
+// The first version of this test ran the real binary with stdout on a closed
+// pipe. That does not produce a failed write — it produces SIGPIPE, and the
+// process dies with exit -1 rather than classifying anything. The mechanism was
+// wrong, not the property.
+type failingWriter struct{ events *[]string }
+
+func (w failingWriter) Write([]byte) (int, error) {
+	if w.events != nil {
+		*w.events = append(*w.events, "rendered")
+	}
+	return 0, errors.New("the output is gone")
+}
+
+// The file IS written. The exit must say the run failed operationally — not 0,
+// which would be a lie, and not 2, which would tell the caller they had typed
+// something wrong when in fact their document is on disk and only the receipt
+// was lost.
+func TestARenderFailureAfterPublicationIsOperationalAndKeepsTheFile(t *testing.T) {
+	draft := tempDraft(t)
+	destination := filepath.Join(filepath.Dir(draft), "revised.md")
+	publisher := &spyPublisher{}
+	var events []string
+	publisher.events = &events
+
+	var stderr strings.Builder
+	code := cli.Run(context.Background(), out(draft, destination), cli.Deps{
+		Stdout: failingWriter{events: &events}, Stderr: &stderr,
+		Env:       func(string) (string, bool) { return "", false },
+		ReadFile:  os.ReadFile,
+		Getwd:     func() (string, error) { return "/somewhere", nil },
+		Service:   &rewriteService{result: improved("the revision\n")},
+		Publisher: publisher,
+	})
+
+	if code != 3 {
+		t.Errorf("exit = %d, want 3", code)
+	}
+	if len(publisher.published) != 1 {
+		t.Fatalf("the publisher was called %d times; the document must still have been written",
+			len(publisher.published))
+	}
+	if len(events) == 0 || events[0] != "published" {
+		t.Errorf("events are %v; publication still comes first", events)
+	}
+	if strings.TrimSpace(stderr.String()) == "" {
+		t.Error("nothing was written to stderr, so the user is told nothing about a failed receipt")
 	}
 }

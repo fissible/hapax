@@ -43,7 +43,7 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 				// time is here so Deps.Now can be typed. It cannot open a
 				// socket or read the environment, so it does not weaken what
 				// this list is for.
-				"context", "encoding/json", "errors", "fmt", "io", "sort", "strings", "time",
+				"context", "encoding/json", "errors", "fmt", "io", "sort", "strconv", "strings", "time",
 				"github.com/fissible/hapax/internal/mode",
 				"github.com/fissible/hapax/internal/tells",
 				"github.com/fissible/hapax/internal/text",
@@ -56,9 +56,14 @@ func TestTheCompositionRootCannotReachAroundItsSeams(t *testing.T) {
 			dir:         "../../cmd/hapax",
 			allowGetenv: true,
 			allowedImports: []string{
-				"context", "errors", "net", "os", "time",
+				"context", "errors", "fmt", "net", "os", "time",
 				"github.com/fissible/hapax/internal/cli",
 				"github.com/fissible/hapax/internal/llm",
+				// The binary owns the real filesystem, so it is the one place
+				// that may name the package which writes to it — and it
+				// translates publish's refusals into cli's, so cli can classify
+				// them without gaining the ability to publish.
+				"github.com/fissible/hapax/internal/publish",
 				"github.com/fissible/hapax/internal/rewrite",
 				// The binary names workflow to construct the real one. It still
 				// may not name internal/store: what it hands cli is a service,
