@@ -432,7 +432,79 @@ type Publisher interface {
 }
 
 // Run executes one command and returns its process exit code.
+// Usage is what `hapax --help` prints. It is deliberately blunt about what each
+// command needs, because the thing a person hits first is a refusal they cannot
+// interpret — `score` and `rewrite` both decline without a calibrated release,
+// and nothing in the output told them that was coming.
+const Usage = `hapax — rewrite AI-drafted prose into your own voice, measured against your own writing.
+
+USAGE
+  hapax <command> [flags]
+
+COMMANDS
+  tells    Flag business-speak and assistant tics in a file.
+           Needs nothing: no corpus, no database, no model.
+             hapax tells draft.md
+
+  index    Read a directory of your writing and build a profile from it.
+             hapax index --profile essays ./writing
+
+  profile  Show what was measured for a profile.
+             hapax profile --profile essays
+
+  eval     Measure whether a profile can tell your writing from someone
+           else's. Needs a directory of other people's prose.
+             hapax eval --profile essays --distractors ./others
+
+  score    Measure how far each paragraph of a draft sits from your profile.
+             hapax score draft.md --profile essays
+
+  rewrite  Rewrite the paragraphs that drift, through a local or cloud model.
+             hapax rewrite draft.md --out revised.md --profile essays                --provider ollama --model llama3
+
+FLAGS
+  --profile NAME      Which profile to use. Required by most commands.
+  --store PATH        Database to use. Discovered from the working directory
+                      if not given.
+  --json              Emit the machine-readable envelope instead of one line.
+  --local-only        Refuse any provider that would send text off this
+                      machine. HAPAX_LOCAL_ONLY=1 does the same.
+
+  rewrite only:
+  --out PATH          Write the result here. Refuses to overwrite.
+  --in-place          Replace the draft itself. The only overwrite authority.
+  --provider NAME     ollama or anthropic.
+  --model NAME        Required. There is no default: hapax does not know
+                      which models you have.
+  --local-endpoint U  Where ollama is listening.
+  --attempts N        How many candidates to try per paragraph.
+
+EXIT CODES
+  0  worked, nothing adverse      3  something failed: IO, store, provider
+  1  worked, adverse finding      4  refused, with a reason in the output
+  2  invalid invocation
+
+BEFORE YOU START
+  tells works immediately on any file.
+
+  score and rewrite need a CALIBRATED profile, and calibration is expensive:
+  roughly 600 documents of your own writing plus a directory of other people's,
+  because a band claim carries a stated error rate and hapax will not invent
+  one. Below that threshold both commands refuse with reason=uncalibrated.
+  See issue #81.
+`
+
 func Run(ctx context.Context, args []string, deps Deps) int {
+	for _, arg := range args {
+		if arg == "--" {
+			break
+		}
+		if arg == "--help" || arg == "-h" || arg == "help" {
+			fmt.Fprint(deps.Stdout, Usage)
+			return 0
+		}
+	}
+
 	parsed, parseErr := parse(args)
 	modeValue, modeErr := mode.Resolve(parsed.localOnly, deps.Env)
 	// A1 has no provider to configure from the resolved mode.
@@ -575,7 +647,7 @@ func parse(args []string) (invocation, error) {
 		}
 	}
 	if len(positional) == 0 {
-		return invocation{}, errors.New("missing command")
+		return invocation{}, errors.New("missing command (try: hapax --help)")
 	}
 	result.command = positional[0]
 	if !contains(Commands(), result.command) {
