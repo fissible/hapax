@@ -855,6 +855,62 @@ func runPostPublicationFailure(t *testing.T, name, op string, cleanupFailsToo bo
 	}
 }
 
+// The staged file is CLOSED before its name is removed, on every failure.
+//
+// Unlinking the name is not releasing the handle. A publication that fails
+// after CreateTemp and returns without closing leaks one descriptor per attempt
+// and keeps the unlinked inode alive until the process exits — measured at
+// exactly that rate before this test existed: 50 failed publications, 50 open
+// staging descriptors, accumulating.
+//
+// Every other cleanup test here asserts that nothing is LEFT IN THE DIRECTORY,
+// which a leak satisfies perfectly: the name is gone and the descriptor is not.
+// That is the same shape as #70's temporary-directory leak, found at exactly
+// this point in exactly this way — after everything was green.
+func TestTheStagedFileIsClosedBeforeItsNameIsRemoved(t *testing.T) {
+	for _, name := range []string{"create", "replace"} {
+		for _, op := range cleanupFailurePoints[name] {
+			if op == "Remove" {
+				continue // the cleanup itself; there is no staging file to close afterwards
+			}
+			t.Run(name+"/"+op, func(t *testing.T) {
+				dir := t.TempDir()
+				source := seamSource(t, dir, "draft.md", "the input\n", 0o644)
+				r := newRecorder(t)
+				r.fail[op] = errors.New(op + " refused")
+
+				if name == "create" {
+					_ = create(r.seam(), source, filepath.Join(dir, "out.md"), []byte("ours\n"))
+				} else {
+					_ = replace(r.seam(), source, []byte("ours\n"))
+				}
+				if len(r.staged) == 0 {
+					t.Skip("no staging file was created, so there is no handle to close")
+				}
+				staging := r.staged[0]
+
+				closedAt, removedAt := -1, -1
+				for i, step := range r.steps {
+					if step.Op == "Close" && step.Args[0] == staging && closedAt < 0 {
+						closedAt = i
+					}
+					if step.Op == "Remove" && step.Args[0] == staging && removedAt < 0 {
+						removedAt = i
+					}
+				}
+				if closedAt < 0 {
+					t.Fatalf("the staged file %q was never closed; unlinking its name releases "+
+						"the directory entry, not the descriptor. Operations: %v", staging, r.ops())
+				}
+				if removedAt >= 0 && closedAt > removedAt {
+					t.Errorf("the staged file was removed at step %d and closed at step %d; "+
+						"close it before unlinking it", removedAt, closedAt)
+				}
+			})
+		}
+	}
+}
+
 // A cleanup that itself fails must not lose the real failure. The staging file
 // is a consequence; the caller needs to hear about the thing that went wrong.
 //
