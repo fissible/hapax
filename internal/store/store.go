@@ -446,6 +446,12 @@ func (s *Store) applyMigrations(ctx context.Context, version int) error {
 		}
 		version = 6
 	}
+	if version == 6 && len(migrations) > 6 {
+		if err := s.applyDocumentSplitMigration(ctx, 6); err != nil {
+			return err
+		}
+		version = 7
+	}
 	return s.applyMigrationBatch(ctx, version, migrations[version:])
 }
 
@@ -460,6 +466,14 @@ func (s *Store) applyAttemptKeyMigration(ctx context.Context, version int) error
 // vectors, selections, or rewrite attempts. As with the attempt-key rebuild,
 // SQLite needs foreign keys disabled for the swap and checked before commit.
 func (s *Store) applyNodeContainersMigration(ctx context.Context, version int) error {
+	return s.applyTableRebuildMigration(ctx, version)
+}
+
+// applyDocumentSplitMigration rebuilds document so that a split is required
+// exactly when the document is eligible. Rebuilt rather than altered because
+// SQLite cannot relax a CHECK in place, and with foreign keys disabled because
+// node and profile reference it.
+func (s *Store) applyDocumentSplitMigration(ctx context.Context, version int) error {
 	return s.applyTableRebuildMigration(ctx, version)
 }
 
@@ -792,11 +806,19 @@ func validateWrite(w *SnapshotWrite) error {
 		if !validRegister(d.Register) {
 			return invalidDocument(d.Path, "register")
 		}
-		if !validSplit(d.Split) {
-			return invalidDocument(d.Path, "split")
-		}
 		if !validAdmission(d.Admission) {
 			return invalidDocument(d.Path, "admission")
+		}
+		// A split belongs to an ELIGIBLE document. A rejected one was never
+		// assigned to train, calibrate or test, so requiring a value here made
+		// hapax index fail outright on any corpus containing a near-duplicate,
+		// a too-short file, or one that is not UTF-8 — which is what a real
+		// archive of drafts and revisions looks like.
+		if eligible := d.Admission == corpus.Eligible; eligible != (d.Split != "") {
+			return invalidDocument(d.Path, "split")
+		}
+		if d.Split != "" && !validSplit(d.Split) {
+			return invalidDocument(d.Path, "split")
 		}
 		if !validLanguage(d.Language) {
 			return invalidDocument(d.Path, "language")
