@@ -1,4 +1,8 @@
-version = "default-v1"
+version = "default-v2"
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
 
 [[rule]]
 id = "double-space"
@@ -9,3 +13,233 @@ pattern = "  "
 severity = "warn"
 provenance = "unvalidated"
 category = "formatting"
+
+# ---------------------------------------------------------------------------
+# Business-speak: phrases that say less than the plain word they replaced.
+#
+# Every pattern here is a PHRASE, not a word. "leverage" and "impact" have
+# honest uses; "leverage our core competencies" does not. Matching the phrase
+# keeps the rule from flagging prose that merely contains a common verb.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "double-click"
+description = "\"Double-click on\" for \"look at\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)double[- ]click(ing)? (on|into)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "north-star"
+description = "\"North star\" for \"goal\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)north[- ]star'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "move-the-needle"
+description = "\"Move the needle\" for \"help\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)mov(e|ing|ed) the needle'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "circle-back"
+description = "\"Circle back\" for \"return to\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)circl(e|ing|ed) back'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "at-the-end-of-the-day"
+description = "\"At the end of the day\" as a throat-clear."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)at the end of the day[,]'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "leverage-abstraction"
+description = "\"Leverage\" applied to an abstraction rather than a lever."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)leverag(e|ing|ed) (our|their|your|the|its) [a-z]'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "unlock-value"
+description = "\"Unlock\" or \"drive\" value, impact or growth."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(unlock|driv(e|ing)|deliver(ing)?) (significant |real |meaningful |exponential )?(value|impact|growth|outcomes)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "core-competency"
+description = "\"Core competencies\", \"synergies\", \"bandwidth\" as a noun."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(core competenc(y|ies)|synerg(y|ies)|the bandwidth to)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "stakeholder-empowerment"
+description = "\"Empower stakeholders\" and its relatives."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(empower(ing)? (stakeholder|team|user|customer)|stakeholder (buy-?in|alignment))'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "operationalize"
+description = "\"Operationalize\", \"incentivize\", \"socialize\" an idea."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(operationaliz|incentiviz|socializ)(e|ing|ed)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "paradigm-shift"
+description = "\"Paradigm shift\", \"game changer\", \"best in class\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(paradigm shift|game[- ]chang(er|ing)|best[- ]in[- ]class|world[- ]class)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "at-scale"
+description = "\"At scale\" appended to a claim."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)[a-z] at scale'
+severity = "info"
+provenance = "unvalidated"
+category = "author-deviation"
+
+# ---------------------------------------------------------------------------
+# The shapes an assistant produces when it is filling space rather than saying
+# something.
+#
+# Categorised as author-deviation, NOT source-contamination, and the distinction
+# is load-bearing. source-contamination claims a document was machine-generated,
+# which a hand-written pattern cannot establish — the default rule set's own
+# guard refuses that claim from an unvalidated rule, and it is right to. What
+# these DO say is weaker and true: this is not how you write. That is also the
+# thing a user actually wants told to them.
+# ---------------------------------------------------------------------------
+
+[[rule]]
+id = "important-to-note"
+description = "\"It is important to note\" and its relatives."
+matcher = "regex"
+unit = "document"
+pattern = "(?i)it('s| is) (important|worth) (to note|noting|remembering|mentioning)"
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "delve"
+description = "\"Delve into\", \"dive deep\", \"unpack\" a topic."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(delv(e|ing)|div(e|ing) deep|deep[- ]div(e|ing)|unpack(ing)? (this|that|the))'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "not-just-but"
+description = "\"Not just X, but Y\" as an escalation."
+matcher = "regex"
+unit = "document"
+pattern = "(?i)not (just|merely|only) [^.!?]{3,60}(—|--|,) (but|it'?s)"
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "in-todays-landscape"
+description = "\"In today's fast-paced\" scene-setting."
+matcher = "regex"
+unit = "document"
+pattern = "(?i)in today'?s ([a-z-]+ )?(world|landscape|environment|market|era)"
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "testament-to"
+description = "\"A testament to\", \"speaks volumes\", \"stands as\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(a testament to|speaks volumes|stands as a)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "navigate-complexities"
+description = "\"Navigate the complexities\" and \"landscape of\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(navigat(e|ing) the (complex|landscape|challeng)|the landscape of)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "crucial-role"
+description = "\"Plays a crucial role\", \"a key aspect\"."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(play(s|ing)? an? (crucial|vital|pivotal|key|significant) role|an? key (aspect|component|factor))'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "furthermore-stack"
+description = "A paragraph opening with a discourse marker."
+matcher = "regex"
+unit = "paragraph"
+pattern = '(?i)^(furthermore|moreover|additionally|in conclusion|that said|that being said|ultimately),'
+severity = "info"
+provenance = "unvalidated"
+category = "author-deviation"
+
+[[rule]]
+id = "robust-comprehensive"
+description = "Stacked reassurance adjectives."
+matcher = "regex"
+unit = "document"
+pattern = '(?i)(robust|comprehensive|seamless|holistic|cutting[- ]edge|state[- ]of[- ]the[- ]art) (and )?(robust|comprehensive|seamless|holistic|solution|approach|framework|experience)'
+severity = "warn"
+provenance = "unvalidated"
+category = "author-deviation"
