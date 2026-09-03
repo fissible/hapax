@@ -202,7 +202,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			if err != nil {
 				return Outcome{}, err
 			}
-			if !validPreservation(preservation) && (!l.Options.AllowUncalibrated || preservation.Preserved) {
+			if !validPreservation(preservation) {
 				return Outcome{}, fmt.Errorf("%w: attempt %d, span ref %q", ErrPreserveIdentifier, attempt.Index, attempt.SpanRef)
 			}
 			attempt.Preserved = preservation.Preserved

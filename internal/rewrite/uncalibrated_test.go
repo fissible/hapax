@@ -240,7 +240,11 @@ func TestTheGuardsAreStillMandatoryWhenUncalibrated(t *testing.T) {
 		verdict gateVerdict
 		want    rewrite.RejectionCode
 	}{
-		{"preservation fails", gateVerdict{preserved: false, identifiers: []string{"url:1"}, comparison: -1, comparable: true}, rewrite.RejectionNotPreserved},
+		// A REAL preserve identifier. "url:1" is not one, and the loop treats a
+		// malformed verdict as a programming error rather than a rejection — so
+		// the earlier fixture drove an implementation to weaken that guard
+		// instead of failing the way this case intends.
+		{"preservation fails", gateVerdict{preserved: false, identifiers: []string{"preserve-v1:url:lost:4d897f4d66e152ae"}, comparison: -1, comparable: true}, rewrite.RejectionNotPreserved},
 		{"tells incomparable", gateVerdict{preserved: true, comparison: 0, comparable: false}, rewrite.RejectionTellsIncomparable},
 		{"tells regress", gateVerdict{preserved: true, comparison: 1, comparable: true}, rewrite.RejectionTellsWorse},
 	}
