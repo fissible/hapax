@@ -1393,8 +1393,8 @@ func TestTheThresholdVerdictIsItsOrdering(t *testing.T) {
 	}
 }
 
-// An accepted attempt was scored in both bands. Storing acceptance beside an
-// absent band would record a decision no measurement supports.
+// An accepted attempt was scored on both sides. The supporting measurement is
+// either a pair of bands or a pair of distances; one band alone is incoherent.
 func TestAnAcceptedAttemptWasScoredOnBothSides(t *testing.T) {
 	for _, c := range []struct {
 		name               string
@@ -1402,6 +1402,7 @@ func TestAnAcceptedAttemptWasScoredOnBothSides(t *testing.T) {
 		want               bool
 	}{
 		{"both bands present", eval.BandDrifting, eval.BandInRange, true},
+		{"neither band", "", "", true},
 		{"no current band", "", eval.BandInRange, false},
 		{"no candidate band", eval.BandDrifting, "", false},
 	} {
