@@ -21,6 +21,7 @@ import (
 // Nothing in the frozen set could see it. Those tests assert what a store
 // contains and which route built it; a directory nobody deletes is neither.
 func TestFreshOpensLeaveNoTemplateDirectoriesBehind(t *testing.T) {
+	isolateTemplateDirectory(t)
 	dir := t.TempDir()
 
 	// Warm the cache first, so what this counts is the per-open cost rather than
@@ -54,8 +55,7 @@ func TestFreshOpensLeaveNoTemplateDirectoriesBehind(t *testing.T) {
 // And the cache owns what it creates: resetting it takes the directory too, not
 // just the database inside.
 func TestResettingTheTemplateCacheRemovesItsDirectory(t *testing.T) {
-	resetTemplateCache()
-	t.Cleanup(resetTemplateCache)
+	isolateTemplateDirectory(t)
 
 	template, err := freshTemplate()
 	if err != nil {
@@ -84,6 +84,26 @@ func TestResettingTheTemplateCacheRemovesItsDirectory(t *testing.T) {
 	if _, err := os.Stat(directory); !os.IsNotExist(err) {
 		t.Errorf("the template DIRECTORY survived the reset: %v", err)
 	}
+}
+
+// isolateTemplateDirectory keeps a test's templates out of the directory every
+// other package shares.
+//
+// templateDirectories counts by prefix in os.TempDir(), and `go test ./...` runs
+// packages concurrently — internal/workflow builds its own templates there — so
+// a count taken before and after can move for reasons that have nothing to do
+// with the cache under test. Both tests below flaked on that.
+//
+// os.MkdirTemp("", ...) resolves "" through os.TempDir(), which reads TMPDIR on
+// every call, so pointing TMPDIR at a private directory isolates the real Open
+// path as well as freshTemplate. That is why this is an env var rather than the
+// deps.TemplateDir seam: Open does not expose its deps, and it is Open that the
+// leak test has to measure.
+func isolateTemplateDirectory(t *testing.T) {
+	t.Helper()
+	t.Setenv("TMPDIR", t.TempDir())
+	resetTemplateCache()
+	t.Cleanup(resetTemplateCache)
 }
 
 func templateDirectories(t *testing.T) int {
