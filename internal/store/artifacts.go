@@ -704,6 +704,9 @@ func invalidCalibration(calibration Calibration) string {
 	if calibration.Calibrated != calibrated || (calibration.Calibrated && calibration.Reason != "") || (!calibration.Calibrated && calibration.Reason != "no-claiming-band-emitted") {
 		return "decision"
 	}
+	if calibration.Calibrated && calibration.Low > calibration.High {
+		return "boundary ordering"
+	}
 	return ""
 }
 func invalidBand(report BandReport) string {
@@ -1036,10 +1039,7 @@ func (s *Store) PutRelease(ctx context.Context, release eval.Release, poolID str
 		return err
 	}
 
-	threshold := Threshold{ID: release.Calibration.ThresholdsID, ProfileID: release.Calibration.ProfileID, ReferenceID: release.Calibration.ReferenceID, PopulationID: release.Calibration.PopulationID, Low: release.Calibration.Low, High: release.Calibration.High, Verdict: eval.VerdictPairIncompatible}
-	if release.Calibration.Calibrated {
-		threshold.Verdict = eval.VerdictSeparated
-	}
+	threshold := Threshold{ID: release.Calibration.ThresholdsID, ProfileID: release.Calibration.ProfileID, ReferenceID: release.Calibration.ReferenceID, PopulationID: release.Calibration.PopulationID, Low: release.Calibration.Low, High: release.Calibration.High, Verdict: eval.VerdictFor(release.Calibration.Low, release.Calibration.High)}
 	if err := s.PutThreshold(ctx, threshold); err != nil && !errors.Is(err, ErrConflict) {
 		return err
 	}

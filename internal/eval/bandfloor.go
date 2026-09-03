@@ -249,6 +249,9 @@ func (c Calibration) Band(distance deviation.Distance) (BandOutcome, error) {
 	if err := sameBandCalibrationBinding(c, distance); err != nil {
 		return BandOutcome{}, err
 	}
+	if c.Calibrated && c.Low > c.High {
+		return BandOutcome{}, ErrNotSeparated
+	}
 	geometric := BandOutcome{Distance: distance.Value, Defined: true}
 	if distance.Value <= c.Low {
 		geometric.Band = BandInRange

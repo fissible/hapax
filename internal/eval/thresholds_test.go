@@ -216,20 +216,38 @@ func TestDeclaredErrorTargets(t *testing.T) {
 func TestThresholdsOnOverlappingDistributions(t *testing.T) {
 	got := calibrate(t, overlapping())
 
-	if !near(got.Low, 5) {
-		t.Errorf("t_low = %v, want 5", got.Low)
+	// Author 1..20 gives A = 20; distractor 5..14 gives D = 5. Low is the
+	// AUTHOR boundary and High is the DISTRACTOR one, so here Low exceeds High.
+	//
+	// #83: these used to read 5 and 20, because Calibrate sorted them. Sorting
+	// made `Low < High` mean "the two differ" rather than "the author boundary
+	// sits below the distractor one", which is the question Separated asks — and
+	// the store refuses an artifact whose verdict and ordering disagree.
+	if !near(got.Low, 20) {
+		t.Errorf("t_low = %v, want the author boundary 20", got.Low)
 	}
-	if !near(got.High, 20) {
-		t.Errorf("t_high = %v, want 20", got.High)
+	if !near(got.High, 5) {
+		t.Errorf("t_high = %v, want the distractor boundary 5", got.High)
 	}
 	if got.Separated {
 		t.Errorf("overlapping distributions reported as separated")
 	}
-	if !near(got.AchievedAuthor, 0.05) {
-		t.Errorf("achieved author error = %v, want 0.05", got.AchievedAuthor)
+	// The achieved rates are BAND error rates: an author segment is misread when
+	// it lands in not-you (>= High), a distractor when it lands in in-range
+	// (<= Low). With the boundaries inverted almost everything is misread, and
+	// these numbers say so.
+	//
+	// They used to read 0.05 and 0.10 — each population against its OWN
+	// boundary — but only because sorting had swapped which field held which.
+	// The guarantee that they meet their targets held trivially, by measuring
+	// the author against the more permissive of the two boundaries.
+	if !near(got.AchievedAuthor, 0.80) {
+		t.Errorf("achieved author error = %v, want 0.80: sixteen of twenty author "+
+			"distances sit at or above the distractor boundary", got.AchievedAuthor)
 	}
-	if !near(got.AchievedDistractor, 0.10) {
-		t.Errorf("achieved distractor error = %v, want 0.10", got.AchievedDistractor)
+	if !near(got.AchievedDistractor, 1.0) {
+		t.Errorf("achieved distractor error = %v, want 1.0: every distractor sits at "+
+			"or below the author boundary", got.AchievedDistractor)
 	}
 }
 
@@ -266,33 +284,61 @@ func TestThresholdsOnSeparatedDistributions(t *testing.T) {
 	}
 }
 
-// The property the whole correction rests on, asserted directly rather than
-// inferred from the two cases above: whatever the populations, neither achieved
-// rate may exceed its declared target.
-func TestAchievedRatesNeverExceedTheirTargets(t *testing.T) {
-	cases := []struct {
+// A SEPARATED pair meets its targets. That is the guarantee the two thresholds
+// are chosen to give, and it is worth asserting directly.
+//
+// #83 narrowed this from "whatever the populations". The old form held for every
+// input, but only because Calibrate sorted the boundaries: the author rate was
+// then measured against max(A, D), which is at least A, so the guarantee
+// authorThreshold already provides was being re-checked against a MORE permissive
+// boundary. A calibration whose populations do not separate cannot meet these
+// targets, and saying it does is the reassurance this project exists not to give.
+func TestASeparatedPairMeetsItsTargets(t *testing.T) {
+	targets := eval.DefaultTargets()
+	got := calibrate(t, separated())
+
+	if !got.Separated {
+		t.Fatal("the separated fixture did not separate")
+	}
+	if got.AchievedAuthor > targets.Author+1e-12 {
+		t.Errorf("achieved author error %v exceeds the target %v", got.AchievedAuthor, targets.Author)
+	}
+	if got.AchievedDistractor > targets.Distractor+1e-12 {
+		t.Errorf("achieved distractor error %v exceeds the target %v", got.AchievedDistractor, targets.Distractor)
+	}
+	if !(got.Low < got.High) {
+		t.Errorf("t_low %v is not below t_high %v on a separated pair", got.Low, got.High)
+	}
+}
+
+// And a pair that does not separate reports rates that exceed them. This is the
+// other half, and the half that makes the test above mean something: without it,
+// an implementation that clamped both rates to their targets would pass.
+func TestAPairThatDoesNotSeparateReportsRatesThatExceedItsTargets(t *testing.T) {
+	targets := eval.DefaultTargets()
+	for _, c := range []struct {
 		name string
 		in   []eval.ClassedDistance
 	}{
 		{name: "overlapping", in: overlapping()},
-		{name: "separated", in: separated()},
 		{name: "author above distractor", in: append(population(eval.ClassAuthor, 30, 49), population(eval.ClassDistractor, 1, 10)...)},
 		{name: "interleaved", in: append(population(eval.ClassAuthor, 1, 20), population(eval.ClassDistractor, 2, 11)...)},
 		{name: "identical ranges", in: append(population(eval.ClassAuthor, 1, 20), population(eval.ClassDistractor, 1, 10)...)},
-	}
-
-	targets := eval.DefaultTargets()
-	for _, c := range cases {
+	} {
 		t.Run(c.name, func(t *testing.T) {
 			got := calibrate(t, c.in)
-			if got.AchievedAuthor > targets.Author+1e-12 {
-				t.Errorf("achieved author error %v exceeds the target %v", got.AchievedAuthor, targets.Author)
+			if got.Separated {
+				t.Fatalf("this fixture separated; Low = %v, High = %v", got.Low, got.High)
 			}
-			if got.AchievedDistractor > targets.Distractor+1e-12 {
-				t.Errorf("achieved distractor error %v exceeds the target %v", got.AchievedDistractor, targets.Distractor)
+			if got.Low <= got.High {
+				t.Errorf("a pair that did not separate reports Low = %v and High = %v; the "+
+					"author boundary must not sit below the distractor one", got.Low, got.High)
 			}
-			if got.Low > got.High {
-				t.Errorf("t_low %v is above t_high %v", got.Low, got.High)
+			if got.AchievedAuthor <= targets.Author && got.AchievedDistractor <= targets.Distractor {
+				t.Errorf("a pair that did not separate reports author %v and distractor %v, "+
+					"both within their targets of %v and %v — which would read as a usable "+
+					"calibration", got.AchievedAuthor, got.AchievedDistractor,
+					targets.Author, targets.Distractor)
 			}
 		})
 	}
@@ -319,16 +365,20 @@ func TestAchievedRatesAreMeasuredNotAssumed(t *testing.T) {
 func TestThresholdsAreTheTightestValueRespectingTheirTarget(t *testing.T) {
 	got := calibrate(t, overlapping())
 
-	// t_high = 20 exactly: 19 would give an author error of 0.10, over target,
-	// and 21 is not a value the population contains.
-	if !near(got.High, 20) {
-		t.Fatalf("t_high = %v, want 20", got.High)
+	// The AUTHOR boundary is 20 exactly: 19 would give an author error of 0.10,
+	// over target, and 21 is not a value the population contains.
+	//
+	// #83: this reads Low rather than High now. Low is the author boundary
+	// whichever way the two fall, and on this fixture the author's sits above
+	// the distractors'.
+	if !near(got.Low, 20) {
+		t.Fatalf("author boundary = %v, want 20", got.Low)
 	}
-	// t_low = 5 exactly: 6 would give a distractor error of 0.20, over target,
-	// and anything below 5 would push the achieved rate to 0 and shrink the
-	// `in range` region for nothing.
-	if !near(got.Low, 5) {
-		t.Fatalf("t_low = %v, want 5", got.Low)
+	// The DISTRACTOR boundary is 5 exactly: 6 would give a distractor error of
+	// 0.20, over target, and anything below 5 would push the achieved rate to 0
+	// and shrink the `in range` region for nothing.
+	if !near(got.High, 5) {
+		t.Fatalf("distractor boundary = %v, want 5", got.High)
 	}
 	if got.AchievedDistractor == 0 {
 		t.Errorf("achieved distractor error is 0 where the target allows 0.10; the threshold was taken to the wrong extreme")

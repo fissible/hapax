@@ -544,12 +544,7 @@ func (r *Runner) Eval(ctx context.Context, request EvalRequest) (EvalResult, err
 			"band-calibration-id": calibration.ID,
 			"intervals-id":        intervals.ID,
 		})
-		if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: intervals.ID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: intervals.Low, IntervalHigh: intervals.High, Verdict: func() eval.ThresholdVerdict {
-			if intervals.Shippable {
-				return eval.VerdictSeparated
-			}
-			return eval.VerdictPairIncompatible
-		}()}); err != nil {
+		if err = s.PutThreshold(ctx, store.Threshold{ID: threshold.ID, ProfileID: threshold.ProfileID, ReferenceID: threshold.ReferenceID, PopulationID: intervals.ID, Low: threshold.Low, High: threshold.High, AchievedAuthor: threshold.AchievedAuthor, AchievedDistractor: threshold.AchievedDistractor, IntervalLow: intervals.Low, IntervalHigh: intervals.High, Verdict: eval.VerdictFor(threshold.Low, threshold.High)}); err != nil {
 			return EvalResult{}, err
 		}
 	}

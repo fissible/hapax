@@ -42,6 +42,14 @@ func ThresholdVerdicts() []ThresholdVerdict {
 	return []ThresholdVerdict{VerdictSeparated, VerdictPairIncompatible}
 }
 
+// VerdictFor derives the threshold verdict from the boundary ordering.
+func VerdictFor(low, high float64) ThresholdVerdict {
+	if low < high {
+		return VerdictSeparated
+	}
+	return VerdictPairIncompatible
+}
+
 type ReleaseReason string
 
 const (
@@ -74,8 +82,13 @@ type ClassedDistance struct {
 
 // Thresholds records observed boundaries and every calibration binding.
 type Thresholds struct {
-	ID                                                          string
-	Low, High, AchievedAuthor, AchievedDistractor               float64
+	ID string
+	// Low is the author boundary. It can exceed High; the misleading name is
+	// retained because renaming a persisted schema is disproportionate.
+	Low float64
+	// High is the distractor boundary.
+	High                                                        float64
+	AchievedAuthor, AchievedDistractor                          float64
 	Separated                                                   bool
 	ProfileID, ReferenceID, FeatureManifestDigest, WeightScheme string
 	DistanceAlgorithm                                           string
@@ -104,6 +117,8 @@ var (
 	ErrTooFewDistractorDistances = errors.New("eval thresholds too few distractor distances")
 	// ErrNoQualifyingThreshold reports a population without an observed valid boundary.
 	ErrNoQualifyingThreshold = errors.New("eval thresholds no qualifying threshold")
+	// ErrNotSeparated reports boundaries that cannot form non-overlapping bands.
+	ErrNotSeparated = errors.New("eval thresholds not separated")
 	// ErrUnknownClass reports a distance assigned to an unsupported population.
 	ErrUnknownClass = errors.New("eval thresholds unknown class")
 	// ErrCalibrationSplit reports a distance not drawn from the Calibrate split.
@@ -203,7 +218,7 @@ func Calibrate(distances []ClassedDistance, source Source, targets Targets) (*Th
 		DistractorDistances: len(distractor), Source: source, Algorithm: ThresholdAlgorithm,
 		Separated: a < d,
 	}
-	out.Low, out.High = math.Min(a, d), math.Max(a, d)
+	out.Low, out.High = a, d
 	out.AchievedAuthor = upperRate(author, out.High)
 	out.AchievedDistractor = lowerRate(distractor, out.Low)
 	out.ID = thresholdID(out, author, distractor)
@@ -223,6 +238,9 @@ func (t *Thresholds) Band(distance deviation.Distance) (BandOutcome, error) {
 	}
 	if err := sameThresholdBinding(t, distance); err != nil {
 		return BandOutcome{}, err
+	}
+	if t.Low > t.High {
+		return BandOutcome{}, ErrNotSeparated
 	}
 	out := BandOutcome{Distance: distance.Value, Defined: true}
 	if distance.Value <= t.Low {
