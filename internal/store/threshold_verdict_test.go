@@ -165,8 +165,8 @@ func TestAShippableReleaseStillRecordsASeparatedVerdict(t *testing.T) {
 // Fail closed at the boundary
 // ---------------------------------------------------------------------------
 
-// A CALIBRATED calibration whose boundaries are the wrong way round is refused
-// on the way in.
+// A CALIBRATED calibration whose boundaries are INVERTED is refused on the way
+// in. Coincident boundaries are not: see the case table.
 //
 // eval will not produce one once the sort is gone. The store's job is not to
 // trust that: it is the last place a wrong answer can be stopped before it
@@ -203,7 +203,16 @@ func TestACalibratedCalibrationMustHaveOrderedBoundaries(t *testing.T) {
 	}{
 		{"ordered", 0.10, 0.80, true},
 		{"inverted", 0.80, 0.10, false},
-		{"equal", 0.40, 0.40, false},
+		// Equality is NOT refused. DESIGN Section 2 defines the coincident
+		// boundary: `drifting` is empty and a distance sitting exactly on the
+		// boundary breaks toward in-range, away from the more damaging error.
+		// The regions do not overlap, so nothing is misread — which is the
+		// whole reason inversion is refused and this is not.
+		//
+		// Amended after the implementation landed: my first version refused it,
+		// and TestACoincidentBoundaryResolvesToInRange in internal/eval showed
+		// that would override a documented design decision.
+		{"equal", 0.40, 0.40, true},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			s := newStore(t)
