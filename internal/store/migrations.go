@@ -50,4 +50,24 @@ CREATE TABLE node_new (node_id TEXT NOT NULL PRIMARY KEY CHECK(length(node_id)=6
 INSERT INTO node_new SELECT node_id,document_id,ordinal,kind,role,containers,offset,length,included,exclusion FROM node;
 DROP TABLE node;
 ALTER TABLE node_new RENAME TO node;
+`, `
+-- A split is a property of an ELIGIBLE document. A rejected one was never
+-- assigned to train, calibrate or test, because it is not in any of them, and
+-- the old constraint required a value it could never honestly carry.
+--
+-- The column now ADMITS the empty string; the pairing — eligible if and only if
+-- a split is present — is enforced in Go rather than as a table CHECK, because a
+-- table-level constraint referencing another column defeats the vocabulary
+-- suite's ability to damage one column in isolation, and that suite is what
+-- proves an out-of-vocabulary value is corrupt on read.
+--
+-- The effect was that hapax index failed outright on any corpus containing a
+-- rejected document — too short, not UTF-8, or a near-duplicate. Every fixture
+-- in this repository is generated and admits every file, so nothing caught it
+-- until a real archive of resume revisions did: three revisions of one resume
+-- are near-duplicates of each other, which is what a real archive looks like.
+CREATE TABLE document_new (document_id TEXT NOT NULL PRIMARY KEY CHECK(length(document_id)=64 AND document_id NOT GLOB '*[^0-9a-f]*'), snapshot_id TEXT NOT NULL CHECK(length(snapshot_id)=64 AND snapshot_id NOT GLOB '*[^0-9a-f]*') REFERENCES snapshot(id) ON DELETE CASCADE, path TEXT NOT NULL CHECK(path <> '' AND path NOT GLOB '/*' AND path NOT GLOB '*\*' AND path NOT GLOB '../*' AND path <> '..' AND path NOT GLOB '*//*'), content_hash TEXT NOT NULL CHECK(length(content_hash)=64 AND content_hash NOT GLOB '*[^0-9a-f]*'), register TEXT NOT NULL CHECK(register GLOB '[a-z0-9]*' AND register NOT GLOB '*[^a-z0-9-]*' AND length(register)<=32), split TEXT NOT NULL CHECK(split IN ('train','calibrate','test','draft','')), admission TEXT NOT NULL CHECK(admission IN ('eligible','rejected-too-short','rejected-not-utf8','rejected-duplicate')), language TEXT NOT NULL DEFAULT 'not-performed' CHECK(language IN ('not-performed','passed','failed','skipped-by-policy')), unavailable_at TEXT CHECK(unavailable_at IS NULL OR (strftime('%Y-%m-%dT%H:%M:%SZ',unavailable_at) IS NOT NULL AND strftime('%Y-%m-%dT%H:%M:%SZ',unavailable_at)=unavailable_at)));
+INSERT INTO document_new SELECT document_id,snapshot_id,path,content_hash,register,split,admission,language,unavailable_at FROM document;
+DROP TABLE document;
+ALTER TABLE document_new RENAME TO document;
 `}
