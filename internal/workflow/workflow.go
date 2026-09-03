@@ -732,8 +732,7 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 		base.Targeting, base.Claim = TargetingAutomatic, ClaimCalibratedBand
 	}
 	if !bundle.Calibrated && !explicit {
-		base.Refusal = RefusalUncalibrated
-		return base, nil
+		return refusedRewritePlan(base, RefusalUncalibrated), nil
 	}
 	source, err := os.ReadFile(request.Path)
 	if err != nil {
@@ -750,8 +749,7 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	}
 	base.ParagraphsBelowFloor = report.ParagraphsBelowFloor
 	if len(report.Segments) == 0 {
-		base.Refusal = RefusalInsufficientEvidence
-		return base, nil
+		return refusedRewritePlan(base, RefusalInsufficientEvidence), nil
 	}
 	draftRequirements := r.Requirements
 	draftRequirements.MinParagraphLexicalTokens = bundle.Fitted.MinParagraphLexicalTokens
@@ -778,8 +776,7 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	named := make(map[int]bool, len(request.Paragraphs))
 	for _, index := range request.Paragraphs {
 		if index < 0 || index >= len(report.Segments) {
-			base.Refusal = RefusalNoSuchParagraph
-			return base, nil
+			return refusedRewritePlan(base, RefusalNoSuchParagraph), nil
 		}
 		named[index] = true
 	}
@@ -856,6 +853,17 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	}
 	base.State = StateTargetsPlanned
 	return base, nil
+}
+
+// refusedRewritePlan records a refusal without claiming either a paragraph
+// selection or a rewrite outcome. Calibration availability remains a measured
+// property of the store, so it is deliberately preserved.
+func refusedRewritePlan(plan RewritePlan, refusal string) RewritePlan {
+	plan.Refusal = refusal
+	plan.Targeting = ""
+	plan.Claim = ""
+
+	return plan
 }
 
 type draftLeaf struct{ excisions bool }
