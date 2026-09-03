@@ -406,7 +406,16 @@ func measureBoth(t *testing.T, binary, root, current, candidate string) (float64
 		probe := filepath.Join(t.TempDir(), "probe.md")
 		write(t, probe, body+"\n")
 		scored := runBinary(t, binary, root, "--json", "score", probe, "--profile", "essays")
-		if scored.code != 0 && scored.code != 1 {
+		// 4 is the refusal exit, and `uncalibrated` is a refusal this helper
+		// must tolerate rather than treat as a failure.
+		//
+		// score refuses uncalibrated because it cannot BAND the paragraph. It
+		// still measures it: the payload carries a defined distance, which is
+		// the only thing this helper reads. Accepting only 0 and 1 made every
+		// uncalibrated fixture unusable, which is precisely the corpus state
+		// #81 exists to support — so the helper could not run against the
+		// stores its own tests are about.
+		if scored.code != 0 && scored.code != 1 && scored.code != 4 {
 			t.Fatalf("score exited %d: %s", scored.code, scored.stderr)
 		}
 		segments, _ := smokeResult(t, scored.stdout, "score")["segments"].([]any)
