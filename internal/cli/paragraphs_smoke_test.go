@@ -164,10 +164,21 @@ func TestTheBinaryRewritesANamedParagraphWithoutACalibratedRelease(t *testing.T)
 	if len(prompts) == 0 {
 		t.Fatal("the provider was never called")
 	}
+	// The FIRST prompt carries the named paragraph's own bytes. What comes
+	// after is the loop's business: it is a hill climber, so once a candidate
+	// is accepted the next attempt asks about the ACCEPTED text, not the
+	// original. Requiring every prompt to carry `first` contradicts ADR 0006.
+	//
+	// This is the third time this project has written that assertion. #75
+	// amended it once, the B2b-2b smoke amended it twice, and it is recorded in
+	// CLAUDE.local.md now because reading those comments did not stop me.
+	if !strings.Contains(prompts[0], first) {
+		t.Error("the first call does not carry the named paragraph's own bytes")
+	}
+	// EVERY prompt, though, for the unnamed one. This is the load-bearing half:
+	// a run that ignored the flag and rewrote both paragraphs would satisfy
+	// every count assertion below, and only this catches it.
 	for i, prompt := range prompts {
-		if !strings.Contains(prompt, first) {
-			t.Errorf("prompt %d does not carry the named paragraph", i)
-		}
 		if strings.Contains(prompt, second) {
 			t.Errorf("prompt %d carries the paragraph that was NOT named", i)
 		}
