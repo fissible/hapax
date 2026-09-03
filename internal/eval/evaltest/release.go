@@ -55,6 +55,24 @@ func ShippableRelease(t *testing.T, profileID, referenceID string) eval.Release 
 // rewrite target" against an accident is asserting nothing.
 func ReleaseAround(t *testing.T, profileID, referenceID string, authorCenter, distractorCenter float64) eval.Release {
 	t.Helper()
+	release := ReleaseAroundUnchecked(t, profileID, referenceID, authorCenter, distractorCenter)
+	if !release.Shippable {
+		t.Fatalf("the fixture did not ship: %s (auc=%.3f bound=%.3f cap=%.3f clusters=%d/%d min=%d calibrated=%v)",
+			release.Reason, release.Discrimination.AUC, release.Discrimination.LowerBound,
+			release.Discrimination.Cap, release.Discrimination.AuthorClusters,
+			release.Discrimination.DistractorClusters, release.Discrimination.MinClusters,
+			release.Calibration.Calibrated)
+	}
+	return release
+}
+
+// ReleaseAroundUnchecked is ReleaseAround without the shippability assertion,
+// for the cases a shippable fixture cannot express: populations that overlap,
+// or that sit the wrong way round entirely. #83 is about what the store does
+// with exactly those, and ReleaseAround cannot build one because it fails the
+// test rather than returning it.
+func ReleaseAroundUnchecked(t *testing.T, profileID, referenceID string, authorCenter, distractorCenter float64) eval.Release {
+	t.Helper()
 	// Distractors cluster by AUTHOR when every one carries a name, and by
 	// DOCUMENT when none does. This fixture leaves the author empty on purpose,
 	// for two reasons found the hard way. Giving thirty distractors one name
@@ -125,13 +143,6 @@ func ReleaseAround(t *testing.T, profileID, referenceID string, authorCenter, di
 	release, err := eval.NewRelease(discrimination, calibration)
 	if err != nil {
 		t.Fatalf("NewRelease: %v", err)
-	}
-	if !release.Shippable {
-		t.Fatalf("the fixture did not ship: %s (auc=%.3f bound=%.3f cap=%.3f clusters=%d/%d min=%d calibrated=%v)",
-			release.Reason, release.Discrimination.AUC, release.Discrimination.LowerBound,
-			release.Discrimination.Cap, release.Discrimination.AuthorClusters,
-			release.Discrimination.DistractorClusters, release.Discrimination.MinClusters,
-			release.Calibration.Calibrated)
 	}
 	return release
 }
