@@ -916,13 +916,16 @@ func TestActionabilityIsIntervalOverlap(t *testing.T) {
 		if !got.Usable {
 			t.Fatalf("not usable: %v (qualified %d of %d)", got.Reason, got.Qualified, got.Resamples)
 		}
-		// Exact under the declared seed: t_low spans [91, 96] and t_high spans
-		// [93, 99], so they share [93, 96].
-		if got.Low.Lower != 91 || got.Low.Upper != 96 {
-			t.Errorf("t_low interval = [%v, %v], want [91, 96]", got.Low.Lower, got.Low.Upper)
+		// Exact under the declared seed. #83: t_low is the AUTHOR interval and
+		// t_high the DISTRACTOR one, so on this crowded fixture the author's
+		// spans [93, 99] and the distractors' spans [91, 96] — they used to
+		// read the other way round because Calibrate sorted the boundaries.
+		// They still share [93, 96], which is what makes the fixture crowded.
+		if got.Low.Lower != 93 || got.Low.Upper != 99 {
+			t.Errorf("author interval = [%v, %v], want [93, 99]", got.Low.Lower, got.Low.Upper)
 		}
-		if got.High.Lower != 93 || got.High.Upper != 99 {
-			t.Errorf("t_high interval = [%v, %v], want [93, 99]", got.High.Lower, got.High.Upper)
+		if got.High.Lower != 91 || got.High.Upper != 96 {
+			t.Errorf("distractor interval = [%v, %v], want [91, 96]", got.High.Lower, got.High.Upper)
 		}
 		if got.Low.Upper < got.High.Lower {
 			t.Fatalf("intervals [%v, %v] and [%v, %v] do not overlap; this fixture needs them to",
@@ -1293,7 +1296,10 @@ func TestTheQualificationFloorIsInclusive(t *testing.T) {
 func TestTouchingIntervalsAreNotActionable(t *testing.T) {
 	got := bootstrapOf(t, touching())
 
-	if got.Low.Upper != 93 || got.High.Lower != 93 {
+	// #83: unsorted, the author interval is the upper one here, so they touch
+	// at the author's LOWER bound and the distractors' UPPER bound. The
+	// property under test is unchanged — touching is not disjoint.
+	if got.Low.Lower != 93 || got.High.Upper != 93 {
 		t.Fatalf("intervals are [%v, %v] and [%v, %v]; this fixture needs them to touch at 93",
 			got.Low.Lower, got.Low.Upper, got.High.Lower, got.High.Upper)
 	}

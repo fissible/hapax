@@ -365,16 +365,20 @@ func TestAchievedRatesAreMeasuredNotAssumed(t *testing.T) {
 func TestThresholdsAreTheTightestValueRespectingTheirTarget(t *testing.T) {
 	got := calibrate(t, overlapping())
 
-	// t_high = 20 exactly: 19 would give an author error of 0.10, over target,
-	// and 21 is not a value the population contains.
-	if !near(got.High, 20) {
-		t.Fatalf("t_high = %v, want 20", got.High)
+	// The AUTHOR boundary is 20 exactly: 19 would give an author error of 0.10,
+	// over target, and 21 is not a value the population contains.
+	//
+	// #83: this reads Low rather than High now. Low is the author boundary
+	// whichever way the two fall, and on this fixture the author's sits above
+	// the distractors'.
+	if !near(got.Low, 20) {
+		t.Fatalf("author boundary = %v, want 20", got.Low)
 	}
-	// t_low = 5 exactly: 6 would give a distractor error of 0.20, over target,
-	// and anything below 5 would push the achieved rate to 0 and shrink the
-	// `in range` region for nothing.
-	if !near(got.Low, 5) {
-		t.Fatalf("t_low = %v, want 5", got.Low)
+	// The DISTRACTOR boundary is 5 exactly: 6 would give a distractor error of
+	// 0.20, over target, and anything below 5 would push the achieved rate to 0
+	// and shrink the `in range` region for nothing.
+	if !near(got.High, 5) {
+		t.Fatalf("distractor boundary = %v, want 5", got.High)
 	}
 	if got.AchievedDistractor == 0 {
 		t.Errorf("achieved distractor error is 0 where the target allows 0.10; the threshold was taken to the wrong extreme")
