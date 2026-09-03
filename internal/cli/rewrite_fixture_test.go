@@ -31,6 +31,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/eval/evaltest"
+	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/store"
 )
 
@@ -374,9 +375,14 @@ func corpusTree(t *testing.T, root string) map[string]entry {
 func requireCandidateImproves(t *testing.T, binary, root, current, candidate string) {
 	t.Helper()
 	before, after := measureBoth(t, binary, root, current, candidate)
-	if !(after < before) {
-		t.Fatalf("the scripted reply measures %v against the paragraph's %v, so the loop will "+
-			"reject it and the smoke would assert only that nothing happened", after, before)
+	// The loop's rule, exactly: a candidate is accepted iff it measures at
+	// least epsilon closer. `after < before` is NOT that rule — an improvement
+	// smaller than epsilon satisfies it and is still rejected, so the looser
+	// form can fail a correct implementation.
+	if !(after <= before-rewrite.Epsilon) {
+		t.Fatalf("the scripted reply measures %v against the paragraph's %v, which is not an "+
+			"improvement of at least epsilon (%v), so the loop will reject it and the smoke "+
+			"would assert only that nothing happened", after, before, rewrite.Epsilon)
 	}
 }
 
@@ -386,9 +392,11 @@ func requireCandidateImproves(t *testing.T, binary, root, current, candidate str
 func requireCandidateDoesNotImprove(t *testing.T, binary, root, current, candidate string) {
 	t.Helper()
 	before, after := measureBoth(t, binary, root, current, candidate)
-	if after < before {
-		t.Fatalf("the reply meant to be refused measures %v against the paragraph's %v, so it "+
-			"will be accepted on the first call and no retry will happen", after, before)
+	// The negation of the acceptance rule, for the same reason.
+	if after <= before-rewrite.Epsilon {
+		t.Fatalf("the reply meant to be refused measures %v against the paragraph's %v, an "+
+			"improvement of at least epsilon (%v), so it will be accepted on the first call "+
+			"and no retry will happen", after, before, rewrite.Epsilon)
 	}
 }
 
@@ -398,7 +406,16 @@ func measureBoth(t *testing.T, binary, root, current, candidate string) (float64
 		probe := filepath.Join(t.TempDir(), "probe.md")
 		write(t, probe, body+"\n")
 		scored := runBinary(t, binary, root, "--json", "score", probe, "--profile", "essays")
-		if scored.code != 0 && scored.code != 1 {
+		// 4 is the refusal exit, and `uncalibrated` is a refusal this helper
+		// must tolerate rather than treat as a failure.
+		//
+		// score refuses uncalibrated because it cannot BAND the paragraph. It
+		// still measures it: the payload carries a defined distance, which is
+		// the only thing this helper reads. Accepting only 0 and 1 made every
+		// uncalibrated fixture unusable, which is precisely the corpus state
+		// #81 exists to support — so the helper could not run against the
+		// stores its own tests are about.
+		if scored.code != 0 && scored.code != 1 && scored.code != 4 {
 			t.Fatalf("score exited %d: %s", scored.code, scored.stderr)
 		}
 		segments, _ := smokeResult(t, scored.stdout, "score")["segments"].([]any)

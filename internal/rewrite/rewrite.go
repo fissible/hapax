@@ -73,7 +73,7 @@ type Segment struct {
 
 type Options struct {
 	ProfileID, InvocationID, ProviderID string
-	LocalOnly                           bool
+	LocalOnly, AllowUncalibrated        bool
 	Attempts, Exemplars                 int
 }
 
@@ -159,7 +159,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 	if err != nil {
 		return Outcome{}, err
 	}
-	currentScored, reason := judged(currentReport, false)
+	currentScored, reason := judged(currentReport, false, l.Options.AllowUncalibrated)
 	if reason != "" {
 		return Outcome{Text: current, Reason: reason, Terminal: TerminalNotEntered}, nil
 	}
@@ -192,7 +192,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 		if err != nil {
 			return Outcome{}, err
 		}
-		candidateScored, rejection := judged(candidateReport, true)
+		candidateScored, rejection := judged(candidateReport, true, l.Options.AllowUncalibrated)
 		attempt := l.attempt(index, segment.SpanRef, current, candidate, currentScored, candidateScored)
 		if rejection == "" && !sameFeatures(currentScored.Distance.Features, candidateScored.Distance.Features) {
 			rejection = RejectionDifferentFeatures
@@ -262,7 +262,7 @@ func (l Loop) validate(segment Segment) error {
 	return nil
 }
 
-func judged(report score.Report, candidate bool) (score.Segment, RejectionCode) {
+func judged(report score.Report, candidate, allowUncalibrated bool) (score.Segment, RejectionCode) {
 	if len(report.Segments) != 1 {
 		return score.Segment{}, RejectionNotOneSegment
 	}
@@ -273,7 +273,7 @@ func judged(report score.Report, candidate bool) (score.Segment, RejectionCode) 
 		}
 		return segment, RejectionUnscoreable
 	}
-	if !report.Calibrated || !segment.Band.Defined {
+	if (!report.Calibrated || !segment.Band.Defined) && !allowUncalibrated {
 		return segment, RejectionUncalibrated
 	}
 	return segment, ""

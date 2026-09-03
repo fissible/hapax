@@ -164,7 +164,10 @@ type ScoreResult struct {
 }
 
 // PlanRequest contains the inputs used to qualify a draft for rewriting.
-type PlanRequest struct{ StartDir, StorePath, CorpusRoot, Register, Path string }
+type PlanRequest struct {
+	StartDir, StorePath, CorpusRoot, Register, Path string
+	Paragraphs                                      []int
+}
 
 // RewriteRequest is retained as a source-compatible name for callers compiled
 // against the B1 planning API. New callers use PlanRequest.
@@ -176,11 +179,30 @@ const (
 	DispositionInRange           Disposition = "in-range"
 	DispositionUnmeasurable      Disposition = "unmeasurable"
 	DispositionContainsExcisions Disposition = "contains-excisions"
+	DispositionNotSelected       Disposition = "not-selected"
 )
 
 func Dispositions() []Disposition {
-	return []Disposition{DispositionTarget, DispositionInRange, DispositionUnmeasurable, DispositionContainsExcisions}
+	return []Disposition{DispositionTarget, DispositionInRange, DispositionUnmeasurable, DispositionContainsExcisions, DispositionNotSelected}
 }
+
+type Targeting string
+
+const (
+	TargetingAutomatic Targeting = "automatic"
+	TargetingExplicit  Targeting = "explicit"
+)
+
+func Targetings() []Targeting { return []Targeting{TargetingAutomatic, TargetingExplicit} }
+
+type Claim string
+
+const (
+	ClaimCalibratedBand   Claim = "calibrated-band"
+	ClaimCloserByDistance Claim = "closer-by-distance"
+)
+
+func Claims() []Claim { return []Claim{ClaimCalibratedBand, ClaimCloserByDistance} }
 
 type PlanState string
 
@@ -206,6 +228,9 @@ type RewritePlan struct {
 	Refusal, ProfileID, ReferenceID, ReleaseID string
 	DraftSnapshotID                            string
 	ParagraphsBelowFloor                       int
+	Targeting                                  Targeting
+	Claim                                      Claim
+	CalibrationAvailable                       bool
 	Segments                                   []PlannedSegment
 	Targets                                    int
 	State                                      PlanState
@@ -223,10 +248,11 @@ const (
 	RefusalStaleDraft               = "stale-draft"
 	RefusalStaleExemplars           = "stale-exemplars"
 	RefusalLocalOnlyForbidsProvider = "local-only-forbids-provider"
+	RefusalNoSuchParagraph          = "no-such-paragraph"
 )
 
 func Refusals() []string {
-	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence, RefusalStaleDraft, RefusalStaleExemplars, RefusalLocalOnlyForbidsProvider}
+	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence, RefusalStaleDraft, RefusalStaleExemplars, RefusalLocalOnlyForbidsProvider, RefusalNoSuchParagraph}
 }
 
 func Terminals() []string {
@@ -283,6 +309,7 @@ type ExecuteResult struct {
 // caller from opening a freshness window between the two operations.
 type RewriteInput struct {
 	StartDir, StorePath, CorpusRoot, Register, Path string
+	Paragraphs                                      []int
 	Choice                                          ProviderChoice
 	Mode                                            mode.Mode
 	Attempts                                        int
@@ -290,11 +317,14 @@ type RewriteInput struct {
 
 // RewriteReport is the public, prose-free account of a rewrite.
 type RewriteReport struct {
-	PlanState         PlanState
-	State             RewriteState
-	Targets, Improved int
-	Refusal           string
-	Outcomes          []TargetOutcome
+	PlanState            PlanState
+	State                RewriteState
+	Targets, Improved    int
+	Refusal              string
+	Outcomes             []TargetOutcome
+	Targeting            Targeting
+	Claim                Claim
+	CalibrationAvailable bool
 }
 
 // RewriteOutcome keeps assembled document bytes private to workflow. Content
@@ -694,22 +724,32 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 		root = filepath.Dir(filepath.Dir(path))
 	}
 	base.CorpusRoot, base.ProfileID, base.ReferenceID, base.ReleaseID = root, bundle.Fitted.ID, bundle.Reference.ID, bundle.Release.ID
-	if !bundle.Calibrated {
-		base.Refusal = RefusalUncalibrated
-		return base, nil
+	explicit := len(request.Paragraphs) != 0
+	base.CalibrationAvailable = bundle.Calibrated
+	if explicit {
+		base.Targeting, base.Claim = TargetingExplicit, ClaimCloserByDistance
+	} else {
+		base.Targeting, base.Claim = TargetingAutomatic, ClaimCalibratedBand
+	}
+	if !bundle.Calibrated && !explicit {
+		return refusedRewritePlan(base, RefusalUncalibrated), nil
 	}
 	source, err := os.ReadFile(request.Path)
 	if err != nil {
 		return RewritePlan{}, err
 	}
-	report, err := score.Score(source, bundle.Fitted, &bundle.Reference, bundle.Release)
+	var report score.Report
+	if bundle.Calibrated {
+		report, err = score.Score(source, bundle.Fitted, &bundle.Reference, bundle.Release)
+	} else {
+		report, err = score.Measure(source, bundle.Fitted, &bundle.Reference)
+	}
 	if err != nil {
 		return RewritePlan{}, err
 	}
 	base.ParagraphsBelowFloor = report.ParagraphsBelowFloor
 	if len(report.Segments) == 0 {
-		base.Refusal = RefusalInsufficientEvidence
-		return base, nil
+		return refusedRewritePlan(base, RefusalInsufficientEvidence), nil
 	}
 	draftRequirements := r.Requirements
 	draftRequirements.MinParagraphLexicalTokens = bundle.Fitted.MinParagraphLexicalTokens
@@ -733,22 +773,43 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	if len(nodes) != len(report.Segments) || len(leaves) != len(report.Segments) {
 		return RewritePlan{}, errors.New("draft score and indexed paragraphs disagree")
 	}
+	named := make(map[int]bool, len(request.Paragraphs))
+	for _, index := range request.Paragraphs {
+		if index < 0 || index >= len(report.Segments) {
+			return refusedRewritePlan(base, RefusalNoSuchParagraph), nil
+		}
+		named[index] = true
+	}
 	for i, segment := range report.Segments {
 		var disposition Disposition
-		switch {
-		case !segment.Distance.Defined:
-			disposition = DispositionUnmeasurable
-		case segment.Band.Band == eval.BandInRange:
-			disposition = DispositionInRange
-		case leaves[i].excisions:
-			disposition = DispositionContainsExcisions
-		case segment.Band.Band == eval.BandDrifting || segment.Band.Band == eval.BandNotYou:
-			disposition = DispositionTarget
-			base.Targets++
-		case !segment.Band.Defined:
-			disposition = DispositionUnmeasurable
-		default:
-			return RewritePlan{}, fmt.Errorf("draft segment %d has an unknown band %q", segment.Index, segment.Band.Band)
+		if explicit {
+			switch {
+			case !named[segment.Index]:
+				disposition = DispositionNotSelected
+			case !segment.Distance.Defined:
+				disposition = DispositionUnmeasurable
+			case leaves[i].excisions:
+				disposition = DispositionContainsExcisions
+			default:
+				disposition = DispositionTarget
+				base.Targets++
+			}
+		} else {
+			switch {
+			case !segment.Distance.Defined:
+				disposition = DispositionUnmeasurable
+			case segment.Band.Band == eval.BandInRange:
+				disposition = DispositionInRange
+			case leaves[i].excisions:
+				disposition = DispositionContainsExcisions
+			case segment.Band.Band == eval.BandDrifting || segment.Band.Band == eval.BandNotYou:
+				disposition = DispositionTarget
+				base.Targets++
+			case !segment.Band.Defined:
+				disposition = DispositionUnmeasurable
+			default:
+				return RewritePlan{}, fmt.Errorf("draft segment %d has an unknown band %q", segment.Index, segment.Band.Band)
+			}
 		}
 		base.Segments = append(base.Segments, PlannedSegment{Index: segment.Index, NodeID: nodes[i].ID, Offset: nodes[i].Offset, Length: nodes[i].Length, LexicalTokens: segment.LexicalTokens, Band: BandOutcome{Band: string(segment.Band.Band), Defined: segment.Band.Defined, Reason: string(segment.Band.Reason), Distance: segment.Band.Distance}, Disposition: disposition})
 	}
@@ -792,6 +853,17 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	}
 	base.State = StateTargetsPlanned
 	return base, nil
+}
+
+// refusedRewritePlan records a refusal without claiming either a paragraph
+// selection or a rewrite outcome. Calibration availability remains a measured
+// property of the store, so it is deliberately preserved.
+func refusedRewritePlan(plan RewritePlan, refusal string) RewritePlan {
+	plan.Refusal = refusal
+	plan.Targeting = ""
+	plan.Claim = ""
+
+	return plan
 }
 
 type draftLeaf struct{ excisions bool }
@@ -1001,12 +1073,16 @@ func newInvocationID() (string, error) {
 }
 
 type executionScorer struct {
-	fitted    profile.Fitted
-	reference *deviation.Reference
-	release   eval.Release
+	fitted     profile.Fitted
+	reference  *deviation.Reference
+	release    eval.Release
+	calibrated bool
 }
 
 func (s executionScorer) Score(source []byte) (score.Report, error) {
+	if !s.calibrated {
+		return score.Measure(source, s.fitted, s.reference)
+	}
 	return score.Score(source, s.fitted, s.reference, s.release)
 }
 
@@ -1095,9 +1171,12 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		return ExecuteResult{}, err
 	}
 	ref := &deviation.Reference{ID: storedRef.ID, ProfileID: storedRef.ProfileID, FeatureManifestDigest: storedRef.ManifestDigest, Split: storedRef.Split, MinSegments: storedRef.MinSegments, Values: storedRef.Values}
-	release, err := s.LoadRelease(ctx, p.ReleaseID)
-	if err != nil {
-		return ExecuteResult{}, err
+	var release eval.Release
+	if p.CalibrationAvailable {
+		release, err = s.LoadRelease(ctx, p.ReleaseID)
+		if err != nil {
+			return ExecuteResult{}, err
+		}
 	}
 	draftSnapshot, err := s.Snapshot(ctx, p.DraftSnapshotID)
 	if err != nil {
@@ -1157,7 +1236,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		return ExecuteResult{}, err
 	}
 	result.InvocationID = id
-	scorer := executionScorer{fitted, ref, release}
+	scorer := executionScorer{fitted: fitted, reference: ref, release: release, calibrated: p.CalibrationAvailable}
 	for _, target := range p.Segments {
 		if target.Disposition != DispositionTarget {
 			continue
@@ -1169,7 +1248,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		if err != nil {
 			return ExecuteResult{}, fmt.Errorf("preflight segment %d: %w", target.Index, err)
 		}
-		if len(report.Segments) != 1 || !report.Segments[0].Distance.Defined || !report.Calibrated || !report.Segments[0].Band.Defined {
+		if len(report.Segments) != 1 || !report.Segments[0].Distance.Defined || (p.Targeting != TargetingExplicit && (!report.Calibrated || !report.Segments[0].Band.Defined)) {
 			return ExecuteResult{}, fmt.Errorf("preflight segment %d cannot score", target.Index)
 		}
 	}
@@ -1179,6 +1258,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 	options.InvocationID = id
 	options.ProviderID = request.Choice.Provider
 	options.LocalOnly = request.Mode.LocalOnly
+	options.AllowUncalibrated = p.Targeting == TargetingExplicit
 	if request.Attempts < 0 {
 		return ExecuteResult{}, errors.New("negative attempts")
 	}
@@ -1245,13 +1325,13 @@ func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutc
 	}
 	plan, err := r.Plan(ctx, PlanRequest{
 		StartDir: request.StartDir, StorePath: request.StorePath, CorpusRoot: request.CorpusRoot,
-		Register: request.Register, Path: request.Path,
+		Register: request.Register, Path: request.Path, Paragraphs: request.Paragraphs,
 	})
 	if err != nil {
 		return RewriteOutcome{}, err
 	}
 	if plan.Refusal != "" {
-		return NewRewriteOutcome(RewriteReport{PlanState: plan.State, Refusal: plan.Refusal}, nil), nil
+		return NewRewriteOutcome(RewriteReport{PlanState: plan.State, Refusal: plan.Refusal, Targeting: plan.Targeting, Claim: plan.Claim, CalibrationAvailable: plan.CalibrationAvailable}, nil), nil
 	}
 	executed, err := r.Execute(ctx, ExecuteRequest{Plan: plan, Choice: request.Choice, Mode: request.Mode, Attempts: request.Attempts})
 	if err != nil {
@@ -1260,6 +1340,7 @@ func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutc
 	return NewRewriteOutcome(RewriteReport{
 		PlanState: plan.State, State: executed.State, Targets: executed.Targets,
 		Improved: executed.Improved, Refusal: executed.Refusal, Outcomes: executed.Outcomes,
+		Targeting: plan.Targeting, Claim: plan.Claim, CalibrationAvailable: plan.CalibrationAvailable,
 	}, executed.Bytes), nil
 }
 

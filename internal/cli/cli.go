@@ -478,6 +478,7 @@ FLAGS
                       which models you have.
   --local-endpoint U  Where ollama is listening.
   --attempts N        How many candidates to try per paragraph.
+  --paragraphs I,...  Rewrite these zero-based scored paragraph indices.
 
 EXIT CODES
   0  worked, nothing adverse      3  something failed: IO, store, provider
@@ -566,6 +567,7 @@ type invocation struct {
 	inPlace                        bool
 	attempts                       int
 	attemptsSet                    bool
+	paragraphs                     []int
 }
 
 func parse(args []string) (invocation, error) {
@@ -592,6 +594,14 @@ func parse(args []string) (invocation, error) {
 				return fmt.Errorf("flag %q requires an integer", "--attempts")
 			}
 			result.attempts, result.attemptsSet = n, true
+			return nil
+		},
+		"--paragraphs": func(v string) error {
+			paragraphs, err := parseParagraphs(v)
+			if err != nil {
+				return err
+			}
+			result.paragraphs = paragraphs
 			return nil
 		},
 	}
@@ -707,6 +717,29 @@ func parse(args []string) (invocation, error) {
 	return result, nil
 }
 
+func parseParagraphs(value string) ([]int, error) {
+	parts := strings.Split(value, ",")
+	indices := make([]int, 0, len(parts))
+	seen := make(map[int]bool, len(parts))
+	for _, part := range parts {
+		if part == "" || strings.TrimSpace(part) == "" {
+			return nil, errors.New("flag \"--paragraphs\" requires comma-separated non-negative decimal integers")
+		}
+		for _, r := range part {
+			if r < '0' || r > '9' {
+				return nil, errors.New("flag \"--paragraphs\" requires comma-separated non-negative decimal integers")
+			}
+		}
+		index, err := strconv.Atoi(part)
+		if err != nil || seen[index] {
+			return nil, errors.New("flag \"--paragraphs\" requires unique non-negative decimal integers")
+		}
+		seen[index] = true
+		indices = append(indices, index)
+	}
+	return indices, nil
+}
+
 type IndexResult struct {
 	Store             string             `json:"store"`
 	SnapshotID        string             `json:"snapshot_id"`
@@ -788,14 +821,17 @@ type ScoreResult struct {
 // RewriteResult is the rendered receipt. It intentionally contains no document
 // content: that belongs only at the publication destination.
 type RewriteResult struct {
-	Path         string                   `json:"path"`
-	PlanState    workflow.PlanState       `json:"plan_state"`
-	RewriteState workflow.RewriteState    `json:"rewrite_state"`
-	Targets      int                      `json:"targets"`
-	Improved     int                      `json:"improved"`
-	NotImproved  int                      `json:"not_improved"`
-	Refusal      string                   `json:"refusal,omitempty"`
-	Outcomes     []workflow.TargetOutcome `json:"outcomes"`
+	Path                 string                   `json:"path"`
+	PlanState            workflow.PlanState       `json:"plan_state"`
+	RewriteState         workflow.RewriteState    `json:"rewrite_state"`
+	Targets              int                      `json:"targets"`
+	Improved             int                      `json:"improved"`
+	NotImproved          int                      `json:"not_improved"`
+	Refusal              string                   `json:"refusal,omitempty"`
+	Outcomes             []workflow.TargetOutcome `json:"outcomes"`
+	Targeting            workflow.Targeting       `json:"selection"`
+	Claim                workflow.Claim           `json:"claim"`
+	CalibrationAvailable bool                     `json:"calibration_available"`
 }
 
 type EvalDiscrimination struct {
@@ -1042,8 +1078,9 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 	}
 	outcome, err := deps.Service.Rewrite(ctx, workflow.RewriteInput{
 		StartDir: cwd, StorePath: parsed.store, Register: parsed.register, Path: parsed.path,
-		Choice: workflow.ProviderChoice{Provider: parsed.provider, Model: parsed.model, Endpoint: parsed.endpoint},
-		Mode:   resolved, Attempts: parsed.attempts,
+		Paragraphs: parsed.paragraphs,
+		Choice:     workflow.ProviderChoice{Provider: parsed.provider, Model: parsed.model, Endpoint: parsed.endpoint},
+		Mode:       resolved, Attempts: parsed.attempts,
 	})
 	if err != nil {
 		diagnostic(deps.Stderr, err.Error())
@@ -1101,7 +1138,8 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult {
 	return RewriteResult{Path: path, PlanState: report.PlanState, RewriteState: report.State,
 		Targets: report.Targets, Improved: report.Improved, NotImproved: report.Targets - report.Improved,
-		Refusal: report.Refusal, Outcomes: append([]workflow.TargetOutcome(nil), report.Outcomes...)}
+		Refusal: report.Refusal, Outcomes: append([]workflow.TargetOutcome(nil), report.Outcomes...),
+		Targeting: report.Targeting, Claim: report.Claim, CalibrationAvailable: report.CalibrationAvailable}
 }
 
 // fields makes absence different from the zero value of a measurement.
@@ -1162,6 +1200,9 @@ func humanResult(result any) string {
 		f.AddInt("targets", x.Targets)
 		f.AddInt("improved", x.Improved)
 		f.AddInt("not-improved", x.NotImproved)
+		f.Add("selection", string(x.Targeting))
+		f.Add("claim", string(x.Claim))
+		f.AddBool("calibration_available", x.CalibrationAvailable)
 		return f.String()
 	default:
 		return ""

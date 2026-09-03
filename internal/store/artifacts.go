@@ -1247,7 +1247,7 @@ func invalidAttemptField(stored RewriteAttempt) string {
 	if !known(stored.ProviderID, llm.Providers()) || !known(stored.CurrentBand, eval.Bands()) || !known(stored.CandidateBand, eval.Bands()) || !known(stored.Rejection, rewrite.RejectionCodes()) || !finiteAll(stored.CurrentDistance, stored.CandidateDistance) {
 		return "decision metadata"
 	}
-	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "" || stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) {
+	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "") != (stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) {
 		return "decision state"
 	}
 	for _, identifier := range stored.PreserveIdentifiers {
