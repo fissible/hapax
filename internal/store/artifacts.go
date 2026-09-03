@@ -705,7 +705,7 @@ func invalidCalibration(calibration Calibration) string {
 		return "decision"
 	}
 	if calibration.Calibrated && calibration.Low > calibration.High {
-		return "decision"
+		return "boundary ordering"
 	}
 	return ""
 }
