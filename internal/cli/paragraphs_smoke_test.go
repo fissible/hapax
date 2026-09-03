@@ -289,6 +289,32 @@ func TestTheBinaryStillRefusesAnUncalibratedStoreWithoutNamedParagraphs(t *testi
 	if envelope.Reason != "uncalibrated" {
 		t.Errorf("reason = %q, want uncalibrated", envelope.Reason)
 	}
+
+	// And a refusal makes NO claim.
+	//
+	// Found by running the binary, which is where almost every defect that
+	// mattered in this project was found. Every other assertion here covers a
+	// completed run; on a refusal the command printed
+	//
+	//	rewrite refused reason=uncalibrated ... selection=automatic claim=calibrated-band
+	//
+	// Nothing was rewritten and no band was consulted, so both members state
+	// something that did not happen. The `fields` builder already draws the
+	// distinction this needs — EMPTY is not ZERO, `improved=0` is a
+	// measurement and must render, a claim that does not exist is an absence
+	// and must not — so the fix is to leave them unpopulated rather than to
+	// special-case the renderer.
+	//
+	// Asserted HERE and not against a fake service, because the fake supplies
+	// its own empty report and the defect is in what workflow copies onto the
+	// refusal path.
+	result := smokeResult(t, got.stdout, "rewrite")
+	if claim, present := result["claim"]; present && claim != "" {
+		t.Errorf("a refusal reported claim=%v; no rewrite happened, so no claim was made", claim)
+	}
+	if selection, present := result["selection"]; present && selection != "" {
+		t.Errorf("a refusal reported selection=%v; nothing was selected", selection)
+	}
 }
 
 // The gates are still the gates, proven through the real command rather than
