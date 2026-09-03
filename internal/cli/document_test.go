@@ -43,8 +43,13 @@ func TestTheRefusalVocabularyIsTheDeclaredSet(t *testing.T) {
 		// B2b-2b added stale-draft, and derives this list from
 		// workflow.Refusals() rather than restating it, so the next one cannot
 		// be forgotten.
+		//
+		// #81 added no-such-paragraph: a named paragraph outside the draft's
+		// range. It is a refusal rather than a usage error because the
+		// paragraph count is not known until the draft has been scored.
 		"ambiguous-reference", "insufficient-evidence", "local-only-forbids-provider",
-		"no-profile", "no-reference", "stale-draft", "stale-exemplars", "uncalibrated",
+		"no-profile", "no-reference", "no-such-paragraph", "stale-draft",
+		"stale-exemplars", "uncalibrated",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("reasons =\n%v\nwant\n%v", got, want)

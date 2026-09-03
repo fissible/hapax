@@ -222,6 +222,14 @@ func TestTheRewritePlanSurfaceIsExactlyThis(t *testing.T) {
 		{"ReleaseID", "string"},
 		{"DraftSnapshotID", "string"},
 		{"ParagraphsBelowFloor", "int"},
+		// #81. Targeting says who chose the paragraphs and Claim says which
+		// question the run answered; they are separate because an explicit
+		// selection on a calibrated store answers the distance question while a
+		// calibration happens to exist. CalibrationAvailable is that third
+		// fact, kept apart from the claim so neither can imply the other.
+		{"Targeting", "workflow.Targeting"},
+		{"Claim", "workflow.Claim"},
+		{"CalibrationAvailable", "bool"},
 		{"Segments", "[]workflow.PlannedSegment"},
 		{"Targets", "int"},
 		{"State", "workflow.PlanState"},

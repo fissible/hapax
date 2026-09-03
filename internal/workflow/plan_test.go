@@ -364,6 +364,10 @@ func TestTheDispositionVocabularyIsExactlyThis(t *testing.T) {
 		workflow.DispositionInRange,
 		workflow.DispositionUnmeasurable,
 		workflow.DispositionContainsExcisions,
+		// #81: under explicit selection, a paragraph the user did not name.
+		// Selection is decided first, so this is the whole reason such a
+		// paragraph was left alone — its band and its excisions are not.
+		workflow.DispositionNotSelected,
 	}
 	got := workflow.Dispositions()
 	if !reflect.DeepEqual(got, want) {
