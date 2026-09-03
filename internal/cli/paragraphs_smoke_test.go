@@ -67,10 +67,20 @@ func requireNoUsableCalibration(t *testing.T, binary, root string) {
 	defer os.Remove(draft)
 
 	scored := runBinary(t, binary, root, "--json", "score", draft, "--profile", "essays")
-	result := smokeResult(t, scored.stdout, "score")
-	if result["refusal"] != "uncalibrated" {
-		t.Fatalf("score on this corpus refused %v, want uncalibrated; the fixture is not uncalibrated",
-			result["refusal"])
+	// Read the ENVELOPE's reason, not a copy of it inside the payload. The
+	// status and reason are where a refusal is declared; a `refusal` member
+	// duplicated into result would be two renderings of one fact and two
+	// chances for them to disagree.
+	var envelope struct {
+		Status string `json:"status"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal([]byte(scored.stdout), &envelope); err != nil {
+		t.Fatalf("decode %q: %v", scored.stdout, err)
+	}
+	if envelope.Status != "refused" || envelope.Reason != "uncalibrated" {
+		t.Fatalf("score reports status %q reason %q, want refused/uncalibrated; "+
+			"the fixture is not uncalibrated", envelope.Status, envelope.Reason)
 	}
 }
 

@@ -816,7 +816,6 @@ type ScoreResult struct {
 	Calibrated           bool            `json:"calibrated"`
 	ParagraphsBelowFloor int             `json:"paragraphs_below_floor"`
 	Segments             []ScoredSegment `json:"segments"`
-	Refusal              string          `json:"refusal,omitempty"`
 }
 
 // RewriteResult is the rendered receipt. It intentionally contains no document
@@ -938,7 +937,7 @@ func evalResultFrom(r workflow.EvalResult) EvalResult {
 	return out
 }
 func scoreResultFrom(r workflow.ScoreResult) ScoreResult {
-	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphsBelowFloor: r.ParagraphsBelowFloor, Refusal: r.Refusal}
+	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
 	for _, s := range r.Segments {
 		x := ScoredSegment{Index: s.Index, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
 		for _, d := range s.Features {
