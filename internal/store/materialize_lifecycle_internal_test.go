@@ -57,21 +57,32 @@ func TestResettingTheTemplateCacheRemovesItsDirectory(t *testing.T) {
 	resetTemplateCache()
 	t.Cleanup(resetTemplateCache)
 
-	before := templateDirectories(t)
 	template, err := freshTemplate()
 	if err != nil {
 		t.Fatalf("freshTemplate: %v", err)
 	}
-	if built := templateDirectories(t); built <= before {
-		t.Fatalf("building a template created %d directories", built-before)
+	// This test names the directory it created rather than COUNTING the ones in
+	// os.TempDir(). The count was a cross-package race: `go test ./...` runs
+	// packages concurrently and internal/workflow builds its own templates in
+	// the same shared directory, so a count taken before and after could move
+	// for reasons that have nothing to do with this cache. It failed
+	// intermittently once internal/store's own tests grew long enough to widen
+	// the window.
+	//
+	// Naming the directory asserts the same property — the cache owns what it
+	// creates, and resetting takes the directory and not just the database
+	// inside — without depending on what any other package is doing.
+	directory := filepath.Dir(template)
+	if _, err := os.Stat(directory); err != nil {
+		t.Fatalf("building a template created no directory: %v", err)
 	}
 
 	resetTemplateCache()
 	if _, err := os.Stat(template); !os.IsNotExist(err) {
 		t.Errorf("the template file survived the reset: %v", err)
 	}
-	if after := templateDirectories(t); after != before {
-		t.Errorf("resetting left %d directories behind", after-before)
+	if _, err := os.Stat(directory); !os.IsNotExist(err) {
+		t.Errorf("the template DIRECTORY survived the reset: %v", err)
 	}
 }
 
