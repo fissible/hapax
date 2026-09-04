@@ -664,7 +664,11 @@ func TestANonASCIICapitalOpensAnEntity(t *testing.T) {
 	mustFail(t,
 		"The paper cites Émile on this point.",
 		"The paper cites an earlier writer on this point.",
-		preserve.ClassEntity, "Émile")
+		// #93: the reported item is the folded key. This is the eleventh call
+		// site asserting a surface entity item, and the one I missed twice —
+		// first by grepping for specific names, then by grepping for `"[A-Z]`,
+		// which does not match a non-ASCII capital.
+		preserve.ClassEntity, "émile")
 }
 
 // ---------------------------------------------------------------------------
