@@ -1426,6 +1426,43 @@ failure modes, stated:
   sentence-initial `The` is ignored. Without it the gate would either miss every entity that
   opens a sentence or demand that every sentence keep its first word.
 
+**Comparison is case-insensitive, and that is two separate steps** — issue #93. The
+proxy above names the WATCH SET, and the watch set is the folded union of the
+capitalised non-function tokens of *both* texts; taking it from the current text alone
+would leave every invention unwatched. Occurrences are then counted over **all lexical
+tokens** of each text, in either case.
+
+The first version of this took the watch set and the occurrence count from the same
+place, so a word was watched only where it was capitalised. Merging two sentences
+lower-cases the second one's opening word, and the gate reported `entity:lost` for a
+word still present. Measured over nine recorded attempts on a real corpus: eleven of
+thirteen preserve failures were this, and it refused every candidate a 20B model
+produced. Restructuring across a sentence boundary is most of what a prose rewrite
+does, so the guard was doing almost all of its work on false positives.
+
+- **Folded** means Unicode default case folding — `cases.Fold`, already used for the
+  function-word and negation lookups — and not `strings.ToLower`. `Straße` and
+  `STRASSE` are one item under folding and two under lower-casing. Every ASCII case
+  passes under either, so this is stated rather than left to an implementer's choice.
+- `Difference.Item` for an entity is the folded key, and the identifier digests that
+  key. A surface spelling would be underspecified as soon as two spellings contribute
+  to one folded difference — `Postgres` and `POSTGRES` collapsing to one mention is a
+  loss of one occurrence with no principled answer to which spelling to report.
+- **The cost.** Capitalisation-dependent meanings collapse: `Polish`/`polish`,
+  `Turkey`/`turkey`, `March`/`march`. This guard is therefore a coarse lexical-presence
+  proxy — it answers *is the word still here*, not *does it still mean the same thing*.
+  Case fidelity is not its job and would need another owner.
+- **The consequence for stored records.** Preserve identifiers for entity differences
+  are not comparable across this change: the same logical loss digests differently
+  before and after. Every identifier remains well formed and non-reversible. Acceptable
+  because `rewrite` had never shipped a release, so there were no audit records to
+  invalidate, and recorded here because it is a one-way door.
+
+The alternative — a sentence splitter, so capitalisation at position zero could be
+discounted — was rejected. It needs a splitter in a package that has none, and it
+trades these false positives for missed sentence-initial names, which is the dangerous
+direction.
+
 **URLs and quoted strings are matched over the text, not the token stream.** The tokenizer
 splits `https://example.com/x` into eleven tokens, so a URL does not exist as a token at all;
 it is found by scanning for `http://`, `https://` and `www.` and taking the run up to
