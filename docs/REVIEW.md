@@ -329,6 +329,16 @@ capitalised and not a function word — over-collects ordinary capitalised nouns
 the gate stricter, and under-collects lower-case entities, which is the dangerous direction
 and is a stated limitation rather than a defect to be discovered.
 
+A third failure mode was missed by that audit and found only by running the tool: the
+proxy named the watch set *and* supplied the occurrence count from the same place, so a
+word was watched only where it was capitalised. Merging two sentences lower-cases the
+second opening word and the gate called it lost. Eleven of thirteen preserve failures on
+a real corpus were that. Issue #93 separates the two — the watch set is the folded union
+of both texts, occurrences are counted over all lexical tokens in either case — at the
+stated cost that capitalisation-dependent meanings collapse. Writing a proxy's failure
+modes down is necessary and was not sufficient; this one only appeared under a real
+model on real prose.
+
 **The tokenizer shreds URLs**, which the design would have had this component find out the
 hard way. `https://example.com/x` becomes eleven tokens, so a URL is not a token and cannot be
 compared as one. Checked against the real tokenizer rather than assumed.

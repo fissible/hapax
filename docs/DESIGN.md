@@ -1414,8 +1414,11 @@ about it in advance, which is the argument for writing each proxy's cost down as
 
 **A named entity is a capitalised token that is not a function word.** There is no
 deterministic way to find named entities, so this is the proxy: a token whose first rune is
-upper case and whose lower-cased form is not in the declared function-word vocabulary. Its
-failure modes, stated:
+upper case and whose FOLDED form is not in the declared function-word vocabulary. Folded,
+not lower-cased — the code has always used `cases.Fold`, and the distinction is material:
+`Straße` folds to `strasse` and lower-cases to `straße`.
+
+Its failure modes, stated:
 
 - It **over-collects** — `Monday`, `January`, any capitalised ordinary noun. That makes the
   gate stricter, which is the safe direction.
@@ -1425,6 +1428,45 @@ failure modes, stated:
 - Excluding function words is what lets a sentence-initial `Anthropic` be seen while a
   sentence-initial `The` is ignored. Without it the gate would either miss every entity that
   opens a sentence or demand that every sentence keep its first word.
+
+**Comparison is case-insensitive, and that is two separate steps** — issue #93. The
+proxy above names the WATCH SET, and the watch set is the folded union of the
+capitalised non-function tokens of *both* texts; taking it from the current text alone
+would leave every invention unwatched. Occurrences are then counted over **all lexical
+tokens** of each text, in either case.
+
+The first version of this took the watch set and the occurrence count from the same
+place, so a word was watched only where it was capitalised. Merging two sentences
+lower-cases the second one's opening word, and the gate reported `entity:lost` for a
+word still present. Measured over nine recorded attempts on a real corpus: eleven of
+thirteen preserve failures were this, and it refused every candidate a 20B model
+produced. Restructuring across a sentence boundary is most of what a prose rewrite
+does, so the guard was doing almost all of its work on false positives.
+
+- **Folded** means Unicode default case folding — `cases.Fold`, already used for the
+  function-word and negation lookups — and not `strings.ToLower`. `Straße` and
+  `STRASSE` are one item under folding and two under lower-casing. Every ASCII case
+  passes under either, so this is stated rather than left to an implementer's choice.
+- `Difference.Item` for an entity is the folded key, and the identifier digests that
+  key. A surface spelling would be underspecified as soon as two spellings contribute
+  to one folded difference — `Postgres` and `POSTGRES` collapsing to one mention is a
+  loss of one occurrence with no principled answer to which spelling to report.
+- **The cost.** Capitalisation-dependent meanings collapse: `Polish`/`polish`,
+  `Turkey`/`turkey`, `March`/`march`. Precisely, this guard is a **case-folded
+  lexical-presence-and-multiplicity proxy over a capitalisation-derived watch set**.
+  *Is the word still here* is intuitive shorthand for that and not the contract: the
+  multiplicity half matters, since two mentions collapsing to one is a loss even though
+  the word is still present. Case fidelity is not its job and would need another owner.
+- **The consequence for stored records.** Preserve identifiers for entity differences
+  are not comparable across this change: the same logical loss digests differently
+  before and after. Every identifier remains well formed and non-reversible. Acceptable
+  because `rewrite` had never shipped a release, so there were no audit records to
+  invalidate, and recorded here because it is a one-way door.
+
+The alternative — a sentence splitter, so capitalisation at position zero could be
+discounted — was rejected. It needs a splitter in a package that has none, and it
+trades these false positives for missed sentence-initial names, which is the dangerous
+direction.
 
 **URLs and quoted strings are matched over the text, not the token stream.** The tokenizer
 splits `https://example.com/x` into eleven tokens, so a URL does not exist as a token at all;

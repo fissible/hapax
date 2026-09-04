@@ -133,6 +133,7 @@ func Check(current, candidate string) (Result, error) {
 
 	currentItems := extract(currentDoc)
 	candidateItems := extract(candidateDoc)
+	currentItems[ClassEntity], candidateItems[ClassEntity] = entityItems(currentDoc, candidateDoc)
 	differences := make([]Difference, 0)
 	for _, class := range classes {
 		differences = append(differences, differencesFor(class, currentItems[class], candidateItems[class])...)
@@ -184,10 +185,6 @@ func extract(doc *text.Document) map[Class]map[string]int {
 			if negationSet[folded] {
 				items[ClassNegation][folded]++
 			}
-			first, _ := utf8.DecodeRuneInString(token.Text)
-			if unicode.IsUpper(first) && !functionWordSet[folded] {
-				items[ClassEntity][token.Text]++
-			}
 		}
 	}
 	for _, url := range urls(string(doc.Raw())) {
@@ -197,6 +194,38 @@ func extract(doc *text.Document) map[Class]map[string]int {
 		items[ClassQuote][quote]++
 	}
 	return items
+}
+
+func entityItems(current, candidate *text.Document) (map[string]int, map[string]int) {
+	watch := make(map[string]bool)
+	for _, doc := range []*text.Document{current, candidate} {
+		for _, token := range doc.Tokens() {
+			if !token.Lexical {
+				continue
+			}
+			folded := fold.String(token.Text)
+			first, _ := utf8.DecodeRuneInString(token.Text)
+			if unicode.IsUpper(first) && !functionWordSet[folded] {
+				watch[folded] = true
+			}
+		}
+	}
+
+	count := func(doc *text.Document) map[string]int {
+		items := make(map[string]int)
+		for _, token := range doc.Tokens() {
+			if !token.Lexical {
+				continue
+			}
+			folded := fold.String(token.Text)
+			if watch[folded] {
+				items[folded]++
+			}
+		}
+		return items
+	}
+
+	return count(current), count(candidate)
 }
 
 func vocabularySet(words []string) map[string]bool {

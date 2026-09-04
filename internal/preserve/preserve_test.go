@@ -138,7 +138,8 @@ func TestEachClassIsCheckedInBothDirections(t *testing.T) {
 		{
 			name: "a named entity", class: preserve.ClassEntity,
 			with: "The paper from Anthropic was reviewed.", without: "The paper from the lab was reviewed.",
-			item: "Anthropic",
+			// #93: entity items are folded, so the reported item is the canonical key.
+			item: "anthropic",
 		},
 		{
 			name: "a negation", class: preserve.ClassNegation,
@@ -246,7 +247,7 @@ func TestASentenceInitialEntityIsSeen(t *testing.T) {
 	mustFail(t,
 		"Anthropic published the result last year.",
 		"The lab published the result last year.",
-		preserve.ClassEntity, "Anthropic")
+		preserve.ClassEntity, "anthropic")
 }
 
 // And a sentence-initial function word is not an entity, so ordinary rewording
@@ -264,7 +265,7 @@ func TestTheEntityProxyOverCollects(t *testing.T) {
 	mustFail(t,
 		"The meeting was moved to Monday.",
 		"The meeting was moved to the start of the week.",
-		preserve.ClassEntity, "Monday")
+		preserve.ClassEntity, "monday")
 }
 
 // The under-collecting failure, which is the dangerous one and is therefore
@@ -588,7 +589,7 @@ func TestEveryClassComparesMultisets(t *testing.T) {
 		{
 			name: "entities", class: preserve.ClassEntity,
 			two: "Anthropic replied to Anthropic in public.", one: "Anthropic replied to the lab in public.",
-			item: "Anthropic",
+			item: "anthropic",
 		},
 		{
 			name: "negations", class: preserve.ClassNegation,
@@ -663,7 +664,11 @@ func TestANonASCIICapitalOpensAnEntity(t *testing.T) {
 	mustFail(t,
 		"The paper cites Émile on this point.",
 		"The paper cites an earlier writer on this point.",
-		preserve.ClassEntity, "Émile")
+		// #93: the reported item is the folded key. This is the eleventh call
+		// site asserting a surface entity item, and the one I missed twice —
+		// first by grepping for specific names, then by grepping for `"[A-Z]`,
+		// which does not match a non-ASCII capital.
+		preserve.ClassEntity, "émile")
 }
 
 // ---------------------------------------------------------------------------
@@ -779,8 +784,8 @@ func TestTheReportIsOrdered(t *testing.T) {
 	want := []key{
 		{preserve.ClassNumber, "5", preserve.DirectionLost},
 		{preserve.ClassNumber, "7", preserve.DirectionInvented},
-		{preserve.ClassEntity, "Anthropic", preserve.DirectionLost},
-		{preserve.ClassEntity, "Bureau", preserve.DirectionInvented},
+		{preserve.ClassEntity, "anthropic", preserve.DirectionLost},
+		{preserve.ClassEntity, "bureau", preserve.DirectionInvented},
 	}
 	if !reflect.DeepEqual(order, want) {
 		t.Errorf("report order =\n%+v\nwant\n%+v", order, want)
@@ -975,7 +980,7 @@ func TestDirectionIsCorrectForEveryClass(t *testing.T) {
 		item  string
 	}{
 		{name: "number", class: preserve.ClassNumber, with: "It took 5 tries.", item: "5"},
-		{name: "entity", class: preserve.ClassEntity, with: "It named Anthropic once.", item: "Anthropic"},
+		{name: "entity", class: preserve.ClassEntity, with: "It named Anthropic once.", item: "anthropic"},
 		{name: "negation", class: preserve.ClassNegation, with: "It was not settled.", item: "not"},
 		{name: "url", class: preserve.ClassURL, with: "It cited https://example.com/a here.", item: "https://example.com/a"},
 		{name: "quote", class: preserve.ClassQuote, with: "It said \"the thing\" plainly.", item: "\"the thing\""},
@@ -1032,8 +1037,8 @@ func TestTheReportIsOrderedAcrossEveryClass(t *testing.T) {
 	want := []key{
 		{preserve.ClassNumber, "5", preserve.DirectionLost},
 		{preserve.ClassNumber, "7", preserve.DirectionInvented},
-		{preserve.ClassEntity, "Anthropic", preserve.DirectionLost},
-		{preserve.ClassEntity, "Bureau", preserve.DirectionInvented},
+		{preserve.ClassEntity, "anthropic", preserve.DirectionLost},
+		{preserve.ClassEntity, "bureau", preserve.DirectionInvented},
 		{preserve.ClassNegation, "not", preserve.DirectionLost},
 		{preserve.ClassNegation, "never", preserve.DirectionInvented},
 		{preserve.ClassURL, "https://example.com/a", preserve.DirectionLost},
@@ -1180,7 +1185,7 @@ func TestACapitalisedNegationIsAlsoAnEntity(t *testing.T) {
 		switch {
 		case difference.Class == preserve.ClassNegation && difference.Item == "nothing":
 			negation = true
-		case difference.Class == preserve.ClassEntity && difference.Item == "Nothing":
+		case difference.Class == preserve.ClassEntity && difference.Item == "nothing":
 			entity = true
 		}
 	}
@@ -1207,7 +1212,18 @@ func TestTheIdentifierDigestIsPinned(t *testing.T) {
 		want               string
 	}{
 		{"It took 5 tries.", "It took tries.", "preserve-v1:number:lost:3d4c981bf761d9b8"},
-		{"alpha omega", "alpha Bureau omega", "preserve-v1:entity:invented:3f4c74bbed3b8787"},
+		// #93 changed this value. Entity items are folded before comparison, so
+		// the digest preimage is now `bureau` rather than `Bureau`.
+		//
+		// The consequence is worth knowing: preserve identifiers for ENTITY
+		// differences are not comparable across that change. An identifier
+		// recorded before it and one recorded after it describe the same logical
+		// loss with different digests. Every identifier remains well formed and
+		// non-reversible; they simply no longer collide. Acceptable because
+		// `rewrite` has never shipped a release, so there are no audit records in
+		// the wild to invalidate — but it is a one-way door and belongs on the
+		// record rather than in a diff.
+		{"alpha omega", "alpha Bureau omega", "preserve-v1:entity:invented:7f1cc0d8aee219dd"},
 		{"alpha don’t omega", "alpha omega", "preserve-v1:negation:lost:e5e4a9f9def6b49d"},
 		{"alpha \"one\" omega", "alpha omega", "preserve-v1:quote:lost:8979dd3e31925881"},
 		{"alpha https://example.com/a omega", "alpha omega", "preserve-v1:url:lost:4d897f4d66e152ae"},
@@ -1244,10 +1260,10 @@ func TestAPossessiveIsADifferentEntity(t *testing.T) {
 		if difference.Class != preserve.ClassEntity {
 			continue
 		}
-		if difference.Item == "Anthropic" && difference.Direction == preserve.DirectionLost {
+		if difference.Item == "anthropic" && difference.Direction == preserve.DirectionLost {
 			lost = true
 		}
-		if difference.Item == "Anthropic's" && difference.Direction == preserve.DirectionInvented {
+		if difference.Item == "anthropic's" && difference.Direction == preserve.DirectionInvented {
 			invented = true
 		}
 	}
