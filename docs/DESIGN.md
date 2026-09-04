@@ -1414,8 +1414,11 @@ about it in advance, which is the argument for writing each proxy's cost down as
 
 **A named entity is a capitalised token that is not a function word.** There is no
 deterministic way to find named entities, so this is the proxy: a token whose first rune is
-upper case and whose lower-cased form is not in the declared function-word vocabulary. Its
-failure modes, stated:
+upper case and whose FOLDED form is not in the declared function-word vocabulary. Folded,
+not lower-cased — the code has always used `cases.Fold`, and the distinction is material:
+`Straße` folds to `strasse` and lower-cases to `straße`.
+
+Its failure modes, stated:
 
 - It **over-collects** — `Monday`, `January`, any capitalised ordinary noun. That makes the
   gate stricter, which is the safe direction.
@@ -1449,9 +1452,11 @@ does, so the guard was doing almost all of its work on false positives.
   to one folded difference — `Postgres` and `POSTGRES` collapsing to one mention is a
   loss of one occurrence with no principled answer to which spelling to report.
 - **The cost.** Capitalisation-dependent meanings collapse: `Polish`/`polish`,
-  `Turkey`/`turkey`, `March`/`march`. This guard is therefore a coarse lexical-presence
-  proxy — it answers *is the word still here*, not *does it still mean the same thing*.
-  Case fidelity is not its job and would need another owner.
+  `Turkey`/`turkey`, `March`/`march`. Precisely, this guard is a **case-folded
+  lexical-presence-and-multiplicity proxy over a capitalisation-derived watch set**.
+  *Is the word still here* is intuitive shorthand for that and not the contract: the
+  multiplicity half matters, since two mentions collapsing to one is a loss even though
+  the word is still present. Case fidelity is not its job and would need another owner.
 - **The consequence for stored records.** Preserve identifiers for entity differences
   are not comparable across this change: the same logical loss digests differently
   before and after. Every identifier remains well formed and non-reversible. Acceptable
