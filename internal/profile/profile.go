@@ -25,7 +25,7 @@ const notReadyMinimumsNotDerived = "profile minimums are declared, not derived"
 func NotReadyReasons() []string { return []string{notReadyMinimumsNotDerived} }
 
 func DefaultRequirements() Requirements {
-	return Requirements{MinDocuments: 3, MinParagraphs: 30, MinObservationsPerFeature: 30, MinParagraphLexicalTokens: 1}
+	return Requirements{MinDocuments: 3, MinParagraphs: 30, MinObservationsPerFeature: 30, MinParagraphLexicalTokens: 10}
 }
 
 // Unit identifies the source unit from which each feature vector was made.

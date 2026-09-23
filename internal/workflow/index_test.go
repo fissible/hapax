@@ -333,9 +333,15 @@ func TestOneParagraphFloorGovernsBothTheGraphAndTheProfile(t *testing.T) {
 	}
 
 	// And the raised floor excluded something, or agreement above would prove
-	// nothing: at the default floor of one, every short paragraph counts too.
+	// nothing. The control is pinned at a floor of ONE rather than at the
+	// default: #92 raised the default to ten, at which this fixture's short
+	// paragraphs are already excluded and raising to twelve excludes nothing
+	// further. Pinning it also makes this test independent of whatever the
+	// default becomes next.
 	loose := mixedCorpusOf(t, 60)
-	relaxed := workflow.New(profile.DefaultRequirements(), deviation.DefaultMinSegments())
+	looseRequirements := profile.DefaultRequirements()
+	looseRequirements.MinParagraphLexicalTokens = 1
+	relaxed := workflow.New(looseRequirements, deviation.DefaultMinSegments())
 	looseResult, err := relaxed.Index(ctx(), indexRequest(loose))
 	if err != nil {
 		t.Fatalf("Index at the default floor: %v", err)
