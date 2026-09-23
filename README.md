@@ -8,17 +8,15 @@ moved *toward you* rather than merely away from the model.
 
 The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 
-> **Status: pre-alpha.** Twelve library components are built and tested: text
-> admission and structure, the tell linter, corpus indexing, feature extraction,
-> the author profile, the calibration harness and its release gates, scoring,
-> exemplar selection, the semantic-preservation gate, document reassembly, the
-> rewrite loop, the model providers, and the artifact store.
+> **Status: pre-release.** No version is tagged yet. All six commands below
+> run; fourteen of fifteen library components are built and tested, and the
+> CLI that was the last of them is now complete.
 >
-> **Of the commands below, only `hapax tells` runs.** It is the first slice of
-> the CLI, which also settled the exit codes, the output document and the
-> `--local-only` mode resolution the rest will use. The other five are the
-> planned interface rather than working ones. See [PROJECT.md](PROJECT.md) for
-> exactly what exists.
+> What is still out of reach for most people is **calibration**. A band claim
+> needs roughly 600 documents of your own writing plus a distractor corpus, so
+> until you have that, `score` reports distances without a band and `rewrite`
+> needs you to name paragraphs yourself. See [PROJECT.md](PROJECT.md) for the
+> component-by-component state.
 
 ---
 
@@ -46,6 +44,12 @@ So `hapax` tiers its features by the sample each one needs, scores short passage
 the measures that survive at that length, and returns **`insufficient evidence`** rather
 than a fabricated score when the sample is too small.
 
+It applies per paragraph too. A paragraph below the profile's lexical floor is not
+scored at all, and `score` names it — its location in your file, its token count, and
+the floor it failed — rather than reporting a number nobody should act on. A one-word
+paragraph once scored as the *most* deviant passage in a document, which is how that
+floor came to exist.
+
 The same honesty applies to the profile as a whole. `hapax eval` holds out whole documents
 from your corpus, tests whether the profile can actually distinguish your writing from
 other people's, and publishes the number. Below a predeclared floor, the profile is marked
@@ -59,13 +63,11 @@ one of them.
 `score`, `tells` and `eval` make no network calls and require no model:
 
 ```bash
-hapax index ~/writing/ --profile essays  # build a profile from your own work
-hapax eval                               # how well does it actually distinguish you?
-hapax score draft.md                     # per-passage bands and feature deltas
-hapax tells draft.md                     # deterministic AI-tell linter
+hapax tells draft.md                     # deterministic AI-tell linter, needs nothing
+hapax index ./writing --profile essays   # build a profile from your own work
+hapax eval --profile essays --distractors ./others   # can it actually distinguish you?
+hapax score draft.md --profile essays    # per-paragraph distance, and what was skipped
 ```
-
-*(Planned. None of these commands exists yet.)*
 
 Only `hapax rewrite` needs a model. It uses a local Ollama model by default; set an API key
 to use a stronger one.

@@ -456,11 +456,13 @@ COMMANDS
            else's. Needs a directory of other people's prose.
              hapax eval --profile essays --distractors ./others
 
-  score    Measure how far each paragraph of a draft sits from your profile.
+  score    Measure how far each paragraph of a draft sits from your profile,
+           and say which paragraphs were too short to measure at all.
              hapax score draft.md --profile essays
 
   rewrite  Rewrite the paragraphs that drift, through a local or cloud model.
-             hapax rewrite draft.md --out revised.md --profile essays                --provider ollama --model llama3
+             hapax rewrite draft.md --out revised.md --profile essays \
+               --provider ollama --model llama3
 
 FLAGS
   --profile NAME      Which profile to use. Required by most commands.
@@ -486,13 +488,25 @@ EXIT CODES
   2  invalid invocation
 
 BEFORE YOU START
-  tells works immediately on any file.
+  tells works immediately on any file. Everything else needs a profile:
+  index a directory of your own writing first.
 
-  score and rewrite need a CALIBRATED profile, and calibration is expensive:
-  roughly 600 documents of your own writing plus a directory of other people's,
-  because a band claim carries a stated error rate and hapax will not invent
-  one. Below that threshold both commands refuse with reason=uncalibrated.
-  See issue #81.
+  What calibration buys is the BAND — "in-range", "drifting", "not-you" —
+  because a band carries a stated error rate and hapax will not invent one.
+  It is expensive: roughly 600 documents of your own writing plus a directory
+  of other people's.
+
+  Without it you still get measurements, and the commands differ:
+
+    score     reports every paragraph's distance and which paragraphs were
+              skipped, then withholds the band and exits 4 with
+              reason=uncalibrated.
+
+    rewrite   refuses automatic targeting, because choosing what to rewrite
+              is what the band is for. Name the paragraphs yourself with
+              --paragraphs and it runs, reporting selection=explicit and
+              claim=closer-by-distance -- a weaker claim than a band, and an
+              honest one.
 `
 
 func Run(ctx context.Context, args []string, deps Deps) int {
