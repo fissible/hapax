@@ -196,6 +196,26 @@ Calibration is a release gate, not a report. Ablation of the feature set is expl
   confidence intervals. Discrimination alone cannot justify a band label.
 - **Published minimums.** Minimum corpus size, minimum segment size per tier, and the
   confidence intervals ship in the README as measured numbers, not claims.
+
+  **Implementation status.** The current default paragraph admission floor is **ten
+  lexical tokens**, a declared interim bound — not the per-tier derivation above. At a
+  fixed denominator N >= 10, a one-count change in a per-token rate or density moves it
+  by at most 0.1. That is a chosen resolution constraint, not a measured reliability
+  threshold, and it guarantees nothing for any individual feature.
+  `ParagraphFloorDerived` remains **false**; the per-feature and per-tier derivation is
+  still outstanding.
+
+  It replaced a floor of **one**, at which a one-token paragraph was a measurement
+  unit: "Yes." scored 1.5316 against a real fifty-document profile — the highest
+  distance in its document — and `rewrite` offered it as the most promising target.
+  `paragraphs_below_floor` was also unreachable at that value, which is issue #64.
+
+  One floor governs fitting, reference construction and scoring, so all three admit the
+  same population. Its cost: short paragraphs are excluded from the profile's own means
+  and variances, which can move the statistics and change corpus eligibility. Existing
+  profiles retain their stored floor — `score` and `rewrite` read the persisted value,
+  never the runner's default — so adopting a new default requires re-indexing and
+  regenerating dependent artifacts.
 - **Two release gates, one per metric.**
   - *Discrimination floor:* a predeclared minimum AUC. Below it the profile is
     `uncalibrated` — `score` emits the raw distance and per-feature deltas but **no band**,
