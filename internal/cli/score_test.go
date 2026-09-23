@@ -3,6 +3,8 @@ package cli_test
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -167,10 +169,16 @@ func TestTheScorePayloadIsPerSegmentWithNoAggregate(t *testing.T) {
 	// The EXACT key set, not a denylist. A denylist of aggregate-sounding names
 	// is routed around by the next one nobody thought of — score_summary,
 	// worst_distance — and the allowed shape is the actual contract.
+	//
+	// #98 added `paragraph_floor` and `skipped`. Neither is the thing this guard
+	// exists to refuse: the floor is a PARAMETER of the run, not a measurement
+	// of the draft, and `skipped` is per paragraph — a list of the paragraphs
+	// that could not be measured and where to find them. Adding them here is a
+	// deliberate widening, not a hole.
 	want := map[string]bool{
 		"path": true, "store": true, "profile_id": true, "reference_id": true,
 		"release_id": true, "calibrated": true, "paragraphs_below_floor": true,
-		"segments": true,
+		"segments": true, "paragraph_floor": true, "skipped": true,
 	}
 	for name := range payload {
 		if !want[name] {
@@ -391,6 +399,95 @@ func TestEveryScoreShapeTheWorkflowProducesRenders(t *testing.T) {
 
 // The human line says what a person asked: which bands came back, and how many
 // paragraphs were not measured at all.
+// The DEFAULT rendering carries the floor and the skipped paragraphs too.
+//
+// Everything else asserted about #98's surface runs with `--json`, so deleting
+// the floor and the paragraph list from the human renderer left all three
+// suites green while plain `hapax score draft.md` printed only
+// `score ok path=draft.md bands=in-range,in-range below-floor=2`. That is the
+// invocation almost everyone types, and `below-floor=2` on its own is the exact
+// unactionable output this issue exists to fix.
+//
+// The format asserted is the existing `key=value` field style: each skipped
+// paragraph as `offset+length:tokens`, each scored segment as
+// `index@offset+length`. Which format is a choice and the implementer may argue
+// it; that every one of those values appears at all is not.
+// fieldsOf splits a rendered `key=value key=value` line into whole fields, so a
+// comparison is against the entire value rather than a prefix of it.
+func fieldsOf(line string) map[string]string {
+	out := map[string]string{}
+	for _, field := range strings.Fields(line) {
+		key, value, found := strings.Cut(field, "=")
+		if found {
+			out[key] = value
+		}
+	}
+	return out
+}
+
+func TestTheDefaultRenderingCarriesTheFloorAndTheSkippedParagraphs(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		result workflow.ScoreResult
+	}{
+		{"some skipped", cleanScore()},
+		{"all skipped", unmeasurableScore()},
+		// Uncalibrated too. Wrapping the human floor and skipped rendering in
+		// `if x.Calibrated` passed all three suites, leaving an uncalibrated run
+		// printing only `score refused reason=uncalibrated path=draft.md
+		// below-floor=1` — and uncalibrated is the state every profile is in
+		// until eval has run.
+		{"uncalibrated", uncalibratedScore()},
+		// Adverse too, both bands. Returning from the human renderer before
+		// adding floor/skipped/scored whenever a band is drifting or not-you
+		// passed the whole suite — and an adverse result is exactly when a
+		// person needs to find the paragraph that was flagged.
+		{"adverse drifting", adverseScore("drifting")},
+		{"adverse not-you", adverseScore("not-you")},
+		{"nothing skipped", cleanScoreNoSkips()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := runWith(t, &fakeService{scoreResult: c.result}, "score", "draft.md")
+
+			// Fields are PARSED and compared whole, never searched for as
+			// substrings. `strings.Contains` accepted a renderer that multiplied
+			// every number by ten: "floor=100" contains "floor=10", and "64+90"
+			// contains "64+9", so all three suites stayed green while every value
+			// printed was wrong.
+			fields := fieldsOf(got.stdout)
+
+			wantFloor := strconv.Itoa(c.result.ParagraphFloor)
+			if fields["floor"] != wantFloor {
+				t.Errorf("floor = %q, want %q: %q", fields["floor"], wantFloor, got.stdout)
+			}
+			// Each skipped paragraph carries its TOKEN COUNT as well as its span,
+			// and every scored segment carries its (index, span). Asserting only
+			// the floor and the skipped spans left a renderer that dropped both
+			// passing the whole suite, printing a line from which a reader still
+			// could not locate a scored index or see why a paragraph was cut.
+			spans := make([]string, 0, len(c.result.Skipped))
+			for _, sk := range c.result.Skipped {
+				spans = append(spans, fmt.Sprintf("%d+%d:%d", sk.Offset, sk.Length, sk.LexicalTokens))
+			}
+			wantSkipped := strings.Join(spans, ",")
+			if fields["skipped"] != wantSkipped {
+				t.Errorf("skipped = %q, want %q: %q",
+					fields["skipped"], wantSkipped, got.stdout)
+			}
+
+			scored := make([]string, 0, len(c.result.Segments))
+			for _, sg := range c.result.Segments {
+				scored = append(scored, fmt.Sprintf("%d@%d+%d", sg.Index, sg.Offset, sg.Length))
+			}
+			wantScored := strings.Join(scored, ",")
+			if fields["scored"] != wantScored {
+				t.Errorf("scored = %q, want %q: %q",
+					fields["scored"], wantScored, got.stdout)
+			}
+		})
+	}
+}
+
 func TestTheHumanScoreRenderingSaysWhatCameBack(t *testing.T) {
 	got := runWith(t, &fakeService{scoreResult: adverseScore("not-you")}, "score", "draft.md")
 	for _, wanted := range []string{"score adverse", "draft.md", "not-you"} {
@@ -420,18 +517,45 @@ func cleanScore() workflow.ScoreResult {
 	return workflow.ScoreResult{
 		StorePath: "/w/.hapax/hapax.sqlite3", Path: "draft.md",
 		ProfileID: "pro", ReferenceID: "ref", ReleaseID: "rel", Calibrated: true,
-		ParagraphsBelowFloor: 1,
+		ParagraphsBelowFloor: 2,
+		// #98: non-zero values, because a key-presence check alone passes a
+		// mapping that drops every new value. Removing the mappings entirely
+		// left the CLI score tests green.
+		ParagraphFloor: 10,
+		// TWO entries, distinct. One passed a mapping that serialized only the
+		// first and truncated the rest.
+		Skipped: []workflow.SkippedParagraph{
+			{Offset: 64, Length: 9, LexicalTokens: 2},
+			{Offset: 150, Length: 4, LexicalTokens: 1},
+		},
 		Segments: []workflow.ScoredSegment{
-			scoredSegment(0, "in-range", 0.31, -0.22, "below"),
-			scoredSegment(1, "in-range", 0.44, 0.18, "above"),
+			withSpan(scoredSegment(0, "in-range", 0.31, -0.22, "below"), 0, 63),
+			withSpan(scoredSegment(1, "in-range", 0.44, 0.18, "above"), 75, 71),
 		},
 	}
+}
+
+// cleanScoreNoSkips is a draft where NOTHING fell below the floor.
+//
+// Every other fixture has skipped paragraphs, so wrapping the whole new human
+// rendering in `if len(x.Skipped) > 0` passed the entire suite while an adverse
+// draft with no short paragraphs printed
+// `score adverse path=draft.md bands=not-you,in-range below-floor=0` — every
+// scored location gone, in the one case where a reader has the most to act on
+// and the fewest excuses for the tool to give them nothing.
+func cleanScoreNoSkips() workflow.ScoreResult {
+	result := cleanScore()
+	result.Skipped, result.ParagraphsBelowFloor = nil, 0
+	return result
 }
 
 func adverseScore(band string) workflow.ScoreResult {
 	result := cleanScore()
 	result.Adverse = true
-	result.Segments[0] = scoredSegment(0, band, 1.17, 1.41, "above")
+	// The span is preserved. Replacing the segment without it left offset and
+	// length at zero, which failed #98's tuple assertion against a CORRECT
+	// implementation — a fixture defect, not a finding.
+	result.Segments[0] = withSpan(scoredSegment(0, band, 1.17, 1.41, "above"), 0, 63)
 	return result
 }
 
@@ -441,6 +565,14 @@ func uncalibratedScore() workflow.ScoreResult {
 	result := cleanScore()
 	result.Calibrated, result.ReleaseID = false, ""
 	result.Refusal = workflow.RefusalUncalibrated
+	// A DIFFERENT floor, and its own skipped set. Sharing cleanScore()'s 10 makes
+	// a hardcoded `out.ParagraphFloor = 10` indistinguishable from the mapping,
+	// and sharing its list hides a drop that only happens when !Calibrated.
+	result.ParagraphFloor = 7
+	result.ParagraphsBelowFloor = 1
+	result.Skipped = []workflow.SkippedParagraph{
+		{Offset: 200, Length: 11, LexicalTokens: 3},
+	}
 	for i := range result.Segments {
 		result.Segments[i].Band = workflow.BandOutcome{
 			Distance: result.Segments[i].Distance.Value, Reason: "uncalibrated",
@@ -472,6 +604,21 @@ func unmeasurableScore() workflow.ScoreResult {
 		StorePath: "/w/.hapax/hapax.sqlite3", Path: "draft.md",
 		ProfileID: "pro", ReferenceID: "ref", ReleaseID: "rel", Calibrated: true,
 		Refusal: workflow.RefusalInsufficientEvidence,
+		// #98: the ZERO-SURVIVOR case carries the floor and the list too.
+		//
+		// A refusal renders its result payload like any other outcome
+		// (scoreResultFrom runs on every path), and this is the outcome where
+		// naming the skipped paragraphs matters MOST: nothing was measured, so
+		// "which ones, and against what floor" is the entire answer a person
+		// gets. Clearing both fields whenever there are no segments left all
+		// three suites green, because every other fixture has a survivor.
+		ParagraphFloor:       10,
+		ParagraphsBelowFloor: 3,
+		Skipped: []workflow.SkippedParagraph{
+			{Offset: 0, Length: 4, LexicalTokens: 1},
+			{Offset: 6, Length: 9, LexicalTokens: 2},
+			{Offset: 17, Length: 7, LexicalTokens: 2},
+		},
 	}
 }
 
@@ -656,4 +803,132 @@ func TestInsufficientEvidenceKeepsWhatItResolved(t *testing.T) {
 	if segments := string(payload["segments"]); segments != "null" {
 		t.Errorf("segments = %s on a refusal that measured nothing", segments)
 	}
+}
+
+// #98's values reach the envelope, not just its keys.
+//
+// The key-set test above requires `paragraph_floor` and `skipped` to be present.
+// Presence is not enough: removing every new value mapping — leaving
+// `paragraph_floor: 0` and `skipped: null` — left the CLI score tests green.
+// So this decodes them and checks what they carry.
+// The reporting surface survives serialization, over every shape the CLI can be
+// handed.
+//
+// Table-driven rather than one fixture, because four separate mutations proved
+// that a single fixture only ever guards a single configuration:
+//
+//   - clearing the skipped list and zeroing the floor when !Calibrated
+//   - zeroing every survivor's offset and length when !Calibrated
+//   - hardcoding the floor to 10 rather than mapping the persisted value
+//
+// each passed the entire CLI suite while this test exercised only cleanScore().
+// The uncalibrated case is the one every profile hits until eval has run, and a
+// hardcoded floor is invisible to any fixture that happens to use that number.
+func TestTheScoreEnvelopeCarriesTheSkippedParagraphsAndFloor(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		result workflow.ScoreResult
+	}{
+		{"calibrated", cleanScore()},
+		{"uncalibrated", uncalibratedScore()},
+		{"adverse", adverseScore("not-you")},
+		{"all skipped", unmeasurableScore()},
+		// And nothing skipped, in JSON as well as in the human line. Zeroing
+		// every serialized segment span when len(Skipped) == 0 passed all three
+		// suites: the human case added for round 11 does not reach the
+		// serializer.
+		{"nothing skipped", cleanScoreNoSkips()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			assertEnvelopeReporting(t, c.result)
+		})
+	}
+}
+
+// assertEnvelopeReporting decodes the envelope and checks the floor, every
+// skipped tuple and every surviving (index, span) tuple against the result the
+// service returned.
+func assertEnvelopeReporting(t *testing.T, result workflow.ScoreResult) {
+	t.Helper()
+	got := runWith(t, &fakeService{scoreResult: result}, "--json", "score", "draft.md")
+
+	var payload struct {
+		ParagraphFloor       int `json:"paragraph_floor"`
+		ParagraphsBelowFloor int `json:"paragraphs_below_floor"`
+		// Offsets decode as POINTERS so an ABSENT field is distinguishable from
+		// a present zero. Into an int they are the same value, and adding
+		// `omitempty` to the CLI's offset fields passed `go test ./...` while
+		// dropping the location of every paragraph that starts at byte zero —
+		// which is the first paragraph of every document.
+		//
+		// `index` is a pointer for the same reason, and was missed when the
+		// offsets were first fixed: `json:"index,omitempty"` drops the FIRST
+		// scored paragraph's index, which is the half of the tuple that
+		// `--paragraphs` consumes.
+		Skipped []struct {
+			Offset        *int `json:"offset"`
+			Length        int  `json:"length"`
+			LexicalTokens int  `json:"lexical_tokens"`
+		} `json:"skipped"`
+		Segments []struct {
+			Index  *int `json:"index"`
+			Offset *int `json:"offset"`
+			Length int  `json:"length"`
+		} `json:"segments"`
+	}
+	if err := json.Unmarshal(decode(t, got.stdout).Result, &payload); err != nil {
+		t.Fatalf("decoding result: %v", err)
+	}
+
+	if payload.ParagraphFloor != result.ParagraphFloor {
+		t.Errorf("paragraph_floor = %d, want %d", payload.ParagraphFloor, result.ParagraphFloor)
+	}
+	if payload.ParagraphsBelowFloor != result.ParagraphsBelowFloor {
+		t.Errorf("paragraphs_below_floor = %d, want %d",
+			payload.ParagraphsBelowFloor, result.ParagraphsBelowFloor)
+	}
+	if len(payload.Skipped) != len(result.Skipped) {
+		t.Fatalf("skipped carries %d entries, want %d", len(payload.Skipped), len(result.Skipped))
+	}
+	for i, want := range result.Skipped {
+		got := payload.Skipped[i]
+		if got.Offset == nil {
+			t.Errorf("skipped %d carries no offset field at all", i)
+			continue
+		}
+		if *got.Offset != want.Offset || got.Length != want.Length ||
+			got.LexicalTokens != want.LexicalTokens {
+			t.Errorf("skipped %d = {%d,%d,%d}, want {%d,%d,%d}", i,
+				*got.Offset, got.Length, got.LexicalTokens,
+				want.Offset, want.Length, want.LexicalTokens)
+		}
+	}
+	// And a scored segment's span survives too — without it an index still
+	// cannot be found in the source, which is the whole point.
+	if len(payload.Segments) != len(result.Segments) {
+		t.Fatalf("segments carries %d, want %d", len(payload.Segments), len(result.Segments))
+	}
+	// The INDEX travels with the span, as one tuple. Checking spans alone passed
+	// a mapping that serialized every index as zero — at which point the second
+	// paragraph advertises an index that selects the first.
+	for i, want := range result.Segments {
+		got := payload.Segments[i]
+		if got.Index == nil || got.Offset == nil {
+			t.Errorf("segment %d is missing a field: index present=%v, offset present=%v",
+				i, got.Index != nil, got.Offset != nil)
+			continue
+		}
+		if *got.Index != want.Index || *got.Offset != want.Offset || got.Length != want.Length {
+			t.Errorf("segment %d = (index %d, [%d,+%d)), want (index %d, [%d,+%d))", i,
+				*got.Index, *got.Offset, got.Length,
+				want.Index, want.Offset, want.Length)
+		}
+	}
+}
+
+// withSpan gives a fixture segment a source span, so #98's mapping has something
+// non-zero to carry.
+func withSpan(s workflow.ScoredSegment, offset, length int) workflow.ScoredSegment {
+	s.Offset, s.Length = offset, length
+	return s
 }
