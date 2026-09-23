@@ -48,9 +48,16 @@ type FeatureDelta struct {
 // Segment is one admitted draft paragraph and its score artifacts.
 type Segment struct {
 	Index, LexicalTokens int
+	Offset, Length       int // Raw file byte coordinates, including any leading BOM.
 	Distance             deviation.Distance
 	Band                 eval.BandOutcome
 	Features             []FeatureDelta
+}
+
+// SkippedParagraph is an included paragraph below the profile's lexical floor.
+type SkippedParagraph struct {
+	Offset, Length int // Raw file byte coordinates, including any leading BOM.
+	LexicalTokens  int
 }
 
 // Report is the complete score for a draft.
@@ -58,7 +65,9 @@ type Report struct {
 	ProfileID, ReferenceID, ReleaseID, FeatureManifestDigest, Algorithm string
 	Split                                                               corpus.Split
 	Calibrated                                                          bool
+	ParagraphFloor                                                      int
 	ParagraphsBelowFloor                                                int
+	Skipped                                                             []SkippedParagraph
 	Segments                                                            []Segment
 }
 
@@ -94,19 +103,33 @@ func Measure(source []byte, fitted profile.Fitted, ref *deviation.Reference) (Re
 	if err != nil {
 		return Report{}, fmt.Errorf("score admit draft: %w", err)
 	}
-	paragraphs, err := profile.ParagraphVectors(doc, fitted.MinParagraphLexicalTokens)
+	// Retain every structurally included leaf so the floor can partition it
+	// into a scored segment or a skipped paragraph without losing its span.
+	paragraphs, _, err := profile.ParagraphLeaves(doc, doc.Structure(text.DefaultStructureOptions()), 0)
 	if err != nil {
 		return Report{}, fmt.Errorf("score paragraphs: %w", err)
 	}
 
+	base := 0
+	if doc.HadBOM() {
+		base = len("\ufeff")
+	}
 	report := Report{
 		ProfileID: fitted.ID, ReferenceID: ref.ID,
 		FeatureManifestDigest: fitted.FeatureManifestDigest, Algorithm: Algorithm,
-		Split:                corpus.Draft,
-		ParagraphsBelowFloor: paragraphs.BelowFloor,
-		Segments:             make([]Segment, 0, len(paragraphs.Vectors)),
+		Split:          corpus.Draft,
+		ParagraphFloor: fitted.MinParagraphLexicalTokens,
+		Segments:       make([]Segment, 0, len(paragraphs)),
 	}
-	for index, vector := range paragraphs.Vectors {
+	for _, paragraph := range paragraphs {
+		vector, span := paragraph.Vector, paragraph.Node.Span
+		if vector.LexicalTokens < report.ParagraphFloor {
+			report.Skipped = append(report.Skipped, SkippedParagraph{
+				Offset: base + span.Offset, Length: span.Length, LexicalTokens: vector.LexicalTokens,
+			})
+			continue
+		}
+		index := len(report.Segments)
 		standardized, err := deviation.Standardize(vector, fitted, corpus.Draft)
 		if err != nil {
 			return Report{}, fmt.Errorf("score paragraph %d: %w", index, err)
@@ -121,10 +144,12 @@ func Measure(source []byte, fitted profile.Fitted, ref *deviation.Reference) (Re
 		}
 		report.Segments = append(report.Segments, Segment{
 			Index: index, LexicalTokens: vector.LexicalTokens, Distance: distance,
+			Offset: base + span.Offset, Length: span.Length,
 			Band:     eval.BandOutcome{Reason: eval.ReasonUncalibrated},
 			Features: featureDeltas(deviations),
 		})
 	}
+	report.ParagraphsBelowFloor = len(report.Skipped)
 	return report, nil
 }
 

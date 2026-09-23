@@ -802,20 +802,29 @@ type FeatureDelta struct {
 }
 type ScoredSegment struct {
 	Index         int              `json:"index"`
+	Offset        int              `json:"offset"`
+	Length        int              `json:"length"`
 	LexicalTokens int              `json:"lexical_tokens"`
 	Distance      MeasuredDistance `json:"distance"`
 	Band          BandOutcome      `json:"band"`
 	Features      []FeatureDelta   `json:"features"`
 }
+type SkippedParagraph struct {
+	Offset        int `json:"offset"`
+	Length        int `json:"length"`
+	LexicalTokens int `json:"lexical_tokens"`
+}
 type ScoreResult struct {
-	Path                 string          `json:"path"`
-	Store                string          `json:"store"`
-	ProfileID            *string         `json:"profile_id"`
-	ReferenceID          *string         `json:"reference_id"`
-	ReleaseID            *string         `json:"release_id"`
-	Calibrated           bool            `json:"calibrated"`
-	ParagraphsBelowFloor int             `json:"paragraphs_below_floor"`
-	Segments             []ScoredSegment `json:"segments"`
+	Path                 string             `json:"path"`
+	Store                string             `json:"store"`
+	ProfileID            *string            `json:"profile_id"`
+	ReferenceID          *string            `json:"reference_id"`
+	ReleaseID            *string            `json:"release_id"`
+	Calibrated           bool               `json:"calibrated"`
+	ParagraphFloor       int                `json:"paragraph_floor"`
+	ParagraphsBelowFloor int                `json:"paragraphs_below_floor"`
+	Skipped              []SkippedParagraph `json:"skipped"`
+	Segments             []ScoredSegment    `json:"segments"`
 }
 
 // RewriteResult is the rendered receipt. It intentionally contains no document
@@ -937,9 +946,12 @@ func evalResultFrom(r workflow.EvalResult) EvalResult {
 	return out
 }
 func scoreResultFrom(r workflow.ScoreResult) ScoreResult {
-	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
+	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphFloor: r.ParagraphFloor, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
+	for _, s := range r.Skipped {
+		out.Skipped = append(out.Skipped, SkippedParagraph{Offset: s.Offset, Length: s.Length, LexicalTokens: s.LexicalTokens})
+	}
 	for _, s := range r.Segments {
-		x := ScoredSegment{Index: s.Index, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
+		x := ScoredSegment{Index: s.Index, Offset: s.Offset, Length: s.Length, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
 		for _, d := range s.Features {
 			x.Features = append(x.Features, FeatureDelta{Feature: d.Feature, Deviation: d.Deviation, Defined: d.Defined, Reason: d.Reason, Direction: d.Direction})
 		}
@@ -1182,15 +1194,23 @@ func humanResult(result any) string {
 		return f.String()
 	case ScoreResult:
 		bands := []string{}
+		var scored, skipped []string
 		for _, s := range x.Segments {
+			scored = append(scored, fmt.Sprintf("%d@%d+%d", s.Index, s.Offset, s.Length))
 			if s.Band.Band != "" {
 				bands = append(bands, s.Band.Band)
 			}
+		}
+		for _, s := range x.Skipped {
+			skipped = append(skipped, fmt.Sprintf("%d+%d:%d", s.Offset, s.Length, s.LexicalTokens))
 		}
 		var f fields
 		f.Add("path", x.Path)
 		f.Add("bands", strings.Join(bands, ","))
 		f.AddInt("below-floor", x.ParagraphsBelowFloor)
+		f.AddInt("floor", x.ParagraphFloor)
+		f.Add("skipped", strings.Join(skipped, ","))
+		f.Add("scored", strings.Join(scored, ","))
 		return f.String()
 	case RewriteResult:
 		var f fields
