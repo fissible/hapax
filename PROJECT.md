@@ -33,7 +33,7 @@ model, then review.
 | 11 | `assemble` | **built** | PR #37 |
 | 12 | `store` | **built** | PR #45 schema, #48 codecs, #49 rehydration and `Prune`, #52 the release |
 | 13 | `ingest` | **built** | PR #54. Verified snapshot to a deterministic node/vector graph; one tree per call |
-| 14 | `cli` | **partial** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 planning #67, B2a the credential boundary #73. **B2b-1 #75** then **B2b-2 #68** remain |
+| 14 | `cli` | **built** | A1 #51, A2a `index`/`profile` #57, A2b `eval` #59, A2c `score` #66, B1 planning #67, B2a the credential boundary #73, B2b-1 execution #75, B2b-2 the command and publication #68. All six commands run |
 
 Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow.
 
@@ -50,10 +50,19 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 | [#58](https://github.com/fissible/hapax/issues/58) | Say why nothing ships, instead of reporting a bound of zero | nothing |
 | [#62](https://github.com/fissible/hapax/issues/62) | `hapax profile` reports an arbitrary reference | nothing; `score` does not inherit it |
 | [#63](https://github.com/fissible/hapax/issues/63) | The distractor pool cannot get its author-clustering protection | needs a schema decision, not just a workflow one |
-| [#64](https://github.com/fissible/hapax/issues/64) | `paragraphs_below_floor` is always zero at the declared floor | a stylometry decision about the floor |
-| [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view |
-| [#75](https://github.com/fissible/hapax/issues/75) | B2b-1 — execution: freshness, the loop, assembled bytes | #67, #70, #73, all merged |
-| [#68](https://github.com/fissible/hapax/issues/68) | B2b-2 — the command, and publication | #75 |
+| [#65](https://github.com/fissible/hapax/issues/65) | The human renderer keeps growing empty members | best done once with `rewrite`'s line in view. #98 added three more |
+| [#76](https://github.com/fissible/hapax/issues/76) | No durable evidence that a rewrite invocation happened | nothing |
+| [#84](https://github.com/fissible/hapax/issues/84) | A corpus built from assistant transcripts is mostly the assistant's prose | nothing; the extractor is fixed, the guard is not |
+| [#87](https://github.com/fissible/hapax/issues/87) | The calibrated-implies-ordered rule is enforced in Go but not in the schema | nothing |
+| [#88](https://github.com/fissible/hapax/issues/88) | No fixture reaches eval's calibrated threshold-write branch | nothing |
+| [#89](https://github.com/fissible/hapax/issues/89) | `Thresholds.Separated` is redundant with the boundary ordering | nothing |
+| [#91](https://github.com/fissible/hapax/issues/91) | An accepted rewrite regressed tells and switched language mid-paragraph | overlaps #94 |
+| [#94](https://github.com/fissible/hapax/issues/94) | A language is a register: per-language profiles | a register decision, not only a workflow one |
+| [#95](https://github.com/fissible/hapax/issues/95) | A candidate returned as more than one paragraph is rejected as not-one-segment | nothing |
+| [#97](https://github.com/fissible/hapax/issues/97) | Three floor consumers are unguarded: eval, execute rescoring, reference construction | nothing; #98 guarded score and workflow only |
+| [#100](https://github.com/fissible/hapax/issues/100) | `rewrite` cannot read stdin or write stdout | nothing |
+| [#101](https://github.com/fissible/hapax/issues/101) | `score` and `rewrite` disagree about what counts as a draft | nothing |
+| [#102](https://github.com/fissible/hapax/issues/102) | A figure caption is truncated when its text lowercases to fewer bytes | nothing; found by #98's test review |
 | [#4](https://github.com/fissible/hapax/issues/4) | Golden set — matched-brief triplets | needs maintainer-authored triplets |
 | [#5](https://github.com/fissible/hapax/issues/5) | Author-specific orthographic profile | `profile` is built; actionable |
 | [#17](https://github.com/fissible/hapax/issues/17) | Distractor sufficiency per register and per band | a user-supplied `--distractors <dir>`; #2 settled that v1 bundles none |
@@ -144,6 +153,61 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### 2026-09-23 (the paragraph floor, and what twenty-five review rounds bought)
+
+Merged #85, #90, #96, #99, #103. Closed #64, #81, #83, #92, #93, #98. Filed #102.
+
+**The floor.** A one-token paragraph — "Yes." — scored 1.5316 against a real 50-document
+profile, the HIGHEST distance in its document, so `rewrite` offered it as the most
+promising target. `MinParagraphLexicalTokens` was 1. It is now 10, recorded as a declared
+interim bound with a statable rationale rather than a derived one: for a fixed denominator
+N >= 10 a one-count change moves a rate by at most 0.1. That is a chosen resolution
+constraint and guarantees nothing for any feature, which is why `ParagraphFloorDerived`
+stays false. Section 2's per-tier measurement is still not done.
+
+**Raising it broke the thing it fixed.** At a floor of one a scored index was the paragraph
+a reader counted in their file. At ten it is not, and `score` reported only filtered indices
+and a count. #98 is the bridge back: every segment carries its source span, every skipped
+paragraph is named.
+
+**What the review rounds actually found.** Twenty-five, every finding proven by applying the
+mutation and showing the suite stayed green. The classes that would have shipped broken:
+spans over a normalized copy rather than raw file bytes (NFC, CRLF) and over unrebased
+coordinates (BOM, front matter, leading blank lines, no trailing newline); wrapped
+paragraphs truncated at their first newline, which is most real prose; the entire default
+human-output path unguarded, because every assertion had been written against `--json`;
+admitted leaves that are not paragraphs (definition descriptions, figure captions,
+referenced footnotes); numbers counted as lexical tokens; excisions deciding admission
+rather than only the count; absent JSON fields decoding to a plausible zero.
+
+**The reframing is the transferable part.** "Which shapes are untested" ran out after four
+rounds. "Which transformations sit between the bytes on disk and a reported span" found six
+more. "Where do a measurement rule and a span rule disagree" found the rest. Each question
+found things the previous one could not, and the last one yielded the counting contract —
+tokens that are lexical, wholly contained, overlapping no excision — which is now in the
+test file with a map of which fixture covers which condition.
+
+**A parser bug fell out of it.** #102: `htmlLeafNodes` finds `<figcaption>` boundaries by
+searching a `bytes.ToLower` copy and applies those offsets to the original bytes.
+`bytes.ToLower` is not length-preserving — U+0130 is two bytes and lowercases to one — so
+the caption is truncated, a word straddles the span end, containment drops it, and the
+caption measures one lexical token instead of two. It changes measurements, not only
+reporting. Found while answering whether the containment condition was reachable at all.
+
+**My own failures this session, named.** Three rounds running, the defects were in my PROSE
+rather than my assertions: a comment claiming a fixture crossed the floor when nothing did,
+a coverage map crediting a fixture with a guard it did not provide, a reproduction citing an
+offset its own input does not produce. A weak test is eventually caught by a mutation; a
+confident comment never is. Also: a scripted `str.replace` whose anchor stopped matching
+silently did nothing, and the `crlf` subtest it was meant to create re-ran the LF case under
+a different name for a full round. Both are in CLAUDE.local.md.
+
+**And a tooling misdiagnosis worth not repeating.** `agentrun start` forks and returns; I
+also backgrounded it through the harness, so every "completed" notification described the
+launcher rather than the run. I narrated that as a harness quirk for twenty turns instead of
+reading the thirty-line script, and hand-rolled polling loops around a tool that ships a
+`wait` subcommand.
 
 ### What the duet process caught this session, and what it cost
 
