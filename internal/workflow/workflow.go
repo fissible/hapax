@@ -149,9 +149,13 @@ type FeatureDelta struct {
 }
 type ScoredSegment struct {
 	Index, LexicalTokens int
+	Offset, Length       int
 	Distance             MeasuredDistance
 	Band                 BandOutcome
 	Features             []FeatureDelta
+}
+type SkippedParagraph struct {
+	Offset, Length, LexicalTokens int
 }
 type ScoreResult struct {
 	StorePath, Path, ProfileID, ReferenceID, ReleaseID string
@@ -159,7 +163,9 @@ type ScoreResult struct {
 	Available                                          []string
 	Calibrated, Adverse                                bool
 	Refusal                                            string
+	ParagraphFloor                                     int
 	ParagraphsBelowFloor                               int
+	Skipped                                            []SkippedParagraph
 	Segments                                           []ScoredSegment
 }
 
@@ -636,7 +642,10 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 	if err != nil {
 		return ScoreResult{}, err
 	}
-	out := ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, ProfileID: report.ProfileID, ReferenceID: report.ReferenceID, ReleaseID: report.ReleaseID, Calibrated: report.Calibrated, ParagraphsBelowFloor: report.ParagraphsBelowFloor}
+	out := ScoreResult{StorePath: path, Path: request.Path, Selection: result.Selection, Available: available, ProfileID: report.ProfileID, ReferenceID: report.ReferenceID, ReleaseID: report.ReleaseID, Calibrated: report.Calibrated, ParagraphFloor: report.ParagraphFloor, ParagraphsBelowFloor: report.ParagraphsBelowFloor}
+	for _, skipped := range report.Skipped {
+		out.Skipped = append(out.Skipped, SkippedParagraph{Offset: skipped.Offset, Length: skipped.Length, LexicalTokens: skipped.LexicalTokens})
+	}
 	if !bundle.Calibrated {
 		out.Refusal = RefusalUncalibrated
 	}
@@ -644,7 +653,7 @@ func (r *Runner) Score(ctx context.Context, request ScoreRequest) (ScoreResult, 
 		out.Refusal = RefusalInsufficientEvidence
 	}
 	for _, segment := range report.Segments {
-		x := ScoredSegment{Index: segment.Index, LexicalTokens: segment.LexicalTokens, Distance: MeasuredDistance{Value: segment.Distance.Value, Defined: segment.Distance.Defined, Reason: string(segment.Distance.Reason), Partial: segment.Distance.Partial}, Band: BandOutcome{Band: string(segment.Band.Band), Defined: segment.Band.Defined, Reason: string(segment.Band.Reason), Distance: segment.Band.Distance}}
+		x := ScoredSegment{Index: segment.Index, Offset: segment.Offset, Length: segment.Length, LexicalTokens: segment.LexicalTokens, Distance: MeasuredDistance{Value: segment.Distance.Value, Defined: segment.Distance.Defined, Reason: string(segment.Distance.Reason), Partial: segment.Distance.Partial}, Band: BandOutcome{Band: string(segment.Band.Band), Defined: segment.Band.Defined, Reason: string(segment.Band.Reason), Distance: segment.Band.Distance}}
 		for _, d := range segment.Features {
 			x.Features = append(x.Features, FeatureDelta{Feature: string(d.Feature), Deviation: d.Deviation, Defined: d.Defined, Reason: string(d.Reason), Direction: string(d.Direction)})
 		}

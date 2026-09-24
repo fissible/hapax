@@ -434,6 +434,26 @@ func TestAnEmptyDraftScoresToNoSegments(t *testing.T) {
 	if got.ProfileID != testProfileID {
 		t.Errorf("an empty report lost its provenance")
 	}
+	// #98: the report's own fields are populated even when no paragraph was
+	// visited. A floor reported as zero here would be initialization that
+	// depends on having seen one.
+	if got.ParagraphFloor != testProfile().Requirements.MinParagraphLexicalTokens {
+		t.Errorf("an empty draft reports floor %d, want the profile's %d",
+			got.ParagraphFloor, testProfile().Requirements.MinParagraphLexicalTokens)
+	}
+	if got.ParagraphsBelowFloor != 0 || len(got.Skipped) != 0 {
+		t.Errorf("an empty draft reports %d below floor and %d skipped, want none",
+			got.ParagraphsBelowFloor, len(got.Skipped))
+	}
+	// Measure takes the same path for a profile with no release.
+	measured, err := score.Measure([]byte(""), mustFit(t, testProfile()), testReference(t, testProfile()))
+	if err != nil {
+		t.Fatalf("Measure: %v", err)
+	}
+	if measured.ParagraphFloor != got.ParagraphFloor || len(measured.Skipped) != 0 {
+		t.Errorf("Measure reports floor %d and %d skipped; Score reports %d and 0",
+			measured.ParagraphFloor, len(measured.Skipped), got.ParagraphFloor)
+	}
 }
 
 // ---------------------------------------------------------------------------

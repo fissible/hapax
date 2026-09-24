@@ -456,11 +456,13 @@ COMMANDS
            else's. Needs a directory of other people's prose.
              hapax eval --profile essays --distractors ./others
 
-  score    Measure how far each paragraph of a draft sits from your profile.
+  score    Measure how far each paragraph of a draft sits from your profile,
+           and say which paragraphs were too short to measure at all.
              hapax score draft.md --profile essays
 
   rewrite  Rewrite the paragraphs that drift, through a local or cloud model.
-             hapax rewrite draft.md --out revised.md --profile essays                --provider ollama --model llama3
+             hapax rewrite draft.md --out revised.md --profile essays \
+               --provider ollama --model llama3
 
 FLAGS
   --profile NAME      Which profile to use. Required by most commands.
@@ -486,13 +488,25 @@ EXIT CODES
   2  invalid invocation
 
 BEFORE YOU START
-  tells works immediately on any file.
+  tells works immediately on any file. Everything else needs a profile:
+  index a directory of your own writing first.
 
-  score and rewrite need a CALIBRATED profile, and calibration is expensive:
-  roughly 600 documents of your own writing plus a directory of other people's,
-  because a band claim carries a stated error rate and hapax will not invent
-  one. Below that threshold both commands refuse with reason=uncalibrated.
-  See issue #81.
+  What calibration buys is the BAND — "in-range", "drifting", "not-you" —
+  because a band carries a stated error rate and hapax will not invent one.
+  It is expensive: roughly 600 documents of your own writing plus a directory
+  of other people's.
+
+  Without it you still get measurements, and the commands differ:
+
+    score     reports every paragraph's distance and which paragraphs were
+              skipped, then withholds the band and exits 4 with
+              reason=uncalibrated.
+
+    rewrite   refuses automatic targeting, because choosing what to rewrite
+              is what the band is for. Name the paragraphs yourself with
+              --paragraphs and it runs, reporting selection=explicit and
+              claim=closer-by-distance -- a weaker claim than a band, and an
+              honest one.
 `
 
 func Run(ctx context.Context, args []string, deps Deps) int {
@@ -802,20 +816,29 @@ type FeatureDelta struct {
 }
 type ScoredSegment struct {
 	Index         int              `json:"index"`
+	Offset        int              `json:"offset"`
+	Length        int              `json:"length"`
 	LexicalTokens int              `json:"lexical_tokens"`
 	Distance      MeasuredDistance `json:"distance"`
 	Band          BandOutcome      `json:"band"`
 	Features      []FeatureDelta   `json:"features"`
 }
+type SkippedParagraph struct {
+	Offset        int `json:"offset"`
+	Length        int `json:"length"`
+	LexicalTokens int `json:"lexical_tokens"`
+}
 type ScoreResult struct {
-	Path                 string          `json:"path"`
-	Store                string          `json:"store"`
-	ProfileID            *string         `json:"profile_id"`
-	ReferenceID          *string         `json:"reference_id"`
-	ReleaseID            *string         `json:"release_id"`
-	Calibrated           bool            `json:"calibrated"`
-	ParagraphsBelowFloor int             `json:"paragraphs_below_floor"`
-	Segments             []ScoredSegment `json:"segments"`
+	Path                 string             `json:"path"`
+	Store                string             `json:"store"`
+	ProfileID            *string            `json:"profile_id"`
+	ReferenceID          *string            `json:"reference_id"`
+	ReleaseID            *string            `json:"release_id"`
+	Calibrated           bool               `json:"calibrated"`
+	ParagraphFloor       int                `json:"paragraph_floor"`
+	ParagraphsBelowFloor int                `json:"paragraphs_below_floor"`
+	Skipped              []SkippedParagraph `json:"skipped"`
+	Segments             []ScoredSegment    `json:"segments"`
 }
 
 // RewriteResult is the rendered receipt. It intentionally contains no document
@@ -937,9 +960,12 @@ func evalResultFrom(r workflow.EvalResult) EvalResult {
 	return out
 }
 func scoreResultFrom(r workflow.ScoreResult) ScoreResult {
-	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
+	out := ScoreResult{Path: r.Path, Store: r.StorePath, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), ReleaseID: ptr(r.ReleaseID), Calibrated: r.Calibrated, ParagraphFloor: r.ParagraphFloor, ParagraphsBelowFloor: r.ParagraphsBelowFloor}
+	for _, s := range r.Skipped {
+		out.Skipped = append(out.Skipped, SkippedParagraph{Offset: s.Offset, Length: s.Length, LexicalTokens: s.LexicalTokens})
+	}
 	for _, s := range r.Segments {
-		x := ScoredSegment{Index: s.Index, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
+		x := ScoredSegment{Index: s.Index, Offset: s.Offset, Length: s.Length, LexicalTokens: s.LexicalTokens, Distance: MeasuredDistance{Value: s.Distance.Value, Defined: s.Distance.Defined, Reason: s.Distance.Reason, Partial: s.Distance.Partial}, Band: BandOutcome{Band: s.Band.Band, Defined: s.Band.Defined, Reason: s.Band.Reason, Distance: s.Band.Distance}}
 		for _, d := range s.Features {
 			x.Features = append(x.Features, FeatureDelta{Feature: d.Feature, Deviation: d.Deviation, Defined: d.Defined, Reason: d.Reason, Direction: d.Direction})
 		}
@@ -1182,15 +1208,23 @@ func humanResult(result any) string {
 		return f.String()
 	case ScoreResult:
 		bands := []string{}
+		var scored, skipped []string
 		for _, s := range x.Segments {
+			scored = append(scored, fmt.Sprintf("%d@%d+%d", s.Index, s.Offset, s.Length))
 			if s.Band.Band != "" {
 				bands = append(bands, s.Band.Band)
 			}
+		}
+		for _, s := range x.Skipped {
+			skipped = append(skipped, fmt.Sprintf("%d+%d:%d", s.Offset, s.Length, s.LexicalTokens))
 		}
 		var f fields
 		f.Add("path", x.Path)
 		f.Add("bands", strings.Join(bands, ","))
 		f.AddInt("below-floor", x.ParagraphsBelowFloor)
+		f.AddInt("floor", x.ParagraphFloor)
+		f.Add("skipped", strings.Join(skipped, ","))
+		f.Add("scored", strings.Join(scored, ","))
 		return f.String()
 	case RewriteResult:
 		var f fields
