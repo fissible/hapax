@@ -3,6 +3,7 @@ package text
 import (
 	"bytes"
 	"errors"
+	"regexp"
 	"sort"
 	"strings"
 	"unicode/utf8"
@@ -328,25 +329,23 @@ func (d *Document) transparent(n ast.Node, source []byte, base int, path []Conta
 	return children
 }
 
+// Match raw bytes so case-insensitive tag recognition preserves source offsets.
+// The body includes newlines and stops at the first closing tag.
+var figcaptionPattern = regexp.MustCompile(`(?is)<figcaption>(.*?)</figcaption>`)
+
 func (d *Document) htmlLeafNodes(n *ast.HTMLBlock, source []byte, base int, path []ContainerKind, options StructureOptions) []*Node {
 	span := d.nodeSpan(n, source, base)
 	raw := d.raw[span.Offset : span.Offset+span.Length]
-	lower := bytes.ToLower(raw)
-	open := bytes.Index(lower, []byte("<figcaption>"))
-	if open < 0 {
+	match := figcaptionPattern.FindSubmatchIndex(raw)
+	if match == nil {
 		return nodes(d.leaf(RoleHTMLBlock, span, nil, path, options))
 	}
-	closeStart := open + len("<figcaption>")
-	closeRel := bytes.Index(lower[closeStart:], []byte("</figcaption>"))
-	if closeRel < 0 {
-		return nodes(d.leaf(RoleHTMLBlock, span, nil, path, options))
-	}
-	captionEnd := closeStart + closeRel
+	open, captionStart, captionEnd := match[0], match[2], match[3]
 	parts := []*Node{}
 	if open > 0 {
-		parts = append(parts, nodes(d.leaf(RoleHTMLBlock, Span{Offset: span.Offset, Length: open + len("<figcaption>")}, nil, path, options))...)
+		parts = append(parts, nodes(d.leaf(RoleHTMLBlock, Span{Offset: span.Offset, Length: captionStart}, nil, path, options))...)
 	}
-	parts = append(parts, nodes(d.leaf(RoleCaption, Span{Offset: span.Offset + closeStart, Length: captionEnd - closeStart}, nil, path, options))...)
+	parts = append(parts, nodes(d.leaf(RoleCaption, Span{Offset: span.Offset + captionStart, Length: captionEnd - captionStart}, nil, path, options))...)
 	if captionEnd < len(raw) {
 		parts = append(parts, nodes(d.leaf(RoleHTMLBlock, Span{Offset: span.Offset + captionEnd, Length: len(raw) - captionEnd}, nil, path, options))...)
 	}
