@@ -2,6 +2,7 @@ package store_test
 
 import (
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -173,11 +174,16 @@ func TestTheAuditRecordRefusesAnythingButScriptNames(t *testing.T) {
 // refusing the other: a record in that shape did not come from the function
 // that is supposed to produce it.
 //
-// Note what is NOT refused here: an unsorted list. `Introduced` happens to sort
-// today, but that is the producer's convention rather than a property of the
-// record, and a store that enforced it would both couple itself to that
-// convention and make the read path's order-preservation untestable. Duplicates
-// are incoherent; order is merely conventional.
+// Note what is NOT refused here: an unsorted list. The distinction is
+// REPRESENTABILITY, not convention — both properties fall out of `Introduced`,
+// and sortedness is the more deliberate of the two, since it calls
+// `sort.Strings` explicitly while non-duplication is an accident of map
+// iteration. A duplicate is not a state the data model has, because a set of
+// introduced scripts has no second copy of a member. An order IS a state the
+// record holds: the ordinals carry it, `sameAttempt` treats a reorder as a
+// different decision, and a store that refused unsorted input would make that
+// order permanently unverifiable — the `ORDER BY script` mutation is killable
+// only because an unsorted fixture is legal.
 func TestTheAuditRecordRefusesARepeatedScript(t *testing.T) {
 	s := newStore(t)
 	snapshot, prof := seededProfile(t, s)
@@ -257,6 +263,10 @@ func TestAnAcceptedAttemptIntroducedNothing(t *testing.T) {
 // conflict. A comparison that ignored the scripts would let a second write
 // silently replace the evidence of which substitution happened, and report
 // success.
+//
+// A REORDER is a conflict, which is the other half of the representability
+// argument above: the order is part of the record, so two writes differing only
+// in order are two different records, not one written twice.
 func TestRewritingAnAttemptWithDifferentScriptsConflicts(t *testing.T) {
 	s := newStore(t)
 	snapshot, prof := seededProfile(t, s)
@@ -421,8 +431,12 @@ func TestADamagedScriptNameIsCorruptionOnRead(t *testing.T) {
 			s := newStore(t)
 			ids := seedEveryArtifact(t, s)
 
-			raw := openRaw(t, s)
-			if _, err := raw.Exec(
+			// The column's own CHECK refuses most of these, which is what
+			// `TestEveryDeclaredGrammarIsEnforcedByTheDatabase` requires of
+			// any textual column. Damage has to get past it to reach the read
+			// path, exactly as `relaxEnum` does for the closed-set columns.
+			relaxCheck(t, s, "rewrite_attempt_script", "script")
+			if _, err := openRaw(t, s).Exec(
 				"UPDATE rewrite_attempt_script SET script=? WHERE ordinal=0", damaged); err != nil {
 				t.Fatalf("damaging rewrite_attempt_script: %v", err)
 			}
@@ -435,28 +449,163 @@ func TestADamagedScriptNameIsCorruptionOnRead(t *testing.T) {
 	}
 }
 
+// A duplicate on disk is corruption too.
+//
+// The duplicate rule rests on the same argument as the Common/Inherited rule —
+// a record in that shape did not come from `ScriptSet.Introduced` — so it needs
+// the same two halves. Enforcing it on write alone was provably invisible: a
+// duplicate written directly to the database read back as a valid attempt.
+func TestADuplicatedScriptOnDiskIsCorruptionOnRead(t *testing.T) {
+	s := newStore(t)
+	ids := seedEveryArtifact(t, s)
+
+	// Both rows to the same name. No CHECK to relax: "Han" is a valid script,
+	// and it is the PAIR that is impossible, not either value.
+	if _, err := openRaw(t, s).Exec(
+		"UPDATE rewrite_attempt_script SET script='Han'"); err != nil {
+		t.Fatalf("damaging rewrite_attempt_script: %v", err)
+	}
+
+	_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
+	if !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
+
+// An accepted attempt naming a script is corruption on read too.
+//
+// The comment on `TestAnAcceptedAttemptIntroducedNothing` says a record in that
+// shape means the gate was bypassed, "which is exactly what an audit trail
+// exists to make visible" — visible to a READER, and the reader was the half
+// not covered.
+func TestAnAcceptedAttemptNamingAScriptIsCorruptionOnRead(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	nodeID := snapshot.Documents[0].Nodes[0].ID
+	accepted := acceptedAttempt(prof.ID, nodeID)
+	if err := s.PutRewriteAttempt(ctx(), accepted); err != nil {
+		t.Fatalf("PutRewriteAttempt: %v", err)
+	}
+
+	// A script attached to an attempt that was accepted: refused on write, so
+	// it can only arrive underneath the store.
+	if _, err := openRaw(t, s).Exec(
+		"INSERT INTO rewrite_attempt_script (invocation_id,node_id,attempt_index,ordinal,script) "+
+			"VALUES (?,?,?,0,'Han')",
+		accepted.InvocationID, accepted.NodeID, accepted.Index); err != nil {
+		t.Fatalf("damaging rewrite_attempt_script: %v", err)
+	}
+
+	_, err := s.LoadRewriteAttempt(ctx(), accepted.InvocationID, accepted.NodeID, accepted.Index)
+	if !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
+
 // Damage to the ORDINALS is corruption too.
 //
 // The ordinals are what carry the recorded order, and a gap or a repeat means
 // the list read back is not the list written. This is the assertion that makes
 // `ORDER BY ordinal` load-bearing rather than incidental.
 func TestDamagedScriptOrdinalsAreCorruptionOnRead(t *testing.T) {
-	for _, damage := range []struct{ name, sql string }{
-		{"a repeated ordinal", "UPDATE rewrite_attempt_script SET ordinal=0"},
-		{"a gap", "UPDATE rewrite_attempt_script SET ordinal=7 WHERE ordinal=1"},
-	} {
-		t.Run(damage.name, func(t *testing.T) {
-			s := newStore(t)
-			ids := seedEveryArtifact(t, s)
+	s := newStore(t)
+	ids := seedEveryArtifact(t, s)
 
-			if _, err := openRaw(t, s).Exec(damage.sql); err != nil {
-				t.Fatalf("damaging rewrite_attempt_script ordinals: %v", err)
-			}
+	if _, err := openRaw(t, s).Exec(
+		"UPDATE rewrite_attempt_script SET ordinal=7 WHERE ordinal=1"); err != nil {
+		t.Fatalf("damaging rewrite_attempt_script ordinals: %v", err)
+	}
 
-			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
-			if !errors.Is(err, store.ErrCorrupt) {
-				t.Errorf("error = %v, want ErrCorrupt", err)
+	_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
+	if !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
+
+// A repeated ordinal is not a state the schema can hold.
+//
+// The reader cannot be asked to detect it, because the primary key the shape
+// specification mandates makes it unrepresentable — and that is the property
+// worth asserting instead. It is also what the child table buys over a joined
+// column: the order is enforced by the database rather than trusted.
+func TestTheSchemaRefusesARepeatedScriptOrdinal(t *testing.T) {
+	s := newStore(t)
+	seedEveryArtifact(t, s)
+
+	if _, err := openRaw(t, s).Exec(
+		"UPDATE rewrite_attempt_script SET ordinal=0"); err == nil {
+		t.Error("the schema accepted two scripts at the same ordinal")
+	}
+}
+
+// relaxCheck strips every CHECK constraint mentioning one column, so damage the
+// column would otherwise refuse can reach the read path. The sibling of
+// `relaxEnum`, which only handles a closed `column IN (...)` set and fatals on
+// a grammar expressed as GLOB.
+func relaxCheck(t *testing.T, s *store.Store, table, column string) {
+	t.Helper()
+	db := openRaw(t, s)
+	var ddl string
+	if err := db.QueryRow("SELECT sql FROM sqlite_master WHERE name = ?", table).Scan(&ddl); err != nil {
+		t.Fatalf("sql for %s: %v", table, err)
+	}
+
+	relaxed, stripped := ddl, 0
+	for {
+		at := strings.Index(relaxed, "CHECK")
+		if at < 0 {
+			break
+		}
+		open := strings.Index(relaxed[at:], "(")
+		if open < 0 {
+			break
+		}
+		open += at
+		depth, end := 0, -1
+		for i := open; i < len(relaxed); i++ {
+			switch relaxed[i] {
+			case '(':
+				depth++
+			case ')':
+				if depth--; depth == 0 {
+					end = i
+				}
 			}
-		})
+			if end >= 0 {
+				break
+			}
+		}
+		if end < 0 {
+			t.Fatalf("unbalanced CHECK in %s: %s", table, ddl)
+		}
+		if !strings.Contains(relaxed[open:end], column) {
+			t.Fatalf("%s has a CHECK that does not mention %s; relaxCheck would "+
+				"remove the wrong constraint: %s", table, column, relaxed[at:end+1])
+		}
+		relaxed = relaxed[:at] + relaxed[end+1:]
+		stripped++
+	}
+	if stripped == 0 {
+		t.Fatalf("no CHECK found on %s.%s; a textual column with no enforced "+
+			"grammar would let this damage in through the front door", table, column)
+	}
+
+	if _, err := db.Exec("PRAGMA writable_schema=ON"); err != nil {
+		t.Fatalf("writable_schema on: %v", err)
+	}
+	if _, err := db.Exec("UPDATE sqlite_master SET sql = ? WHERE name = ?", relaxed, table); err != nil {
+		t.Fatalf("relaxing %s: %v", table, err)
+	}
+	// Editing sqlite_master does not advance the schema cookie by itself, so a
+	// connection that has already parsed the schema would keep the old CHECK.
+	var cookie int
+	if err := db.QueryRow("PRAGMA schema_version").Scan(&cookie); err != nil {
+		t.Fatalf("schema_version: %v", err)
+	}
+	if _, err := db.Exec(fmt.Sprintf("PRAGMA schema_version = %d", cookie+1)); err != nil {
+		t.Fatalf("advancing schema_version: %v", err)
+	}
+	if _, err := db.Exec("PRAGMA writable_schema=OFF"); err != nil {
+		t.Fatalf("writable_schema off: %v", err)
 	}
 }

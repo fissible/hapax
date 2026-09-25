@@ -36,7 +36,7 @@ func TestTheExecutionGateReportsTheScriptsACandidateIntroduces(t *testing.T) {
 		{
 			// A Japanese writer's paragraph gaining a script it did not use.
 			// Hiragana and Han are already present; Katakana is not.
-			name:      "one script added to a paragraph that already mixes three",
+			name:      "one script added to a paragraph that already mixes two",
 			current:   "犬が好きです。",
 			candidate: "イヌが好きです。",
 			want:      []string{"Katakana"},
@@ -63,6 +63,24 @@ func TestTheExecutionGateReportsTheScriptsACandidateIntroduces(t *testing.T) {
 			current:   "The author never draws it",
 			candidate: "The author (1979) never draws it — twice!",
 			want:      nil,
+		},
+		{
+			// THE LOW-SHARE CASE, and the one this file exists to pin.
+			//
+			// `internal/rewrite` specifies "any introduction, no threshold" as
+			// a refusal rule — but a threshold would never be written there.
+			// It would be written HERE, in the measurement, and every other
+			// fixture in this table introduces at least 5.9% of the letters,
+			// so a `Share(name) >= 0.05` filter passed the entire repository.
+			//
+			// Measured: 78 letters, one of them Han, 1.28%. Below any
+			// threshold anyone would pick, and the policy's own example — "a
+			// single foreign name is around 2%" is the argument the slice
+			// makes for refusing to have a threshold at all.
+			name:      "one foreign character is still an introduction",
+			current:   "The quick brown fox jumps over the lazy dog again and again, and the author never draws it at all.",
+			candidate: "The quick brown fox jumps over the lazy dog again and again, and the author 著 never draws it at all.",
+			want:      []string{"Han"},
 		},
 		{
 			name:      "two scripts at once, named in sorted order",
