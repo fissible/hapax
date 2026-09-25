@@ -35,6 +35,20 @@ import (
 // reordering loader indistinguishable from a correct one. Leaving the shape
 // implicit made those probes skip, and a skipping test proves nothing.
 //
+// Two test files OUTSIDE this slice have to be widened, and that is expected
+// rather than a sign the schema is wrong:
+//
+//   - `allowlist_test.go`'s `declaredSchema` needs the new table and its
+//     columns, or `TestTheSchemaIsExactlyTheAllowlist` reports an extra table.
+//   - `vocabulary_test.go`'s `textualColumnGrammars` needs its textual columns
+//     (the two identity columns as "hex", the script column under a new
+//     grammar name), and `grammarProbes` needs that grammar's probe list.
+//
+// Both files say in their own comments that widening them is a deliberate
+// decision. Stated here because the first signal is otherwise a test asserting
+// the implementer's schema is wrong, and the frozen set would look like
+// something to fight rather than to satisfy.
+//
 // It is safe to persist because it is not prose. A script name is one of the
 // 163 keys of `unicode.Scripts`, chosen from a closed vocabulary rather than
 // derived from the text, and the same name results from any paragraph written
@@ -550,19 +564,29 @@ func relaxCheck(t *testing.T, s *store.Store, table, column string) {
 		t.Fatalf("sql for %s: %v", table, err)
 	}
 
-	relaxed, stripped := ddl, 0
+	// Every table here carries per-column CHECKs on its identity columns, so
+	// most of what this walks belongs to another column and must be SKIPPED
+	// rather than treated as an error. The `stripped == 0` fatal below is what
+	// catches the case worth catching.
+	const neutral = "CHECK(1)"
+	relaxed, stripped, from := ddl, 0, 0
 	for {
-		at := strings.Index(relaxed, "CHECK")
-		if at < 0 {
+		rel := strings.Index(relaxed[from:], "CHECK")
+		if rel < 0 {
 			break
 		}
+		at := from + rel
 		open := strings.Index(relaxed[at:], "(")
 		if open < 0 {
 			break
 		}
 		open += at
+		// A balanced scan, because a grammar may nest: `length(script) BETWEEN
+		// 2 AND 40 AND script GLOB ...`. The one shape it mishandles is a paren
+		// inside a string literal, which `CHECK(1)` substitution downgrades
+		// from a silently wrong constraint to a loud malformed-schema error.
 		depth, end := 0, -1
-		for i := open; i < len(relaxed); i++ {
+		for i := open; i < len(relaxed) && end < 0; i++ {
 			switch relaxed[i] {
 			case '(':
 				depth++
@@ -571,18 +595,21 @@ func relaxCheck(t *testing.T, s *store.Store, table, column string) {
 					end = i
 				}
 			}
-			if end >= 0 {
-				break
-			}
 		}
 		if end < 0 {
 			t.Fatalf("unbalanced CHECK in %s: %s", table, ddl)
 		}
 		if !strings.Contains(relaxed[open:end], column) {
-			t.Fatalf("%s has a CHECK that does not mention %s; relaxCheck would "+
-				"remove the wrong constraint: %s", table, column, relaxed[at:end+1])
+			from = end + 1
+			continue
 		}
-		relaxed = relaxed[:at] + relaxed[end+1:]
+		// NEUTRALIZED, not deleted. A table-level CHECK is a comma-separated
+		// constraint item — house style here, `rewrite_attempt` carries three —
+		// and deleting one leaves a dangling comma that makes the schema
+		// malformed. `relaxEnum` rewrites rather than removes for the same
+		// reason.
+		relaxed = relaxed[:at] + neutral + relaxed[end+1:]
+		from = at + len(neutral)
 		stripped++
 	}
 	if stripped == 0 {
