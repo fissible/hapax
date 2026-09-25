@@ -446,6 +446,67 @@ func TestALanguageGateErrorFailsRatherThanAccepting(t *testing.T) {
 	}
 }
 
+// Every gate names itself when it fails, not only this one.
+//
+// The language tests require the error to say "language". Preserve and tells
+// return their gate errors UNWRAPPED today, so that requirement reads as an
+// unannounced exception to local convention — an implementer following the two
+// lines above it would fail a frozen test and reasonably conclude the test was
+// wrong. It is not; the convention is. With three gates, an error that names
+// none of them tells a caller nothing about which dependency is unavailable.
+//
+// So the requirement is made uniform here rather than left as a special case.
+// This is a deliberate widening of #91's scope, and it is two lines of
+// implementation.
+func TestEveryGateErrorNamesTheGateThatFailed(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		gate func() rewrite.Gate
+	}{
+		{"preserve", func() rewrite.Gate {
+			return &erroringPreserveGate{fakeGate: passingGate()}
+		}},
+		{"tells", func() rewrite.Gate {
+			return &erroringTellsGate{fakeGate: passingGate()}
+		}},
+		{"language", func() rewrite.Gate {
+			return &erroringLanguageGate{fakeGate: passingGate()}
+		}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			loop, _, _, _, _ := loopOver(t,
+				map[string]score.Report{original: scored(0.90), better: scored(0.30)},
+				[]string{better}, passingGate())
+			loop.Gate = c.gate()
+
+			_, err := loop.Rewrite(context.Background(),
+				rewrite.Segment{Text: original, SpanRef: "span-0"})
+
+			if err == nil {
+				t.Fatal("a gate error produced no error")
+			}
+			if !strings.Contains(err.Error(), c.name) {
+				t.Errorf("the error does not name %q: %v", c.name, err)
+			}
+		})
+	}
+}
+
+type erroringPreserveGate struct{ *fakeGate }
+
+func (e *erroringPreserveGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+	return rewrite.Preservation{}, errGateUnavailable
+}
+
+type erroringTellsGate struct{ *fakeGate }
+
+func (e *erroringTellsGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
+	return rewrite.TellsVerdict{}, errGateUnavailable
+}
+
+// Deliberately naming no gate, so the loop has to supply the attribution.
+var errGateUnavailable = errors.New("dependency unavailable")
+
 // RejectionLanguage is a declared code, so the CLI's closed vocabulary admits
 // it and the store can persist it.
 func TestRejectionLanguageIsDeclared(t *testing.T) {

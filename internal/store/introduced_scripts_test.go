@@ -7,6 +7,9 @@ import (
 	"testing"
 	"unicode"
 
+	"github.com/fissible/hapax/internal/eval"
+	"github.com/fissible/hapax/internal/identity"
+	"github.com/fissible/hapax/internal/llm"
 	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/store"
 )
@@ -20,6 +23,16 @@ import (
 // this column is the only durable trace that the substitution happened at all —
 // an unpersisted one would leave a writer no way to learn that their paragraph
 // came back in another script.
+//
+// The SHAPE is specified rather than left open: a child table
+//
+//	rewrite_attempt_script(invocation_id, node_id, attempt_index, ordinal, script)
+//
+// mirroring `rewrite_attempt_identifier` exactly. Not a preference — the
+// corruption probes below damage ordinals, and a joined column or a JSON blob
+// has none to damage, so the recorded order would become unverifiable and a
+// reordering loader indistinguishable from a correct one. Leaving the shape
+// implicit made those probes skip, and a skipping test proves nothing.
 //
 // It is safe to persist because it is not prose. A script name is one of the
 // 163 keys of `unicode.Scripts`, chosen from a closed vocabulary rather than
@@ -68,14 +81,17 @@ func refusedForLanguage(t *testing.T, profileID, nodeID string, scripts ...strin
 
 // The scripts survive a write and a read, in the order they were recorded.
 //
-// Order is part of the record rather than incidental: `text.ScriptSet.Names`
-// sorts, so a set read back in a different order did not come from the same
-// measurement.
+// The fixture is deliberately NOT in alphabetical order. `ScriptSet.Names`
+// sorts, so every natural fixture is sorted, and a loader that discarded the
+// recorded order — `ORDER BY script` instead of `ORDER BY ordinal`, dropping
+// the ordinal-contiguity check with it — read back identical to a correct one.
+// Order is what makes the ordinals mean anything, and the ordinals are what
+// makes damage to them detectable.
 func TestTheIntroducedScriptsRoundTrip(t *testing.T) {
 	s := newStore(t)
 	snapshot, prof := seededProfile(t, s)
 	nodeID := snapshot.Documents[0].Nodes[0].ID
-	want := refusedForLanguage(t, prof.ID, nodeID, "Cyrillic", "Han")
+	want := refusedForLanguage(t, prof.ID, nodeID, "Han", "Cyrillic")
 
 	if err := s.PutRewriteAttempt(ctx(), want); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
@@ -147,6 +163,50 @@ func TestTheAuditRecordRefusesAnythingButScriptNames(t *testing.T) {
 				t.Errorf("error = %v, want ErrInvalid", err)
 			}
 		})
+	}
+}
+
+// A script cannot be introduced twice.
+//
+// `ScriptSet.Introduced` ranges a map, so it can no more emit a duplicate than
+// it can emit `Common` — and the argument for refusing one is the argument for
+// refusing the other: a record in that shape did not come from the function
+// that is supposed to produce it.
+//
+// Note what is NOT refused here: an unsorted list. `Introduced` happens to sort
+// today, but that is the producer's convention rather than a property of the
+// record, and a store that enforced it would both couple itself to that
+// convention and make the read path's order-preservation untestable. Duplicates
+// are incoherent; order is merely conventional.
+func TestTheAuditRecordRefusesARepeatedScript(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	attempt := refusedForTells(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+	attempt.IntroducedScripts = []string{"Han", "Han"}
+
+	if err := s.PutRewriteAttempt(ctx(), attempt); err == nil {
+		t.Error("accepted a script introduced twice")
+	} else if !errors.Is(err, store.ErrInvalid) {
+		t.Errorf("error = %v, want ErrInvalid", err)
+	}
+}
+
+// An unsorted list is an ordinary record, and reads back in its own order.
+func TestTheAuditRecordAcceptsScriptsInAnyOrder(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	want := refusedForLanguage(t, prof.ID, snapshot.Documents[0].Nodes[0].ID,
+		"Han", "Cyrillic", "Arabic")
+
+	if err := s.PutRewriteAttempt(ctx(), want); err != nil {
+		t.Fatalf("PutRewriteAttempt: %v", err)
+	}
+	got, err := s.LoadRewriteAttempt(ctx(), want.InvocationID, want.NodeID, want.Index)
+	if err != nil {
+		t.Fatalf("LoadRewriteAttempt: %v", err)
+	}
+	if !reflect.DeepEqual(got.IntroducedScripts, want.IntroducedScripts) {
+		t.Errorf("read back %v, want %v", got.IntroducedScripts, want.IntroducedScripts)
 	}
 }
 
@@ -284,5 +344,119 @@ func TestIntroducedScriptsBelongToOneAttemptEach(t *testing.T) {
 			t.Errorf("%s read back %v, want %v",
 				want.NodeID, got.IntroducedScripts, want.IntroducedScripts)
 		}
+	}
+}
+
+// The recorder carries the scripts across the seam.
+//
+// This is #91 one layer down, and it was proven reachable: deleting
+// `IntroducedScripts: attempt.IntroducedScripts` from `recorder.RecordAttempt`
+// passed the ENTIRE repository suite. The two halves of the slice are each
+// tested against the other's fake — `internal/rewrite` drives a `fakeStore`
+// that just appends the struct, and the tests above build a
+// `store.RewriteAttempt` by hand — so nothing drove a `rewrite.Attempt`
+// carrying scripts through the real recorder. The refusal happens, the column
+// exists, the prose is discarded, and the only durable trace is silently never
+// written.
+//
+// `TestEveryRewriteAttemptFieldIsDecidedOnPurpose` cannot catch this: it
+// inspects field NAMES by reflection and never a value.
+func TestTheRecorderCarriesTheIntroducedScriptsToTheStore(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	nodeID := snapshot.Documents[0].Nodes[0].ID
+	want := []string{"Han", "Cyrillic"}
+
+	attempt := rewrite.Attempt{
+		Index: 0, SpanRef: nodeID,
+		CurrentHash:     identity.HashBytes([]byte("current")),
+		CandidateHash:   identity.HashBytes([]byte("candidate")),
+		CurrentDistance: 1.2, CandidateDistance: 0.4,
+		CurrentBand: eval.BandDrifting, CandidateBand: eval.BandInRange,
+		Preserved: true, PreserveIdentifiers: nil,
+		TellsComparison: -1, TellsComparable: true,
+		IntroducedScripts: want,
+		Accepted:          false, Rejection: rewrite.RejectionLanguage,
+		ProfileID: prof.ID, ProviderID: string(llm.ProviderOllama),
+		InvocationID: fakeID("invocation", "language"),
+	}
+	if err := s.Recorder(ctx()).RecordAttempt(attempt); err != nil {
+		t.Fatalf("RecordAttempt: %v", err)
+	}
+
+	got, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, nodeID, attempt.Index)
+	if err != nil {
+		t.Fatalf("LoadRewriteAttempt: %v", err)
+	}
+	if !reflect.DeepEqual(got.IntroducedScripts, want) {
+		t.Errorf("read back %v, want %v", got.IntroducedScripts, want)
+	}
+	if got.Rejection != rewrite.RejectionLanguage || got.Accepted {
+		t.Errorf("the record is %q/accepted=%v", got.Rejection, got.Accepted)
+	}
+}
+
+// Damage to the column is corruption on READ, not only on write.
+//
+// Every other closed-vocabulary column in the schema gets an ErrCorrupt probe
+// through `declaredVocabularies`. This one cannot join that map — 163 values is
+// not an enum a CHECK constraint can hold — so the schema can enforce a shape
+// at most, and "Japanese", "Warsaw" and a whole sentence all satisfy any
+// plausible shape. That makes this the one column where an out-of-vocabulary
+// value would otherwise be invisible to a reader, so the probe has to live
+// here.
+//
+// Proven reachable: moving the vocabulary check out of the shared validator and
+// into `PutRewriteAttempt` alone passed both packages, and a row damaged to
+// 'Japanese' read back as a valid attempt.
+func TestADamagedScriptNameIsCorruptionOnRead(t *testing.T) {
+	for _, damaged := range []string{
+		"Japanese",
+		"han",
+		"Common",
+		"The original sentence, which is what a leak looks like.",
+		"",
+	} {
+		t.Run(damaged, func(t *testing.T) {
+			s := newStore(t)
+			ids := seedEveryArtifact(t, s)
+
+			raw := openRaw(t, s)
+			if _, err := raw.Exec(
+				"UPDATE rewrite_attempt_script SET script=? WHERE ordinal=0", damaged); err != nil {
+				t.Fatalf("damaging rewrite_attempt_script: %v", err)
+			}
+
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
+			if !errors.Is(err, store.ErrCorrupt) {
+				t.Errorf("error = %v, want ErrCorrupt", err)
+			}
+		})
+	}
+}
+
+// Damage to the ORDINALS is corruption too.
+//
+// The ordinals are what carry the recorded order, and a gap or a repeat means
+// the list read back is not the list written. This is the assertion that makes
+// `ORDER BY ordinal` load-bearing rather than incidental.
+func TestDamagedScriptOrdinalsAreCorruptionOnRead(t *testing.T) {
+	for _, damage := range []struct{ name, sql string }{
+		{"a repeated ordinal", "UPDATE rewrite_attempt_script SET ordinal=0"},
+		{"a gap", "UPDATE rewrite_attempt_script SET ordinal=7 WHERE ordinal=1"},
+	} {
+		t.Run(damage.name, func(t *testing.T) {
+			s := newStore(t)
+			ids := seedEveryArtifact(t, s)
+
+			if _, err := openRaw(t, s).Exec(damage.sql); err != nil {
+				t.Fatalf("damaging rewrite_attempt_script ordinals: %v", err)
+			}
+
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
+			if !errors.Is(err, store.ErrCorrupt) {
+				t.Errorf("error = %v, want ErrCorrupt", err)
+			}
+		})
 	}
 }
