@@ -331,6 +331,12 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 		t.Fatalf("PutExemplarSelection: %v", err)
 	}
 	attempt := attemptFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+	// #91. Set HERE rather than in `attemptFixture`, deliberately: an accepted
+	// attempt introduced nothing by definition, and `acceptedAttempt` derives
+	// from `attemptFixture` without clearing the field — so seeding it there
+	// would make every accepted fixture in this package invalid. The seed needs
+	// the row only so that probes against the script table are not vacuous.
+	attempt.IntroducedScripts = []string{"Cyrillic", "Han"}
 	if err := s.PutRewriteAttempt(ctx(), attempt); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}

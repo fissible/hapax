@@ -176,11 +176,15 @@ type gateVerdict struct {
 	identifiers []string
 	comparison  int
 	comparable  bool
+	// #91: the scripts this candidate introduces relative to the current text.
+	// Empty means it introduces none, which is the accepted path.
+	introduced []string
 }
 
 type fakeGate struct {
-	verdicts map[string]gateVerdict
-	fallback gateVerdict
+	verdicts     map[string]gateVerdict
+	fallback     gateVerdict
+	languageArgs [][2]string
 }
 
 func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
@@ -191,6 +195,16 @@ func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, er
 func (f *fakeGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
 	v := f.verdict(candidate)
 	return rewrite.TellsVerdict{Comparison: v.comparison, Comparable: v.comparable}, nil
+}
+
+func (f *fakeGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+	// The ARGUMENTS are recorded, because a gate that ignored `current` — or
+	// was handed the original segment instead of the advancing current text —
+	// passed every assertion about the verdict. See
+	// TestTheLanguageGateSeesTheCurrentTextAndTheCandidate.
+	f.languageArgs = append(f.languageArgs, [2]string{current, candidate})
+	v := f.verdict(candidate)
+	return rewrite.LanguageVerdict{Introduced: v.introduced}, nil
 }
 
 func (f *fakeGate) verdict(candidate string) gateVerdict {
@@ -1174,8 +1188,11 @@ func TestAnUncalibratedCandidateIsRefused(t *testing.T) {
 }
 
 // A structurally invalid candidate is rejected before the guards are consulted.
-// Asking preserve and tells about a candidate that is not a rewrite of this
-// paragraph spends work on a question already answered.
+// Asking preserve, tells or language about a candidate that is not a rewrite of
+// this paragraph spends work on a question already answered — and worse, a gate
+// consulted there can fail and replace the structural rejection with its own
+// error, so the caller is told the language gate is unavailable rather than that
+// the candidate was two paragraphs.
 func TestAStructurallyInvalidCandidateSkipsTheGuards(t *testing.T) {
 	gate := &countingGate{fakeGate: passingGate()}
 	loop, _, _, _, _ := loopOver(t,
@@ -1187,15 +1204,19 @@ func TestAStructurallyInvalidCandidateSkipsTheGuards(t *testing.T) {
 	if got.Changed {
 		t.Fatalf("a two-segment candidate was accepted")
 	}
-	if gate.preserveCalls != 0 || gate.tellsCalls != 0 {
-		t.Errorf("the guards were consulted %d and %d times for a candidate that is not one segment",
-			gate.preserveCalls, gate.tellsCalls)
+	if gate.preserveCalls != 0 || gate.tellsCalls != 0 || gate.languageCalls != 0 {
+		t.Errorf("the guards were consulted %d, %d and %d times for a candidate that is not one segment",
+			gate.preserveCalls, gate.tellsCalls, gate.languageCalls)
+	}
+	if got.Attempts[0].Rejection != rewrite.RejectionNotOneSegment {
+		t.Errorf("rejection = %q, want %q",
+			got.Attempts[0].Rejection, rewrite.RejectionNotOneSegment)
 	}
 }
 
 type countingGate struct {
 	*fakeGate
-	preserveCalls, tellsCalls int
+	preserveCalls, tellsCalls, languageCalls int
 }
 
 func (c *countingGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
@@ -1206,6 +1227,11 @@ func (c *countingGate) Preserve(current, candidate string) (rewrite.Preservation
 func (c *countingGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
 	c.tellsCalls++
 	return c.fakeGate.Tells(current, candidate)
+}
+
+func (c *countingGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+	c.languageCalls++
+	return c.fakeGate.Language(current, candidate)
 }
 
 // ---------------------------------------------------------------------------

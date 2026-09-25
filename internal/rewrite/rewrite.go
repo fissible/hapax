@@ -28,7 +28,7 @@ const (
 )
 
 func RejectionCodes() []RejectionCode {
-	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
 }
 
 var (
@@ -51,6 +51,7 @@ const (
 	RejectionTellsIncomparable    RejectionCode = "tells-incomparable"
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
+	RejectionLanguage             RejectionCode = "language"
 )
 
 // Terminal explains how a loop ended. It is deliberately separate from
@@ -100,7 +101,13 @@ type TellsVerdict struct {
 type Gate interface {
 	Preserve(current, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
+	Language(current, candidate string) (LanguageVerdict, error)
 }
+
+// LanguageVerdict names the scripts a candidate uses that the current text does
+// not. It is an introduction report, not a language identification: what is
+// measured is scripts, and any introduction at all refuses the candidate.
+type LanguageVerdict struct{ Introduced []string }
 
 type RewriteRequest struct {
 	Prompt                  string
@@ -121,6 +128,7 @@ type Attempt struct {
 	Preserved                           bool
 	PreserveIdentifiers                 []string
 	TellsComparison                     int
+	IntroducedScripts                   []string
 	TellsComparable, Accepted           bool
 	Rejection                           RejectionCode
 	ProfileID, ProviderID, InvocationID string
@@ -198,9 +206,12 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			rejection = RejectionDifferentFeatures
 		}
 		if rejection == "" {
+			// Every gate is consulted, whatever the first one says: precedence
+			// decides which single reason is reported, and the evidence each
+			// gate produced belongs in the record either way.
 			preservation, err := l.Gate.Preserve(current, candidate)
 			if err != nil {
-				return Outcome{}, err
+				return Outcome{}, fmt.Errorf("rewrite preserve gate: %w", err)
 			}
 			if !validPreservation(preservation) {
 				return Outcome{}, fmt.Errorf("%w: attempt %d, span ref %q", ErrPreserveIdentifier, attempt.Index, attempt.SpanRef)
@@ -209,13 +220,24 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			attempt.PreserveIdentifiers = append([]string(nil), preservation.Identifiers...)
 			tells, err := l.Gate.Tells(current, candidate)
 			if err != nil {
-				return Outcome{}, err
+				return Outcome{}, fmt.Errorf("rewrite tells gate: %w", err)
 			}
 			attempt.TellsComparison = tells.Comparison
 			attempt.TellsComparable = tells.Comparable
+			language, err := l.Gate.Language(current, candidate)
+			if err != nil {
+				return Outcome{}, fmt.Errorf("rewrite language gate: %w", err)
+			}
+			// COPIED, because a gate computing into a scratch buffer would
+			// otherwise rewrite the evidence of an already recorded refusal
+			// when the next candidate is measured.
+			attempt.IntroducedScripts = append([]string(nil), language.Introduced...)
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
+			// Any script the current text does not already use, at any share.
+			case len(language.Introduced) > 0:
+				rejection = RejectionLanguage
 			case !tells.Comparable:
 				rejection = RejectionTellsIncomparable
 			case tells.Comparison > 0:

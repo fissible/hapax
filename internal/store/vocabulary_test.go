@@ -282,7 +282,15 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt_identifier.invocation_id": "hex",
 	"rewrite_attempt_identifier.node_id":       "hex",
 	"rewrite_attempt_identifier.identifier":    "preserve-identifier",
-	"migration.checksum":                       "hex", "migration.applied_at": "time",
+	// #91. The script column holds one of the 163 keys of `unicode.Scripts`,
+	// which is 163 values too many for a CHECK to enumerate — so the database
+	// enforces the SHAPE and membership is left to the Go codec, the way
+	// "preserve-identifier" already is. The membership half is
+	// TestADamagedScriptNameIsCorruptionOnRead.
+	"rewrite_attempt_script.invocation_id": "hex",
+	"rewrite_attempt_script.node_id":       "hex",
+	"rewrite_attempt_script.script":        "script",
+	"migration.checksum":                   "hex", "migration.applied_at": "time",
 }
 
 // Values each grammar must refuse. "enum" is deliberately absent: it is covered
@@ -311,6 +319,14 @@ var grammarProbes = map[string][]string{
 	"preserve-identifier": {
 		"", "1979", "number:1979", "preserve-v1:number:lost:the year 1979",
 		"preserve-v1:number:lost:0123456789abcde", "preserve-v2:number:lost:0123456789abcdef",
+	},
+	// A Unicode script name: initial capital, letters and underscores only,
+	// between "Yi" and "Inscriptional_Parthian" in length. Every probe here is
+	// one the DATABASE refuses; the values that satisfy the shape and are still
+	// not scripts — "Japanese", "Common" — are the Go codec's half.
+	"script": {
+		"", "han", "Han script detected in 1979", "Han1", "Han-Script",
+		strings.Repeat("A", 41),
 	},
 }
 
