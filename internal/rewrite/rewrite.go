@@ -51,6 +51,7 @@ const (
 	RejectionTellsIncomparable    RejectionCode = "tells-incomparable"
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
+	RejectionLanguage             RejectionCode = "language"
 )
 
 // Terminal explains how a loop ended. It is deliberately separate from
@@ -100,7 +101,11 @@ type TellsVerdict struct {
 type Gate interface {
 	Preserve(current, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
+	Language(current, candidate string) (LanguageVerdict, error)
 }
+
+// STUB for phase-1 verification only.
+type LanguageVerdict struct{ Introduced []string }
 
 type RewriteRequest struct {
 	Prompt                  string
@@ -121,6 +126,7 @@ type Attempt struct {
 	Preserved                           bool
 	PreserveIdentifiers                 []string
 	TellsComparison                     int
+	IntroducedScripts                   []string
 	TellsComparable, Accepted           bool
 	Rejection                           RejectionCode
 	ProfileID, ProviderID, InvocationID string

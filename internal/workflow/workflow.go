@@ -1105,6 +1105,10 @@ func (g executionGate) Preserve(current, candidate string) (rewrite.Preservation
 	x, err := preserve.Check(current, candidate)
 	return rewrite.Preservation{Preserved: x.Preserved, Identifiers: x.Identifiers()}, err
 }
+func (g executionGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+	return rewrite.LanguageVerdict{}, nil
+}
+
 func (g executionGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
 	a, e := text.Admit([]byte(current))
 	if e != nil {
