@@ -513,7 +513,12 @@ func TestEveryRewriteAttemptFieldIsDecidedOnPurpose(t *testing.T) {
 		"CurrentDistance": true, "CandidateDistance": true,
 		"CurrentBand": true, "CandidateBand": true,
 		"Preserved": true, "PreserveIdentifiers": true,
-		"TellsComparison": true, "TellsComparable": true,
+		// #91. Persisted, because a language refusal discards the prose, so
+		// this is the only durable trace that the substitution happened — and
+		// safe to persist, because a script name comes from the closed
+		// vocabulary of `unicode.Scripts` rather than from the paragraph.
+		"IntroducedScripts": true,
+		"TellsComparison":   true, "TellsComparable": true,
 		"Accepted": true, "Rejection": true,
 		"ProfileID": true, "ProviderID": true, "InvocationID": true,
 	}
@@ -1044,6 +1049,7 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 			"InvocationID", "Index", "ProfileID", "ProviderID", "NodeID",
 			"CurrentHash", "CandidateHash", "CurrentDistance", "CandidateDistance",
 			"CurrentBand", "CandidateBand", "Preserved", "PreserveIdentifiers",
+			"IntroducedScripts",
 			"TellsComparison", "TellsComparable", "Accepted", "Rejection",
 		}},
 	}

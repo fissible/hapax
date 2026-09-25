@@ -240,9 +240,11 @@ type RewriteAttempt struct {
 	CurrentBand, CandidateBand         eval.Band
 	Preserved                          bool
 	PreserveIdentifiers                []string
-	TellsComparison                    int
-	TellsComparable, Accepted          bool
-	Rejection                          rewrite.RejectionCode
+	// STUB for phase-1 verification only: declared, not persisted.
+	IntroducedScripts         []string
+	TellsComparison           int
+	TellsComparable, Accepted bool
+	Rejection                 rewrite.RejectionCode
 }
 
 // HeadPolicy controls whether a profile write advances its register head.
