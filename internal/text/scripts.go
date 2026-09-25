@@ -60,6 +60,12 @@ func (s ScriptSet) Names() []string {
 	return names
 }
 
+// Dominant is a STUB for phase-1 verification only.
+func (s ScriptSet) Dominant() []string { return nil }
+
+// NewlyDominant is a STUB for phase-1 verification only.
+func (s ScriptSet) NewlyDominant(current ScriptSet) []string { return nil }
+
 // Introduced returns the sorted scripts present in s and absent from current,
 // regardless of their shares. It does not change either set.
 func (s ScriptSet) Introduced(current ScriptSet) []string {
