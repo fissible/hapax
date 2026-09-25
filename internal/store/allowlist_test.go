@@ -100,7 +100,10 @@ var declaredSchema = map[string][]string{
 		"tells_comparable", "accepted", "rejection",
 	},
 	"rewrite_attempt_identifier": {"invocation_id", "node_id", "attempt_index", "ordinal", "identifier"},
-	"migration":                  {"version", "checksum", "applied_at"},
+	// #91. The scripts a refused candidate introduced, mirroring the sibling
+	// above: a child table so the ordinals carry the recorded order.
+	"rewrite_attempt_script": {"invocation_id", "node_id", "attempt_index", "ordinal", "script"},
+	"migration":              {"version", "checksum", "applied_at"},
 }
 
 func tableColumns(t *testing.T, db *sql.DB, table string) []string {

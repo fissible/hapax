@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/fissible/hapax/internal/corpus"
 	"github.com/fissible/hapax/internal/deviation"
@@ -240,7 +241,9 @@ type RewriteAttempt struct {
 	CurrentBand, CandidateBand         eval.Band
 	Preserved                          bool
 	PreserveIdentifiers                []string
-	// STUB for phase-1 verification only: declared, not persisted.
+	// IntroducedScripts names the scripts the candidate used that the current
+	// text did not, in the order they were measured. A refusal discards the
+	// prose, so this is the only durable trace that the substitution happened.
 	IntroducedScripts         []string
 	TellsComparison           int
 	TellsComparable, Accepted bool
@@ -1249,7 +1252,9 @@ func invalidAttemptField(stored RewriteAttempt) string {
 	if !known(stored.ProviderID, llm.Providers()) || !known(stored.CurrentBand, eval.Bands()) || !known(stored.CandidateBand, eval.Bands()) || !known(stored.Rejection, rewrite.RejectionCodes()) || !finiteAll(stored.CurrentDistance, stored.CandidateDistance) {
 		return "decision metadata"
 	}
-	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "") != (stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) {
+	// An accepted attempt introduced nothing: any introduction refuses, so a
+	// record in that shape means the gate was bypassed.
+	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "") != (stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) || (stored.Accepted && len(stored.IntroducedScripts) > 0) {
 		return "decision state"
 	}
 	for _, identifier := range stored.PreserveIdentifiers {
@@ -1257,7 +1262,29 @@ func invalidAttemptField(stored RewriteAttempt) string {
 			return "preserve identifiers"
 		}
 	}
+	// The NAME only — a value that failed is never echoed, because this column
+	// takes a string built from the paragraph and a leak must not be published
+	// by the message that refuses it.
+	seen := make(map[string]bool, len(stored.IntroducedScripts))
+	for _, script := range stored.IntroducedScripts {
+		if !validScriptName(script) || seen[script] {
+			return "introduced scripts"
+		}
+		seen[script] = true
+	}
 	return ""
+}
+
+// validScriptName admits the 163 keys of unicode.Scripts except Common and
+// Inherited, which are script tables rather than scripts a text is written in.
+// text.Scripts attributes no letter to either, so a record naming one did not
+// come from the measurement that is supposed to produce these.
+func validScriptName(name string) bool {
+	if name == "Common" || name == "Inherited" {
+		return false
+	}
+	_, ok := unicode.Scripts[name]
+	return ok
 }
 func validAttempt(stored RewriteAttempt) bool {
 	return invalidAttemptField(stored) == ""
@@ -1302,6 +1329,11 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 				return err
 			}
 		}
+		for ordinal, script := range x.IntroducedScripts {
+			if _, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt_script (invocation_id,node_id,attempt_index,ordinal,script) VALUES (?,?,?,?,?)", x.InvocationID, x.NodeID, x.Index, ordinal, script); err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 }
@@ -1342,13 +1374,35 @@ func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID strin
 	if err = rows.Err(); err != nil {
 		return x, err
 	}
+	// ORDER BY ordinal, and the contiguity check with it: the ordinals are what
+	// carry the recorded order, so a gap or a repeat means the list read back is
+	// not the list written.
+	scripts, err := query.QueryContext(ctx, "SELECT ordinal,script FROM rewrite_attempt_script WHERE invocation_id=? AND node_id=? AND attempt_index=? ORDER BY ordinal", id, nodeID, index)
+	if err != nil {
+		return x, err
+	}
+	defer scripts.Close()
+	for ordinal := 0; scripts.Next(); ordinal++ {
+		var storedOrdinal int
+		var script string
+		if err = scripts.Scan(&storedOrdinal, &script); err != nil {
+			return x, err
+		}
+		if storedOrdinal != ordinal {
+			return x, ErrCorrupt
+		}
+		x.IntroducedScripts = append(x.IntroducedScripts, script)
+	}
+	if err = scripts.Err(); err != nil {
+		return x, err
+	}
 	if !validAttempt(x) {
 		return x, ErrCorrupt
 	}
 	return x, nil
 }
 func sameAttempt(a, b RewriteAttempt) bool {
-	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers)
+	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts)
 }
 
 type recorder struct {
@@ -1374,6 +1428,7 @@ func (r recorder) RecordAttempt(attempt rewrite.Attempt) error {
 		CandidateBand:       attempt.CandidateBand,
 		Preserved:           attempt.Preserved,
 		PreserveIdentifiers: attempt.PreserveIdentifiers,
+		IntroducedScripts:   attempt.IntroducedScripts,
 		TellsComparison:     attempt.TellsComparison,
 		TellsComparable:     attempt.TellsComparable,
 		Accepted:            attempt.Accepted,
