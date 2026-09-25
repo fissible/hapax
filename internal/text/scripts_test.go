@@ -545,10 +545,13 @@ func TestTheKnownLimitsOfScriptEvidence(t *testing.T) {
 		shares             map[string]float64
 	}{
 		{
-			name:    "the micro sign is Latin and Greek mu is Greek",
+			name:    "the micro sign is Common and Greek mu is Greek",
 			current: "The gap was 5\u00b5m across", candidate: "The gap was 5\u03bcm across",
 			want: []string{"Greek"},
-			note: "an ordinary unit-notation substitution reads as a script change",
+			note: "an ordinary unit-notation substitution reads as a script change: " +
+				"U+00B5 is COMMON and so contributes nothing, while U+03BC is Greek " +
+				"and does — an earlier comment of mine called U+00B5 Latin, which is " +
+				"wrong, though the expected result was right either way",
 		},
 		{
 			name:    "a Hangul filler is a Hangul letter",
