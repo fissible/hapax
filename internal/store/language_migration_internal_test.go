@@ -33,8 +33,8 @@ import (
 const languageMigration = 8
 
 type seededLanguageAttempt struct {
-	invocation, node, secondNode, profile string
-	accepted, rejected                    RewriteAttempt
+	invocation, node, secondNode, thirdNode, profile string
+	accepted, rejected, disagreeing                  RewriteAttempt
 }
 
 func TestAddingTheLanguageCodeKeepsTheAttemptsAlreadyStored(t *testing.T) {
@@ -93,6 +93,18 @@ func TestAddingTheLanguageCodeKeepsTheAttemptsAlreadyStored(t *testing.T) {
 		t.Errorf("the rejected attempt came back as\n%+v\nand was stored as\n%+v", got, seeded.rejected)
 	}
 
+	// The row whose `preserved` and `accepted` DISAGREE. Without it the two
+	// columns are interchangeable in every seeded row and the transposition is
+	// undetectable — which it was, across all three rebuilds, until now.
+	got, err = after.LoadRewriteAttempt(ctx, seeded.invocation, seeded.thirdNode, 0)
+	if err != nil {
+		t.Fatalf("the preserved-but-rejected attempt did not survive the rebuild: %v", err)
+	}
+	if !reflect.DeepEqual(got, seeded.disagreeing) {
+		t.Errorf("the preserved-but-rejected attempt came back as\n%+v\nand was stored as\n%+v",
+			got, seeded.disagreeing)
+	}
+
 	raw, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		t.Fatalf("open raw: %v", err)
@@ -130,6 +142,16 @@ func TestAddingTheLanguageCodeKeepsTheAttemptsAlreadyStored(t *testing.T) {
 		VALUES (?,?,1,0,'Han')`, seeded.invocation, seeded.node); err != nil {
 		t.Fatalf("recording a script against a migrated database: %v", err)
 	}
+	// Read it back through the Go loader before deleting anything: the new
+	// child table's read path had never run against a MIGRATED database.
+	withScripts, err := after.LoadRewriteAttempt(ctx, seeded.invocation, seeded.node, 1)
+	if err != nil {
+		t.Fatalf("loading the language refusal after migrating: %v", err)
+	}
+	if !reflect.DeepEqual(withScripts.IntroducedScripts, []string{"Han"}) {
+		t.Errorf("the migrated database read back %v, want [Han]", withScripts.IntroducedScripts)
+	}
+
 	if _, err := raw.Exec("DELETE FROM node WHERE node_id=?", seeded.node); err != nil {
 		t.Fatalf("delete node: %v", err)
 	}
@@ -154,11 +176,15 @@ func seedLanguageAttemptGraph(t *testing.T, s *Store) seededLanguageAttempt {
 	documentID := identity.HashInputs(map[string]string{"snapshot": snapshotID, "path": "a.md"})
 	out.node = identity.HashInputs(map[string]string{"document": documentID, "ordinal": "0"})
 	out.secondNode = identity.HashInputs(map[string]string{"document": documentID, "ordinal": "1"})
+	out.thirdNode = identity.HashInputs(map[string]string{"document": documentID, "ordinal": "2"})
 	acceptedCurrent := identity.HashBytes([]byte("language-current"))
 	acceptedCandidate := identity.HashBytes([]byte("language-candidate"))
 	rejectedCurrent := identity.HashBytes([]byte("language-current-2"))
 	rejectedCandidate := identity.HashBytes([]byte("language-candidate-2"))
+	disagreeingCurrent := identity.HashBytes([]byte("language-current-3"))
+	disagreeingCandidate := identity.HashBytes([]byte("language-candidate-3"))
 	identifier := "preserve-v1:negation:lost:0123456789abcdef"
+	secondIdentifier := "preserve-v1:number:invented:fedcba9876543210"
 
 	for _, statement := range []struct {
 		sql  string
@@ -173,6 +199,8 @@ func seedLanguageAttemptGraph(t *testing.T, s *Store) seededLanguageAttempt {
 			VALUES (?,?,0,'leaf','paragraph','document',0,12,1,'')`, []any{out.node, documentID}},
 		{`INSERT INTO node (node_id,document_id,ordinal,kind,role,containers,offset,length,included,exclusion)
 			VALUES (?,?,1,'leaf','paragraph','document',12,12,1,'')`, []any{out.secondNode, documentID}},
+		{`INSERT INTO node (node_id,document_id,ordinal,kind,role,containers,offset,length,included,exclusion)
+			VALUES (?,?,2,'leaf','paragraph','document',24,12,1,'')`, []any{out.thirdNode, documentID}},
 		{`INSERT INTO profile (id,snapshot_id,register,unit,variance_convention,manifest_digest,
 			feature_set_version,min_paragraph_lexical_tokens)
 			VALUES (?,?,'essays','paragraph','sample',?,1,1)`,
@@ -187,8 +215,20 @@ func seedLanguageAttemptGraph(t *testing.T, s *Store) seededLanguageAttempt {
 			preserved,tells_comparison,tells_comparable,accepted,rejection)
 			VALUES (?,0,?,'ollama',?,?,?,1.2,1.4,'drifting','not-you',0,2,1,0,'not-preserved')`,
 			[]any{out.invocation, out.profile, out.secondNode, rejectedCurrent, rejectedCandidate}},
+		// preserved=1 with accepted=0. The two columns hold the SAME value in
+		// every other row, so transposing them in the rebuild's positional
+		// SELECT was the identity function and passed the whole repository.
+		{`INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,
+			current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,
+			preserved,tells_comparison,tells_comparable,accepted,rejection)
+			VALUES (?,0,?,'ollama',?,?,?,0.8,0.9,'in-range','drifting',1,1,1,0,'tells-worse')`,
+			[]any{out.invocation, out.profile, out.thirdNode, disagreeingCurrent, disagreeingCandidate}},
 		{`INSERT INTO rewrite_attempt_identifier (invocation_id,node_id,attempt_index,ordinal,identifier)
 			VALUES (?,?,0,0,?)`, []any{out.invocation, out.secondNode, identifier}},
+		// A SECOND identifier at ordinal 1, so `attempt_index` and `ordinal` no
+		// longer both hold zero — transposing those two was the identity too.
+		{`INSERT INTO rewrite_attempt_identifier (invocation_id,node_id,attempt_index,ordinal,identifier)
+			VALUES (?,?,0,1,?)`, []any{out.invocation, out.secondNode, secondIdentifier}},
 	} {
 		if _, err := s.db.ExecContext(ctx, statement.sql, statement.args...); err != nil {
 			t.Fatalf("seeding %q: %v", statement.sql, err)
@@ -212,9 +252,18 @@ func seedLanguageAttemptGraph(t *testing.T, s *Store) seededLanguageAttempt {
 		CurrentHash: rejectedCurrent, CandidateHash: rejectedCandidate,
 		CurrentDistance: 1.2, CandidateDistance: 1.4,
 		CurrentBand: eval.BandDrifting, CandidateBand: eval.BandNotYou,
-		Preserved: false, PreserveIdentifiers: []string{identifier},
+		Preserved: false, PreserveIdentifiers: []string{identifier, secondIdentifier},
 		TellsComparison: 2, TellsComparable: true,
 		Accepted: false, Rejection: rewrite.RejectionNotPreserved,
+	}
+	out.disagreeing = RewriteAttempt{
+		InvocationID: out.invocation, Index: 0, ProfileID: out.profile,
+		ProviderID: llm.ProviderOllama, NodeID: out.thirdNode,
+		CurrentHash: disagreeingCurrent, CandidateHash: disagreeingCandidate,
+		CurrentDistance: 0.8, CandidateDistance: 0.9,
+		CurrentBand: eval.BandInRange, CandidateBand: eval.BandDrifting,
+		Preserved: true, TellsComparison: 1, TellsComparable: true,
+		Accepted: false, Rejection: rewrite.RejectionTellsWorse,
 	}
 	return out
 }
