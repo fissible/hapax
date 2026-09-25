@@ -301,6 +301,7 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			},
 			// distractor_pool has no parent: it is other people's writing and
 			// belongs to no profile. Its members belong to it and go with it.
+			"distractor_pool": nil,
 			"distractor_pool_member": {
 				{Parent: "distractor_pool", Columns: []column{{"pool_id", "id"}}, OnDelete: "CASCADE"},
 			},
