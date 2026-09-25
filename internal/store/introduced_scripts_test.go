@@ -43,6 +43,11 @@ import (
 //   - `vocabulary_test.go`'s `textualColumnGrammars` needs its textual columns
 //     (the two identity columns as "hex", the script column under a new
 //     grammar name), and `grammarProbes` needs that grammar's probe list.
+//   - `allowlist_test.go`'s foreign-key graph, which is a SEPARATE map from
+//     `declaredSchema` in the same file. That one is already widened here,
+//     along with a cross-check that no future table can be omitted from it
+//     silently — omitting this table produced no failure at all, which is how
+//     it survived two review rounds.
 //
 // Both files say in their own comments that widening them is a deliberate
 // decision. Stated here because the first signal is otherwise a test asserting
@@ -549,6 +554,72 @@ func TestTheSchemaRefusesARepeatedScriptOrdinal(t *testing.T) {
 	if _, err := openRaw(t, s).Exec(
 		"UPDATE rewrite_attempt_script SET ordinal=0"); err == nil {
 		t.Error("the schema accepted two scripts at the same ordinal")
+	}
+}
+
+// The scripts go when the attempt goes.
+//
+// This assertion is in the FROZEN set rather than left to the schema
+// declaration, because the declaration is checked by a test that iterates its
+// own map: a table absent from it is never queried, so its foreign keys — or
+// its absence of them — go unnoticed. Dropping this table's FK passed the
+// entire store package, while dropping the identical clause from
+// `rewrite_attempt_identifier` failed four tests.
+//
+// The header above says this table mirrors `rewrite_attempt_identifier`
+// exactly, and that sibling cascades. Until now that was prose asserting
+// something no test established — which is the failure this project keeps
+// having and keeps writing down.
+//
+// The consequence is specific: the attempt cascades away from `node` and the
+// preserve identifiers go with it, so orphaned script rows would sit in the
+// file unreachable by any loader. For a column whose whole justification is
+// being the only durable trace of a refusal, a trace with nothing left to
+// explain it is worse than none.
+func TestTheIntroducedScriptsGoWhenTheAttemptGoes(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	nodes := snapshot.Documents[0].Nodes
+	if len(nodes) < 2 {
+		t.Fatalf("the fixture has %d nodes; this test needs two", len(nodes))
+	}
+	doomed := refusedForLanguage(t, prof.ID, nodes[0].ID, "Han", "Cyrillic")
+	surviving := refusedForLanguage(t, prof.ID, nodes[1].ID, "Katakana")
+	surviving.InvocationID = doomed.InvocationID
+	surviving.CurrentHash = identity.HashBytes([]byte("the second paragraph"))
+	for _, attempt := range []store.RewriteAttempt{doomed, surviving} {
+		if err := s.PutRewriteAttempt(ctx(), attempt); err != nil {
+			t.Fatalf("PutRewriteAttempt(%s): %v", attempt.NodeID, err)
+		}
+	}
+
+	raw := openRaw(t, s)
+	if _, err := raw.Exec("PRAGMA foreign_keys=1"); err != nil {
+		t.Fatalf("enable foreign keys: %v", err)
+	}
+	if _, err := raw.Exec("DELETE FROM node WHERE node_id=?", doomed.NodeID); err != nil {
+		t.Fatalf("delete node: %v", err)
+	}
+
+	var orphaned int
+	if err := raw.QueryRow(
+		"SELECT count(*) FROM rewrite_attempt_script WHERE node_id=?",
+		doomed.NodeID).Scan(&orphaned); err != nil {
+		t.Fatalf("counting script rows: %v", err)
+	}
+	if orphaned != 0 {
+		t.Errorf("%d script rows outlived the attempt they belong to", orphaned)
+	}
+
+	// And the other paragraph's are untouched, so the cascade is scoped to the
+	// attempt rather than being a delete-everything.
+	got, err := s.LoadRewriteAttempt(ctx(),
+		surviving.InvocationID, surviving.NodeID, surviving.Index)
+	if err != nil {
+		t.Fatalf("the surviving attempt went with it: %v", err)
+	}
+	if !reflect.DeepEqual(got.IntroducedScripts, []string{"Katakana"}) {
+		t.Errorf("the surviving attempt records %v, want [Katakana]", got.IntroducedScripts)
 	}
 }
 

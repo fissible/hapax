@@ -321,6 +321,32 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 				Parent:  "rewrite_attempt",
 				Columns: []column{{"invocation_id", "invocation_id"}, {"node_id", "node_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",
 			}},
+			// #91. The same edge as its sibling above, for the same reason: a
+			// script name that outlives the attempt it belongs to is a trace
+			// with nothing left to say what it was a trace of.
+			"rewrite_attempt_script": {{
+				Parent:  "rewrite_attempt",
+				Columns: []column{{"invocation_id", "invocation_id"}, {"node_id", "node_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",
+			}},
+		}
+
+		// Every declared table must appear HERE, including with a nil edge
+		// list. This map is iterated rather than `declaredSchema`, so a table
+		// absent from it is never queried and its foreign keys — or its lack of
+		// them — are silently unchecked. #91 added `rewrite_attempt_script`
+		// and that omission cost a review round: dropping its FK passed the
+		// whole package while dropping the identical clause from its sibling
+		// failed four tests.
+		for table := range declaredSchema {
+			if _, declared := want[table]; !declared {
+				t.Errorf("%s is in declaredSchema but declares no foreign keys here, "+
+					"not even nil; its edges are unchecked", table)
+			}
+		}
+		for table := range want {
+			if _, declared := declaredSchema[table]; !declared {
+				t.Errorf("%s declares foreign keys here but is not in declaredSchema", table)
+			}
 		}
 
 		for table, expected := range want {
