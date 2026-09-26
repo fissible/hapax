@@ -85,6 +85,7 @@ const (
 	better    = "A candidate that measures closer to the author than the original."
 	betterYet = "A second candidate, closer still than the first one was."
 	bestYet   = "A third candidate, closer again than the second one was."
+	bestOfAll = "A fourth candidate, closer again than the third one was."
 	worse     = "A candidate that measures further away than the original does."
 )
 

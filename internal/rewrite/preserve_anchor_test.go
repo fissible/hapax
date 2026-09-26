@@ -100,8 +100,13 @@ import (
 // current" — passes a depth-two test, because the first call's anchor is the
 // original either way and the second is the first candidate under both a lagged
 // and a correct implementation only when there has been exactly one acceptance.
-// Three acceptances separate them, and a fourth call catches an anchor that
-// starts advancing later.
+// Three acceptances separate those two.
+//
+// FOUR candidates, because three did not separate a correct anchor from one that
+// is correct for three calls and advances from the fourth on — that passed the
+// whole suite. A fourth GATE call needs a fourth candidate, not a raised attempt
+// cap: an exhausted provider returns an empty response before the gate block
+// runs, so `Attempts = 4` with three candidates buys no call at all.
 //
 // Both gates' arguments are read, so the same lag applied to #107's growth
 // anchor is caught here too.
@@ -109,17 +114,17 @@ func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 	gate := passingGate()
 	loop, _, _, _, _ := loopOver(t,
 		map[string]score.Report{
-			original: scored(0.90), better: scored(0.70),
-			betterYet: scored(0.50), bestYet: scored(0.30),
+			original: scored(0.90), better: scored(0.70), betterYet: scored(0.50),
+			bestYet: scored(0.30), bestOfAll: scored(0.20),
 		},
-		[]string{better, betterYet, bestYet}, gate)
-	loop.Options.Attempts = 4
+		[]string{better, betterYet, bestYet, bestOfAll}, gate)
+	loop.Options.Attempts = 5
 
 	got := run(t, loop)
 
-	// Three acceptances, so `current` advanced twice after the first call.
-	if !got.Changed || got.Text != bestYet {
-		t.Fatalf("the fixture must accept all THREE candidates or depth is not under "+
+	// Four acceptances, so `current` advanced three times after the first call.
+	if !got.Changed || got.Text != bestOfAll {
+		t.Fatalf("the fixture must accept all FOUR candidates or depth is not under "+
 			"test: changed=%v text=%q", got.Changed, got.Text)
 	}
 	// Exactly three, because one call per candidate is the contract — the same
@@ -128,11 +133,11 @@ func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 	// is still refused here, deliberately: two calls per candidate doubles the
 	// provider-independent work and the record would have to say which anchor
 	// each verdict came from.
-	if len(gate.preserveArgs) != 3 {
-		t.Fatalf("preserve was asked %d times, want 3 — one per candidate: %v",
+	if len(gate.preserveArgs) != 4 {
+		t.Fatalf("preserve was asked %d times, want 4 — one per candidate: %v",
 			len(gate.preserveArgs), gate.preserveArgs)
 	}
-	wantCandidates := []string{better, betterYet, bestYet}
+	wantCandidates := []string{better, betterYet, bestYet, bestOfAll}
 	for i, args := range gate.preserveArgs {
 		if args[0] != original {
 			t.Errorf("preserve call %d anchored on %q, want the original — a "+
@@ -143,8 +148,8 @@ func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 		}
 	}
 	// #107's anchor, at the same depth and through the same fixture.
-	if len(gate.languageArgs) != 3 {
-		t.Fatalf("language was asked %d times, want 3: %v",
+	if len(gate.languageArgs) != 4 {
+		t.Fatalf("language was asked %d times, want 4: %v",
 			len(gate.languageArgs), gate.languageArgs)
 	}
 	for i, args := range gate.languageArgs {
@@ -153,10 +158,10 @@ func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 		}
 	}
 	// And tells keeps ratcheting, at depth. The middle argument advances.
-	if len(gate.tellsArgs) != 3 {
-		t.Fatalf("tells was asked %d times, want 3: %v", len(gate.tellsArgs), gate.tellsArgs)
+	if len(gate.tellsArgs) != 4 {
+		t.Fatalf("tells was asked %d times, want 4: %v", len(gate.tellsArgs), gate.tellsArgs)
 	}
-	wantCurrent := []string{original, better, betterYet}
+	wantCurrent := []string{original, better, betterYet, bestYet}
 	for i, args := range gate.tellsArgs {
 		if args[0] != wantCurrent[i] {
 			t.Errorf("tells call %d compared against %q, want %q — tells is a monotone "+
