@@ -4,31 +4,55 @@ package rewrite_test
 // entity, because `Gate.Preserve` receives the ADVANCING `current` and
 // `preserve.Check` is not transitive.
 //
-// Measured against the shipped code:
+// Measured against shipped `preserve.Check`, with the strings written out in
+// full because abbreviating one of them changed the result:
 //
-//	"Smith met Jones at the market on Tuesday."  ->  "...met jones..."          preserved=true
-//	"...met jones..."                            ->  "Smith went to the market" preserved=true
-//	"Smith met Jones at the market on Tuesday."  ->  "Smith went to the market" preserved=FALSE
-//	                                                   [preserve-v1:entity:lost:...]
+//	O  "Smith met Jones at the market on Tuesday."
+//	M  "Smith met jones at the market on Tuesday."
+//	C  "Smith went to the market on Tuesday."
+//
+//	O -> M   preserved=true
+//	M -> C   preserved=true
+//	O -> C   preserved=FALSE   [preserve-v1:entity:lost:6dc55025ffa645ac]
+//
+// The "on Tuesday" in C is load-bearing. Drop it and rung two becomes false on
+// its own, because Tuesday leaves the pair's watch set — so that shorter triple
+// is not a witness for this bug at all. An earlier draft of this header
+// abbreviated C exactly that way while presenting the numbers as measured.
 //
 // Two accepted attempts and the entity the guard exists to protect is gone.
 // `--attempts` has no upper bound, so the chain is as long as a caller asks for.
 //
+// # It needs no proper noun
+//
+// The same composition, with nothing that looks like an entity in it:
+//
+//	O  "Yesterday the market was busy and the sellers were loud."
+//	M  "the market yesterday was busy and the sellers were loud."
+//	C  "the market was busy and the sellers were loud."
+//
+//	O -> M   preserved=true
+//	M -> C   preserved=true
+//	O -> C   preserved=FALSE   [preserve-v1:entity:lost:734e476d2f0f911f]
+//
+// What the advancing anchor launders is not the lowercasing — the watch set is
+// case-folded, so a case change is never a loss — but watch MEMBERSHIP. Once no
+// text in the pair capitalizes "Yesterday", it leaves the watch set and the next
+// candidate may delete it. That is this bug and #118's cost in one triple.
+//
 // # Why the fix is an anchor and not transitivity
 //
-// The first proposal was to make `preserve.Check` transitive by building
-// `entityItems`'s watch set from the current text alone. Measured, that silently
-// drops ENTITY invention: only the entity class is gated by a pair-derived watch
-// set, so a candidate fabricating a name would have no watched item and nothing
-// to count. The other four classes — number, negation, URL, quote — detect
-// invention from per-document maps and are unaffected. A style rewriter that
-// stops noticing invented names to gain transitivity has made a bad trade.
+// The first proposal was to make `Check` transitive by building `entityItems`'s
+// watch set from the current text alone. Measured, that silently drops ENTITY
+// invention: only that class is gated by a pair-derived watch set, so a
+// candidate fabricating a name would have no watched item and nothing to count.
+// Number, negation, URL and quote invention are unaffected. A style rewriter
+// that stops noticing invented names to gain transitivity has made a bad trade.
 //
 // Anchoring on the ORIGINAL removes the need for transitivity instead of
-// supplying it. With one fixed reference there is no composition: every accepted
-// candidate preserves the original's items by construction.
+// supplying it: with one fixed reference there is no composition.
 //
-// # The distinction this settles, because the two gates now look inconsistent
+// # The distinction this settles, because the gates now look inconsistent
 //
 // They are not. They have opposite structure:
 //
@@ -36,121 +60,166 @@ package rewrite_test
 //     held" — anchors on the ORIGINAL. Preserve, and #107's script growth.
 //   - A MONOTONE COMPARISON — "each step must be no worse than the best so far"
 //     — ratchets against CURRENT. Tells, the distance, and #91's script
-//     introduction, where the script set only shrinks so current is stricter.
+//     introduction.
 //
-// Anchoring tells would WEAKEN it: original at 5 findings, one accepted at 3,
-// the next at 4 passes against the original while regressing against the best
-// found, and that fourth is what gets published. Making the gates uniform would
-// break the two that ratchet.
+// #91 belongs in the second group, and it is not a judgement call.
+// `ScriptSet.Introduced` is threshold-free set containment, so acceptance forces
+// `scripts(candidate) ⊆ scripts(current)`, hence `scripts(current) ⊆
+// scripts(original)` by induction from `current := segment.Text`. The current
+// anchor is therefore strictly STRICTER for introduction, and #107's growth rule
+// only adds refusals so it cannot disturb that induction.
 //
-// # Two consequences, both stated rather than discovered
+// The cost of that strictness, unstated until now: once an accepted step drops
+// one of the original's own scripts, a later candidate restoring it is refused
+// as an introduction. The ratchet over-refuses exactly where preserve
+// under-refused.
 //
-// `PreserveIdentifiers` changes meaning: differences against the original, not
-// against the running text. No schema change, but the recorded evidence answers
-// a different question than it did.
+// # What this does NOT close
 //
-// And the accept rate will fall. The watch predicate treats every
-// sentence-initial ordinary word as an entity — measured, 40.7% of watched items
-// in the maintainer's corpus are words that corpus mostly writes lowercase — and
-// today the advancing anchor launders them away after one accepted step. That
-// laundering IS this bug, so closing it pins those artefacts for the whole loop.
-// `not-preserved` is already the most common rejection in that store, 8 of 21
-// attempts. The predicate is #118; it is not this issue, and it will be more
-// visible after this.
+// `segment.Text` is the original of THIS invocation. `workflow` slices the
+// passage out of the input document, so running `hapax rewrite` twice over an
+// already-rewritten file composes exactly as described above, unbounded and
+// unrecorded. That is #111, and this slice inherits it as #107 does.
+//
+// And `PreserveIdentifiers` changes meaning: differences against the original,
+// not against the running text. No schema change, but the recorded evidence
+// answers a different question than it did.
 
 import (
+	"context"
 	"testing"
 
+	"github.com/fissible/hapax/internal/preserve"
 	"github.com/fissible/hapax/internal/rewrite"
 	"github.com/fissible/hapax/internal/score"
 )
 
-// The gate is asked about the ORIGINAL and the candidate.
+// The gate is asked about the ORIGINAL, at every depth.
 //
-// A gate handed the advancing `current` passes both rungs of the measured
-// composition above. The arguments are recorded because a verdict-only assertion
-// cannot tell the two apart: the fake answers the same either way.
-func TestThePreserveGateIsAskedAboutTheOriginal(t *testing.T) {
+// Two candidates prove too little: a one-step-LAGGED anchor — "the previous
+// current" — passes a depth-two test, because the first call's anchor is the
+// original either way and the second is the first candidate under both a lagged
+// and a correct implementation only when there has been exactly one acceptance.
+// Three acceptances separate them, and a fourth call catches an anchor that
+// starts advancing later.
+//
+// Both gates' arguments are read, so the same lag applied to #107's growth
+// anchor is caught here too.
+func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 	gate := passingGate()
 	loop, _, _, _, _ := loopOver(t,
 		map[string]score.Report{
-			original: scored(0.90), better: scored(0.60), betterYet: scored(0.30),
+			original: scored(0.90), better: scored(0.70),
+			betterYet: scored(0.50), bestYet: scored(0.30),
 		},
-		[]string{better, betterYet}, gate)
+		[]string{better, betterYet, bestYet}, gate)
+	loop.Options.Attempts = 4
 
 	got := run(t, loop)
 
-	// Both accepted, so `current` advanced between the two calls.
-	if !got.Changed || got.Text != betterYet {
-		t.Fatalf("the fixture must accept BOTH candidates or the anchor is not under "+
+	// Three acceptances, so `current` advanced twice after the first call.
+	if !got.Changed || got.Text != bestYet {
+		t.Fatalf("the fixture must accept all THREE candidates or depth is not under "+
 			"test: changed=%v text=%q", got.Changed, got.Text)
 	}
-	if len(gate.preserveArgs) != 2 {
-		t.Fatalf("the gate was asked %d times, want 2: %v",
+	// Exactly three, because one call per candidate is the contract — the same
+	// invariant `TestLanguageIsConsultedOncePerCandidate` states for the other
+	// gate. An implementation checking BOTH anchors would be strictly safer and
+	// is still refused here, deliberately: two calls per candidate doubles the
+	// provider-independent work and the record would have to say which anchor
+	// each verdict came from.
+	if len(gate.preserveArgs) != 3 {
+		t.Fatalf("preserve was asked %d times, want 3 — one per candidate: %v",
 			len(gate.preserveArgs), gate.preserveArgs)
 	}
-	if gate.preserveArgs[0] != [2]string{original, better} {
-		t.Errorf("the first call was %v, want (original, better)", gate.preserveArgs[0])
-	}
-	// The anchor does not advance with `current`.
-	if gate.preserveArgs[1] != [2]string{original, betterYet} {
-		t.Errorf("the second call was %v, want (original, betterYet) — preserve is an "+
-			"INVARIANT and anchors on the original", gate.preserveArgs[1])
-	}
-}
-
-// And it does not advance after a refusal either.
-func TestThePreserveAnchorSurvivesARefusal(t *testing.T) {
-	gate := &fakeGate{
-		fallback: gateVerdict{preserved: true, comparison: -1, comparable: true},
-		verdicts: map[string]gateVerdict{
-			// Refused on tells, so preserve ran and the attempt was not accepted.
-			better: {preserved: true, comparison: 1, comparable: true},
-		},
-	}
-	loop, _, _, provider, _ := loopOver(t,
-		map[string]score.Report{
-			original: scored(0.90), better: scored(0.30), betterYet: scored(0.75),
-		},
-		[]string{better, betterYet}, gate)
-
-	got := run(t, loop)
-
-	requireConsistent(t, got, loop.Options.Attempts, len(provider.requests))
-	if len(gate.preserveArgs) != 2 {
-		t.Fatalf("the gate was asked %d times, want 2: %v",
-			len(gate.preserveArgs), gate.preserveArgs)
-	}
+	wantCandidates := []string{better, betterYet, bestYet}
 	for i, args := range gate.preserveArgs {
 		if args[0] != original {
-			t.Errorf("call %d anchored on %q, want the original", i, args[0])
+			t.Errorf("preserve call %d anchored on %q, want the original — a "+
+				"one-step-lagged anchor passes at depth two and is wrong here", i, args[0])
+		}
+		if args[1] != wantCandidates[i] {
+			t.Errorf("preserve call %d asked about %q, want %q", i, args[1], wantCandidates[i])
+		}
+	}
+	// #107's anchor, at the same depth and through the same fixture.
+	if len(gate.languageArgs) != 3 {
+		t.Fatalf("language was asked %d times, want 3: %v",
+			len(gate.languageArgs), gate.languageArgs)
+	}
+	for i, args := range gate.languageArgs {
+		if args[0] != original {
+			t.Errorf("language call %d anchored on %q, want the original", i, args[0])
+		}
+	}
+	// And tells keeps ratcheting, at depth. The middle argument advances.
+	if len(gate.tellsArgs) != 3 {
+		t.Fatalf("tells was asked %d times, want 3: %v", len(gate.tellsArgs), gate.tellsArgs)
+	}
+	wantCurrent := []string{original, better, betterYet}
+	for i, args := range gate.tellsArgs {
+		if args[0] != wantCurrent[i] {
+			t.Errorf("tells call %d compared against %q, want %q — tells is a monotone "+
+				"comparison and ratchets", i, args[0], wantCurrent[i])
 		}
 	}
 }
 
-// The composition that #116 is about, driven through the loop.
+// The composition #116 is about, driven through the loop with the REAL gate.
 //
-// The fake answers per candidate, so this pins the LOOP's behaviour rather than
-// `preserve.Check`'s: a candidate that would be preserved against the running
-// text but not against the original must be refused. Under the old anchor the
-// second candidate was accepted and published.
-func TestACandidatePreservedOnlyAgainstTheRunningTextIsRefused(t *testing.T) {
-	gate := &anchorSensitiveGate{fakeGate: passingGate()}
+// Every other assertion here runs a fake, so nothing ran `preserve.Check`
+// through the loop at all — and the production gate's own argument order was
+// unpinned: swapping it passes the whole repository, because `Check`'s verdict
+// is symmetric. Only the recorded evidence inverts, every `lost` becoming an
+// `invented` with a different digest. The decision survives and the audit trail
+// lies, so the DIRECTION is asserted here and not merely the refusal.
+//
+// The fixture is the laundering triple: no proper noun, so what it demonstrates
+// is watch membership rather than capitalization.
+func TestTheRealPreserveGateRefusesTheComposition(t *testing.T) {
+	const (
+		originalText = "Yesterday the market was busy and the sellers were loud."
+		launderer    = "the market yesterday was busy and the sellers were loud."
+		dropper      = "the market was busy and the sellers were loud."
+	)
+	// The triple's shape is asserted first: both rungs admissible pairwise, the
+	// composition not. If `preserve.Check` ever changes, this fails here rather
+	// than misattributing the failure to the loop.
+	for _, step := range []struct {
+		name, from, to string
+		want           bool
+	}{
+		{"first rung", originalText, launderer, true},
+		{"second rung", launderer, dropper, true},
+		{"the composition", originalText, dropper, false},
+	} {
+		got, err := preserve.Check(step.from, step.to)
+		if err != nil {
+			t.Fatalf("%s: Check: %v", step.name, err)
+		}
+		if got.Preserved != step.want {
+			t.Fatalf("%s: preserved=%v, want %v — this fixture no longer demonstrates "+
+				"the composition", step.name, got.Preserved, step.want)
+		}
+	}
+
 	loop, _, _, _, store := loopOver(t,
 		map[string]score.Report{
-			original: scored(0.90), better: scored(0.60), betterYet: scored(0.30),
+			originalText: scored(0.90), launderer: scored(0.60), dropper: scored(0.30),
 		},
-		[]string{better, betterYet}, passingGate())
-	loop.Gate = gate
+		[]string{launderer, dropper}, passingGate())
+	// The gate handed to loopOver is discarded; only the real one below matters.
+	// loopOver's signature takes a *fakeGate, which is why it is built at all.
+	loop.Gate = realPreserveGate{}
 
-	got := run(t, loop)
+	got, err := loop.Rewrite(context.Background(), rewrite.Segment{Text: originalText, SpanRef: "span-0"})
+	if err != nil {
+		t.Fatalf("Rewrite: %v", err)
+	}
 
-	// The first candidate is admissible against the original and is accepted.
-	// The second is admissible against the FIRST and not against the original,
-	// so it must be refused and must not reach the text.
-	if got.Text != better {
-		t.Errorf("the outcome carries %q, want the first candidate — the second is "+
-			"preserved only against the running text", got.Text)
+	// The launderer is accepted; the dropper is refused against the ORIGINAL.
+	if got.Text != launderer {
+		t.Errorf("the outcome carries %q, want the first candidate", got.Text)
 	}
 	if len(got.Attempts) != 2 || len(store.attempts) != 2 {
 		t.Fatalf("%d attempts recorded and %d stored, want 2 and 2",
@@ -163,68 +232,35 @@ func TestACandidatePreservedOnlyAgainstTheRunningTextIsRefused(t *testing.T) {
 			t.Errorf("the %s second attempt was rejected as %q, want %q",
 				where, attempt.Rejection, rewrite.RejectionNotPreserved)
 		}
-		if attempt.Preserved {
-			t.Errorf("the %s second attempt records preserve as passing", where)
-		}
-		// The identifiers now name differences against the ORIGINAL.
+		// The DIRECTION. An argument-swapped gate refuses identically and
+		// records `invented` instead, which is the audit trail lying.
 		if len(attempt.PreserveIdentifiers) != 1 ||
-			attempt.PreserveIdentifiers[0] != lostAgainstTheOriginal {
-			t.Errorf("the %s second attempt records %v, want the identifier measured "+
-				"against the original", where, attempt.PreserveIdentifiers)
+			attempt.PreserveIdentifiers[0] != launderedEntityLost {
+			t.Errorf("the %s second attempt records %v, want [%s] — a gate with its "+
+				"arguments swapped refuses too, and records an invention",
+				where, attempt.PreserveIdentifiers, launderedEntityLost)
 		}
 	}
 }
 
-const lostAgainstTheOriginal = "preserve-v1:entity:lost:3d4c981bf761d9b8"
+// Measured, not copied: the identifier `preserve.Check` emits for the laundered
+// entity loss. Earlier drafts reused a `number:lost` fixture digest from
+// elsewhere in the package under an `entity:lost` prefix.
+const launderedEntityLost = "preserve-v1:entity:lost:734e476d2f0f911f"
 
-// anchorSensitiveGate answers differently depending on which text it is handed,
-// which is the whole point: it is preserved against `better` and not against
-// `original`. A gate reading the advancing `current` sees the first and accepts.
-type anchorSensitiveGate struct {
-	*fakeGate
+// realPreserveGate runs the production check and passes everything else, so the
+// only thing under test is what preserve is asked about.
+type realPreserveGate struct{}
+
+func (realPreserveGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
+	x, err := preserve.Check(original, candidate)
+	return rewrite.Preservation{Preserved: x.Preserved, Identifiers: x.Identifiers()}, err
 }
 
-func (a *anchorSensitiveGate) Preserve(anchor, candidate string) (rewrite.Preservation, error) {
-	a.fakeGate.Preserve(anchor, candidate)
-	if candidate == betterYet && anchor == original {
-		return rewrite.Preservation{
-			Preserved:   false,
-			Identifiers: []string{lostAgainstTheOriginal},
-		}, nil
-	}
-	return rewrite.Preservation{Preserved: true}, nil
+func (realPreserveGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
+	return rewrite.TellsVerdict{Comparison: -1, Comparable: true}, nil
 }
 
-// Tells still ratchets against the running text, and must not be anchored.
-//
-// The two gates have opposite structure, so this is asserted rather than left to
-// a reader to infer from the absence of a test. Anchoring tells would accept a
-// candidate that regressed against the best found so far.
-func TestTheTellsGateStillRatchetsAgainstTheRunningText(t *testing.T) {
-	gate := passingGate()
-	loop, _, _, _, _ := loopOver(t,
-		map[string]score.Report{
-			original: scored(0.90), better: scored(0.60), betterYet: scored(0.30),
-		},
-		[]string{better, betterYet}, gate)
-
-	got := run(t, loop)
-
-	if !got.Changed || got.Text != betterYet {
-		t.Fatalf("the fixture must accept BOTH candidates: changed=%v text=%q",
-			got.Changed, got.Text)
-	}
-	if len(gate.tellsArgs) != 2 {
-		t.Fatalf("the gate was asked %d times, want 2: %v",
-			len(gate.tellsArgs), gate.tellsArgs)
-	}
-	if gate.tellsArgs[0] != [2]string{original, better} {
-		t.Errorf("the first call was %v, want (original, better)", gate.tellsArgs[0])
-	}
-	// ADVANCES, unlike preserve.
-	if gate.tellsArgs[1] != [2]string{better, betterYet} {
-		t.Errorf("the second call was %v, want (better, betterYet) — tells is a "+
-			"monotone comparison and ratchets against the running text",
-			gate.tellsArgs[1])
-	}
+func (realPreserveGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
+	return rewrite.LanguageVerdict{}, nil
 }

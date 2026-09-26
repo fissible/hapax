@@ -4,8 +4,12 @@ package rewrite_test
 //
 //	current begins as the input. A candidate is accepted iff, against current:
 //	  1. d(candidate) <= d(current) - epsilon, and
-//	  2. preserve(current -> candidate) passes, and
+//	  2. preserve(ORIGINAL -> candidate) passes, and
 //	  3. tells(candidate) is no worse as a severity-lexicographic vector.
+//
+// Condition 2 anchors on the ORIGINAL rather than current, because preserve.Check
+// is not transitive and two accepted steps compose into one that loses an item
+// (#116). Conditions 1 and 3 ratchet against current, where that is stricter.
 //
 // Improvement is required on d alone; conditions 2 and 3 are non-regression
 // guards. Ties inside epsilon are rejections. Attempts are capped.
@@ -80,6 +84,7 @@ const (
 	original  = "The original paragraph, which is what the loop begins with."
 	better    = "A candidate that measures closer to the author than the original."
 	betterYet = "A second candidate, closer still than the first one was."
+	bestYet   = "A third candidate, closer again than the second one was."
 	worse     = "A candidate that measures further away than the original does."
 )
 
