@@ -494,7 +494,7 @@ func TestEveryGateErrorNamesTheGateThatFailed(t *testing.T) {
 
 type erroringPreserveGate struct{ *fakeGate }
 
-func (e *erroringPreserveGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+func (e *erroringPreserveGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
 	return rewrite.Preservation{}, errGateUnavailable
 }
 

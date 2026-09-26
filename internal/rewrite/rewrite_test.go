@@ -187,14 +187,22 @@ type fakeGate struct {
 	verdicts     map[string]gateVerdict
 	fallback     gateVerdict
 	languageArgs [][3]string
+	preserveArgs [][2]string
+	tellsArgs    [][2]string
 }
 
-func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+func (f *fakeGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
+	// The ARGUMENTS are recorded, because a gate handed the advancing `current`
+	// answers identically here and passes both rungs of #116's composition.
+	f.preserveArgs = append(f.preserveArgs, [2]string{original, candidate})
 	v := f.verdict(candidate)
 	return rewrite.Preservation{Preserved: v.preserved, Identifiers: v.identifiers}, nil
 }
 
 func (f *fakeGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
+	// Recorded too, so the OPPOSITE anchor is pinned rather than assumed: tells
+	// is a monotone comparison and must keep ratcheting against `current`.
+	f.tellsArgs = append(f.tellsArgs, [2]string{current, candidate})
 	v := f.verdict(candidate)
 	return rewrite.TellsVerdict{Comparison: v.comparison, Comparable: v.comparable}, nil
 }
@@ -1242,9 +1250,9 @@ type countingGate struct {
 	preserveCalls, tellsCalls, languageCalls int
 }
 
-func (c *countingGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+func (c *countingGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
 	c.preserveCalls++
-	return c.fakeGate.Preserve(current, candidate)
+	return c.fakeGate.Preserve(original, candidate)
 }
 
 func (c *countingGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {

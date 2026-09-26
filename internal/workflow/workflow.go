@@ -1101,8 +1101,12 @@ func (s executionSelector) Exemplars(n int) ([]string, error) {
 
 type executionGate struct{ register string }
 
-func (g executionGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
-	x, err := preserve.Check(current, candidate)
+// Preserve compares the candidate against the ORIGINAL paragraph. preserve.Check
+// is not transitive — its entity watch set is built from both texts — so
+// comparing against the advancing current text lets two accepted steps compose
+// into one that loses an item (#116).
+func (g executionGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
+	x, err := preserve.Check(original, candidate)
 	return rewrite.Preservation{Preserved: x.Preserved, Identifiers: x.Identifiers()}, err
 }
 
