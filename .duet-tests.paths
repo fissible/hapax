@@ -10,3 +10,4 @@ internal/store/artifacts_test.go
 internal/store/allowlist_test.go
 internal/store/artifact_fixtures_test.go
 internal/store/language_migration_internal_test.go
+internal/store/growth_migration_internal_test.go
