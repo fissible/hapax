@@ -408,6 +408,9 @@ func contains(a []string, x string) bool {
 }
 func eligible(c Category) bool { return c == AuthorDeviation || c == SourceContamination }
 
+// Comparable is a STUB for phase-1 verification only.
+func (r *RuleSet) Comparable() bool { return false }
+
 type scopedSuppression struct {
 	Suppression
 	start, end int

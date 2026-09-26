@@ -855,6 +855,8 @@ type RewriteResult struct {
 	Targeting            workflow.Targeting       `json:"selection"`
 	Claim                workflow.Claim           `json:"claim"`
 	CalibrationAvailable bool                     `json:"calibration_available"`
+	// TellsInactiveReason is a STUB for phase-1 verification only.
+	TellsInactiveReason string `json:"tells_inactive_reason,omitempty"`
 }
 
 type EvalDiscrimination struct {
@@ -1160,6 +1162,12 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 	}
 	return code
 }
+
+// TellsInactiveNoValidatedRule is a STUB for phase-1 verification only.
+const TellsInactiveNoValidatedRule = ""
+
+// TellsInactiveReasons is a STUB for phase-1 verification only.
+func TellsInactiveReasons() []string { return nil }
 
 func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult {
 	return RewriteResult{Path: path, PlanState: report.PlanState, RewriteState: report.State,
