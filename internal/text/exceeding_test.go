@@ -83,7 +83,16 @@ package text_test
 //
 //	refuse  iff  not established
 //	        and  share(candidate) > ceiling
-//	        and  ( count grew  or  share(candidate) > established )
+//	        and  ( count grew  or  share(candidate) >= established )
+//
+// The share arm is INCLUSIVE, and it has to be, because `established` itself is
+// inclusive. Written exclusive the two comparisons point opposite ways: a
+// candidate landing exactly on the threshold is admitted, and is then
+// established as the next invocation's anchor, which is one rung of #111 created
+// by a choice of operator. Measured — Han 15 of 90 shortened to 15 of 60 is
+// exactly 25.0000% on an unchanged count, and the next invocation may take it to
+// 100%. So a rewrite may KEEP a script at the threshold and may never CLIMB to
+// it.
 //
 // The relation to #91 is CONTAINMENT, not equality. An introduced script has an
 // original count of zero, so it is never established and its count always grew:
@@ -315,7 +324,7 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			// the candidate, which deleted every Latin letter. The count never
 			// grew, so the count arm alone admits it; the share arm refuses it.
 			name:      "taking over the paragraph by deleting the rest",
-			original:  "The author 著著著著著著著著著著著著著著著著著著著著著 never draws it at all and the reader never once asks him why that is so",
+			original:  "The author 著著著著著著著著著著著著著著著著著著著著著 never draws it at all and the reader never once asks him why that is so and he does not ever say so",
 			candidate: "著著著著著著著著著著著著著著著著著著著著著",
 			want:      []string{"Han"},
 		},
@@ -343,6 +352,18 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			original:  "abcdefghijklmnopqrstuvwxyzabcdefghijklmn αβγδεζηικλμνξοπ 著者作家文筆漢字語文書",
 			candidate: "abcdefghijklmnopqrstuvwxyzabcdefghijklmn αβγδεζηικλμνξοπρ 著者作家文筆漢字語文書物",
 			want:      []string{"Greek", "Han"},
+		},
+		{
+			// THE SHARE ARM'S OWN BOUNDARY, and the operator that decides a
+			// rung of #111. Han is 15 of 90 in the original — 16.67%, under
+			// establishment — and 15 of 60 in the candidate, exactly 25.0000%
+			// on an unchanged count. Written exclusive, this is admitted and
+			// then established as the next anchor, from which any share is
+			// free. Inclusive, it is refused, which matches `established`.
+			name:      "landing exactly on the establishment threshold",
+			original:  "著著著著著著著著著著著著著著著 abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvw",
+			candidate: "著著著著著著著著著著著著著著著 abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrs",
+			want:      []string{"Han"},
 		},
 		{
 			name:      "a letterless candidate crosses nothing",
@@ -530,7 +551,7 @@ func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
 				// paragraph without growing it. The second arm is what stops a
 				// candidate spending a banked count by deleting everything else.
 				grew := candidateSet.Count(name) > originalSet.Count(name) ||
-					candidateSet.Share(name) > established
+					candidateSet.Share(name) >= established
 				if !isEstablished && overCeiling && grew {
 					want = append(want, name)
 				}

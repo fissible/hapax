@@ -238,7 +238,7 @@ func TestTheExecutionGateUsesTheDeclaredCeiling(t *testing.T) {
 // call site could carry a literal.
 //
 // The pair: an original with Han at exactly 25% is established and the candidate
-// is free; one letter more of Latin puts it at 24.4% and the same candidate is
+// is free; one letter more of Latin puts it at 23.81% and the same candidate is
 // refused.
 func TestTheExecutionGateUsesTheDeclaredEstablishmentThreshold(t *testing.T) {
 	if rewrite.ScriptEstablished != 0.25 {
