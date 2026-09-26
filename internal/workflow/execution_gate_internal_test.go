@@ -336,3 +336,40 @@ func TestTheExecutionGateMeasuresIntroductionFromTheCurrentText(t *testing.T) {
 		t.Errorf("Overgrown = %v, want [Han]", got.Overgrown)
 	}
 }
+
+// ---------------------------------------------------------------------------
+// #116: the production preserve gate's argument order
+// ---------------------------------------------------------------------------
+
+// `preserve.Check` is symmetric in its VERDICT and asymmetric in its EVIDENCE.
+// Swapping its arguments here refuses the same candidates and records every
+// `lost` as an `invented` with a different digest — the decision survives and
+// the audit trail lies. Measured, and it passed the whole repository, because the
+// only assertion on the direction lived on a hand-copied duplicate of this body
+// in `internal/rewrite`.
+//
+// So the claim is pinned on the production line, not on a copy of it.
+func TestTheExecutionGatePreservesAgainstTheFirstArgument(t *testing.T) {
+	// The laundering triple's endpoints: an entity that exists only by sentence
+	// position in the first text and is absent from the second.
+	const (
+		original  = "Yesterday the market was busy and the sellers were loud."
+		candidate = "the market was busy and the sellers were loud."
+	)
+
+	got, err := executionGate{}.Preserve(original, candidate)
+	if err != nil {
+		t.Fatalf("Preserve: %v", err)
+	}
+	if got.Preserved {
+		t.Fatal("the candidate drops an item the original had; this fixture must be " +
+			"refused or it proves nothing")
+	}
+	// LOST, not invented. The swap produces an equally unpreserved verdict with
+	// an inverted identifier, so the verdict alone cannot tell them apart.
+	const want = "preserve-v1:entity:lost:734e476d2f0f911f"
+	if len(got.Identifiers) != 1 || got.Identifiers[0] != want {
+		t.Errorf("Identifiers = %v, want [%s] — an argument-swapped gate records an "+
+			"invention instead", got.Identifiers, want)
+	}
+}

@@ -4,8 +4,12 @@ package rewrite_test
 //
 //	current begins as the input. A candidate is accepted iff, against current:
 //	  1. d(candidate) <= d(current) - epsilon, and
-//	  2. preserve(current -> candidate) passes, and
+//	  2. preserve(ORIGINAL -> candidate) passes, and
 //	  3. tells(candidate) is no worse as a severity-lexicographic vector.
+//
+// Condition 2 anchors on the ORIGINAL rather than current, because preserve.Check
+// is not transitive and two accepted steps compose into one that loses an item
+// (#116). Conditions 1 and 3 ratchet against current, where that is stricter.
 //
 // Improvement is required on d alone; conditions 2 and 3 are non-regression
 // guards. Ties inside epsilon are rejections. Attempts are capped.
@@ -80,6 +84,8 @@ const (
 	original  = "The original paragraph, which is what the loop begins with."
 	better    = "A candidate that measures closer to the author than the original."
 	betterYet = "A second candidate, closer still than the first one was."
+	bestYet   = "A third candidate, closer again than the second one was."
+	bestOfAll = "A fourth candidate, closer again than the third one was."
 	worse     = "A candidate that measures further away than the original does."
 )
 
@@ -187,14 +193,22 @@ type fakeGate struct {
 	verdicts     map[string]gateVerdict
 	fallback     gateVerdict
 	languageArgs [][3]string
+	preserveArgs [][2]string
+	tellsArgs    [][2]string
 }
 
-func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+func (f *fakeGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
+	// The ARGUMENTS are recorded, because a gate handed the advancing `current`
+	// answers identically here and passes both rungs of #116's composition.
+	f.preserveArgs = append(f.preserveArgs, [2]string{original, candidate})
 	v := f.verdict(candidate)
 	return rewrite.Preservation{Preserved: v.preserved, Identifiers: v.identifiers}, nil
 }
 
 func (f *fakeGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {
+	// Recorded too, so the OPPOSITE anchor is pinned rather than assumed: tells
+	// is a monotone comparison and must keep ratcheting against `current`.
+	f.tellsArgs = append(f.tellsArgs, [2]string{current, candidate})
 	v := f.verdict(candidate)
 	return rewrite.TellsVerdict{Comparison: v.comparison, Comparable: v.comparable}, nil
 }
@@ -1242,9 +1256,9 @@ type countingGate struct {
 	preserveCalls, tellsCalls, languageCalls int
 }
 
-func (c *countingGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
+func (c *countingGate) Preserve(original, candidate string) (rewrite.Preservation, error) {
 	c.preserveCalls++
-	return c.fakeGate.Preserve(current, candidate)
+	return c.fakeGate.Preserve(original, candidate)
 }
 
 func (c *countingGate) Tells(current, candidate string) (rewrite.TellsVerdict, error) {

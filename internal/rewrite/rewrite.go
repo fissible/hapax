@@ -154,7 +154,11 @@ type TellsVerdict struct {
 }
 
 type Gate interface {
-	Preserve(current, candidate string) (Preservation, error)
+	// Preserve is asked about the ORIGINAL paragraph and the candidate, not the
+	// advancing current text. It is an invariant, not a monotone comparison:
+	// preserve.Check is not transitive, so two individually-preserved steps can
+	// compose into one that loses an item (#116).
+	Preserve(original, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
 	Language(original, current, candidate string) (LanguageVerdict, error)
 }
@@ -274,7 +278,11 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			// Every gate is consulted, whatever the first one says: precedence
 			// decides which single reason is reported, and the evidence each
 			// gate produced belongs in the record either way.
-			preservation, err := l.Gate.Preserve(current, candidate)
+			// Anchored on the ORIGINAL, not the advancing current: preserve is
+			// an invariant, and `preserve.Check` is not transitive, so two
+			// individually-preserved steps compose into one that loses an
+			// entity (#116).
+			preservation, err := l.Gate.Preserve(segment.Text, candidate)
 			if err != nil {
 				return Outcome{}, fmt.Errorf("rewrite preserve gate: %w", err)
 			}
