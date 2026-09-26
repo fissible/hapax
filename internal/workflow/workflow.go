@@ -1106,12 +1106,19 @@ func (g executionGate) Preserve(current, candidate string) (rewrite.Preservation
 	return rewrite.Preservation{Preserved: x.Preserved, Identifiers: x.Identifiers()}, err
 }
 
-// Language reports the scripts the candidate uses that the current text does
-// not. Scripts, not languages: Common and Inherited are attributed to neither,
-// and a script that only LEAVES is not an introduction.
-func (g executionGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+// Language reports two script facts about one candidate, against two anchors.
+// Introduced names the scripts the CURRENT text does not use — scripts, not
+// languages: Common and Inherited are attributed to neither, and a script that
+// only LEAVES is not an introduction. Overgrown names the scripts that grew out
+// of proportion to the ORIGINAL paragraph, judged against the declared
+// constants. The anchors differ on purpose: `current` advances on acceptance
+// under ADR 0006, and a growth bound that advanced with it would ratchet.
+func (g executionGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
+	scripts := text.Scripts(candidate)
 	return rewrite.LanguageVerdict{
-		Introduced: text.Scripts(candidate).Introduced(text.Scripts(current)),
+		Introduced: scripts.Introduced(text.Scripts(current)),
+		Overgrown: scripts.Exceeding(text.Scripts(original),
+			rewrite.ScriptEstablished, rewrite.ScriptCeiling),
 	}, nil
 }
 

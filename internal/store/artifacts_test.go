@@ -518,7 +518,11 @@ func TestEveryRewriteAttemptFieldIsDecidedOnPurpose(t *testing.T) {
 		// safe to persist, because a script name comes from the closed
 		// vocabulary of `unicode.Scripts` rather than from the paragraph.
 		"IntroducedScripts": true,
-		"TellsComparison":   true, "TellsComparable": true,
+		// #107. Persisted on the same argument: a refusal discards the prose,
+		// and a script name is a closed-vocabulary value rather than anything
+		// derived from the paragraph.
+		"OvergrownScripts": true,
+		"TellsComparison":  true, "TellsComparable": true,
 		"Accepted": true, "Rejection": true,
 		"ProfileID": true, "ProviderID": true, "InvocationID": true,
 	}
@@ -1049,7 +1053,7 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 			"InvocationID", "Index", "ProfileID", "ProviderID", "NodeID",
 			"CurrentHash", "CandidateHash", "CurrentDistance", "CandidateDistance",
 			"CurrentBand", "CandidateBand", "Preserved", "PreserveIdentifiers",
-			"IntroducedScripts",
+			"IntroducedScripts", "OvergrownScripts",
 			"TellsComparison", "TellsComparable", "Accepted", "Rejection",
 		}},
 	}

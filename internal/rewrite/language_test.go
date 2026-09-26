@@ -566,11 +566,11 @@ func TestTheLanguageGateSeesTheCurrentTextAndTheCandidate(t *testing.T) {
 		t.Fatalf("the gate was asked %d times, want 2: %v",
 			len(gate.languageArgs), gate.languageArgs)
 	}
-	if gate.languageArgs[0] != [2]string{original, better} {
+	if gate.languageArgs[0] != [3]string{original, original, better} {
 		t.Errorf("the first call was %v, want (original, better)", gate.languageArgs[0])
 	}
 	// The second compares against the ACCEPTED text, not the original.
-	if gate.languageArgs[1] != [2]string{better, betterYet} {
+	if gate.languageArgs[1] != [3]string{original, better, betterYet} {
 		t.Errorf("the second call was %v, want (better, betterYet) — current advances "+
 			"on acceptance", gate.languageArgs[1])
 	}
@@ -644,10 +644,10 @@ type erroringLanguageGate struct {
 	calls int
 }
 
-func (e *erroringLanguageGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+func (e *erroringLanguageGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
 	e.calls++
 	if e.calls <= e.after {
-		return e.fakeGate.Language(current, candidate)
+		return e.fakeGate.Language(original, current, candidate)
 	}
 	return rewrite.LanguageVerdict{}, errLanguageGate
 }
@@ -731,7 +731,7 @@ func TestARefusedCandidateDoesNotEndTheLoop(t *testing.T) {
 	}
 	// The refusal did not advance `current`, so the second comparison is
 	// against the original text.
-	if gate.languageArgs[1] != [2]string{original, betterYet} {
+	if gate.languageArgs[1] != [3]string{original, original, betterYet} {
 		t.Errorf("the second call was %v, want (original, betterYet) — a refusal "+
 			"leaves current where it was", gate.languageArgs[1])
 	}
@@ -914,8 +914,8 @@ type reusingLanguageGate struct {
 	calls   int
 }
 
-func (r *reusingLanguageGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
-	r.fakeGate.Language(current, candidate)
+func (r *reusingLanguageGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
+	r.fakeGate.Language(original, current, candidate)
 	want := r.scripts[min(r.calls, len(r.scripts)-1)]
 	r.calls++
 	r.buffer = append(r.buffer[:0], want...)
@@ -995,6 +995,9 @@ func normalized(a rewrite.Attempt) rewrite.Attempt {
 	}
 	if len(a.IntroducedScripts) == 0 {
 		a.IntroducedScripts = nil
+	}
+	if len(a.OvergrownScripts) == 0 {
+		a.OvergrownScripts = nil
 	}
 	return a
 }
@@ -1176,6 +1179,30 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 			},
 		},
 		{
+			// #107's path, so the new audit field is compared by a whole-record
+			// DeepEqual on at least one row rather than passing by being zero
+			// everywhere. Growth is reported, and nothing was introduced.
+			name: "refused, a script grew out of proportion",
+			gate: func() *fakeGate {
+				g := passingGate()
+				g.fallback.overgrown = []string{"Cyrillic", "Han"}
+				return g
+			}(),
+			reports: map[string]score.Report{
+				original: scored(0.90), better: inRangeAt(0.05),
+			},
+			candidates: []string{better},
+			want: []rewrite.Attempt{identities(func() rewrite.Attempt {
+				a := passing
+				a.CurrentHash, a.CandidateHash = hashOf(original), hashOf(better)
+				a.CurrentDistance, a.CandidateDistance = 0.90, 0.05
+				a.CurrentBand, a.CandidateBand = eval.BandDrifting, eval.BandInRange
+				a.Rejection = rewrite.RejectionLanguageGrowth
+				a.OvergrownScripts = []string{"Cyrillic", "Han"}
+				return a
+			}())},
+		},
+		{
 			// No bands at all. The uncalibrated path records the distances it
 			// has and leaves the bands empty rather than inventing one.
 			name: "refused, uncalibrated",
@@ -1240,7 +1267,7 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 // happens to put there. This fails when the struct grows, which is the moment
 // to decide what each path should record.
 func TestEveryAuditFieldIsSpecifiedByTheRecordTable(t *testing.T) {
-	const specified = 18
+	const specified = 19
 	if n := reflect.TypeOf(rewrite.Attempt{}).NumField(); n != specified {
 		t.Errorf("rewrite.Attempt has %d fields and the record table specifies %d; "+
 			"add the new field to TestTheAttemptRecordIsCompleteOnEveryLanguagePath "+

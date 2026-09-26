@@ -179,12 +179,14 @@ type gateVerdict struct {
 	// #91: the scripts this candidate introduces relative to the current text.
 	// Empty means it introduces none, which is the accepted path.
 	introduced []string
+	// Empty means nothing grew out of proportion to the original.
+	overgrown []string
 }
 
 type fakeGate struct {
 	verdicts     map[string]gateVerdict
 	fallback     gateVerdict
-	languageArgs [][2]string
+	languageArgs [][3]string
 }
 
 func (f *fakeGate) Preserve(current, candidate string) (rewrite.Preservation, error) {
@@ -197,14 +199,14 @@ func (f *fakeGate) Tells(current, candidate string) (rewrite.TellsVerdict, error
 	return rewrite.TellsVerdict{Comparison: v.comparison, Comparable: v.comparable}, nil
 }
 
-func (f *fakeGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+func (f *fakeGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
 	// The ARGUMENTS are recorded, because a gate that ignored `current` — or
 	// was handed the original segment instead of the advancing current text —
 	// passed every assertion about the verdict. See
 	// TestTheLanguageGateSeesTheCurrentTextAndTheCandidate.
-	f.languageArgs = append(f.languageArgs, [2]string{current, candidate})
+	f.languageArgs = append(f.languageArgs, [3]string{original, current, candidate})
 	v := f.verdict(candidate)
-	return rewrite.LanguageVerdict{Introduced: v.introduced}, nil
+	return rewrite.LanguageVerdict{Introduced: v.introduced, Overgrown: v.overgrown}, nil
 }
 
 func (f *fakeGate) verdict(candidate string) gateVerdict {
@@ -311,6 +313,27 @@ func TestDeclaredFigures(t *testing.T) {
 	// from the configuration a caller is most likely to reach for.
 	if got.Exemplars != 3 {
 		t.Errorf("default exemplars = %d, want 3", got.Exemplars)
+	}
+	// #107's two declared numbers. They are consumed only by the workflow gate,
+	// so without this the package that DECLARES them pins neither, and changing
+	// either one is caught — if at all — by another package's internal test.
+	if rewrite.ScriptCeiling != 0.05 {
+		t.Errorf("ScriptCeiling = %v, want 0.05", rewrite.ScriptCeiling)
+	}
+	if rewrite.ScriptEstablished != 0.25 {
+		t.Errorf("ScriptEstablished = %v, want 0.25", rewrite.ScriptEstablished)
+	}
+	// They are two numbers because they answer two questions, and only one has
+	// evidence. Equal values would silently re-merge the decisions.
+	if rewrite.ScriptEstablished <= rewrite.ScriptCeiling {
+		t.Errorf("ScriptEstablished %v is not above ScriptCeiling %v; a script would "+
+			"become established at the moment it is refused",
+			rewrite.ScriptEstablished, rewrite.ScriptCeiling)
+	}
+	// And the flag that says the numbers are undeliverable must keep saying so.
+	// Flipping it to true asserts a measurement nobody made.
+	if rewrite.ScriptCeilingDerived {
+		t.Error("ScriptCeilingDerived is true; no derivation exists for either number")
 	}
 }
 
@@ -1229,9 +1252,9 @@ func (c *countingGate) Tells(current, candidate string) (rewrite.TellsVerdict, e
 	return c.fakeGate.Tells(current, candidate)
 }
 
-func (c *countingGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+func (c *countingGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
 	c.languageCalls++
-	return c.fakeGate.Language(current, candidate)
+	return c.fakeGate.Language(original, current, candidate)
 }
 
 // ---------------------------------------------------------------------------

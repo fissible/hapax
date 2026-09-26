@@ -337,6 +337,10 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	// would make every accepted fixture in this package invalid. The seed needs
 	// the row only so that probes against the script table are not vacuous.
 	attempt.IntroducedScripts = []string{"Cyrillic", "Han"}
+	// #107, seeded HERE for the same reason: acceptedAttempt derives from
+	// attemptFixture and does not clear the field, so seeding it there would
+	// invalidate every accepted fixture in this package.
+	attempt.OvergrownScripts = []string{"Cyrillic", "Han"}
 	if err := s.PutRewriteAttempt(ctx(), attempt); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}

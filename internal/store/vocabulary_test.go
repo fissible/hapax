@@ -290,7 +290,14 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt_script.invocation_id": "hex",
 	"rewrite_attempt_script.node_id":       "hex",
 	"rewrite_attempt_script.script":        "script",
-	"migration.checksum":                   "hex", "migration.applied_at": "time",
+	// #107. The sibling table, on the same argument: the database enforces the
+	// SHAPE of a script name and membership in the 163 keys of `unicode.Scripts`
+	// is left to the Go codec. Its membership half is
+	// TestADamagedOvergrownScriptNameIsCorruptionOnRead.
+	"rewrite_attempt_overgrown_script.invocation_id": "hex",
+	"rewrite_attempt_overgrown_script.node_id":       "hex",
+	"rewrite_attempt_overgrown_script.script":        "script",
+	"migration.checksum":                             "hex", "migration.applied_at": "time",
 }
 
 // Values each grammar must refuse. "enum" is deliberately absent: it is covered

@@ -28,7 +28,7 @@ const (
 )
 
 func RejectionCodes() []RejectionCode {
-	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
 }
 
 var (
@@ -52,7 +52,58 @@ const (
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
 	RejectionLanguage             RejectionCode = "language"
+	// RejectionLanguageGrowth refuses a candidate that grew a script the ORIGINAL
+	// paragraph does not count as one of its own past ScriptCeiling. #91's sibling
+	// and not its replacement: that one refuses any INTRODUCTION however small,
+	// this one refuses a crossing whether the script was present or not.
+	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
+
+// ScriptCeiling is the share of a candidate's letters a script may reach, when
+// the script is not established in the original and the candidate uses MORE of
+// it than the original did.
+//
+// The value is DECLARED, not derived: see ScriptCeilingDerived. It is
+// evidence-informed — of 1959 admitted paragraphs in the maintainer's corpus,
+// two carry any non-Latin script at all, at 0.16% and 0.38%, while #91's
+// incident is 20.9% — so any ceiling between roughly 1% and 15% separates every
+// observed legitimate use from the incident by more than an order of magnitude
+// in both directions.
+const ScriptCeiling = 0.05
+
+// ScriptEstablished is the share of the ORIGINAL paragraph at which a script
+// counts as one of the languages that paragraph is written in, and is no longer
+// constrained by the ceiling.
+//
+// It is a separate number from the ceiling because it answers a different
+// question, and only the ceiling has evidence behind it. The corpus says how
+// much of a script a candidate may contain; it says nothing about how much a
+// paragraph must already hold before that script is its own. Sharing one number
+// put the line one quotation wide: at 5%, sixteen CJK letters establish Han in
+// half the corpus's paragraphs, after which the guard is off at any share.
+//
+// Two consequences, neither of them evidenced, both recorded rather than left to
+// be discovered:
+//
+// As an absolute share it is an implicit cap on how many languages a paragraph
+// may have — at 0.25, four. And a paragraph carrying two scripts BETWEEN the
+// ceiling and this threshold cannot grow either of them: measured, 60% Latin
+// with Greek and Han at 20% each refuses a rewrite that adds one letter of
+// either, and refuses both when a real rewrite grows both.
+//
+// The band is empty in the maintainer's corpus — no admitted paragraph carries
+// any non-Latin script above 0.4% — so the cost falls on writers who genuinely
+// mix scripts in that range, and for them this guard is too strict.
+const ScriptEstablished = 0.25
+
+// ScriptCeilingDerived records that the numbers above are NOT derived from a
+// measurement, the way #92 records the same about the paragraph floor. Three
+// constant-free designs were measured and discarded: an order statistic cannot
+// see magnitude, and every share- or proportion-comparing rule refuses ordinary
+// lengthening. The value is evidence-INFORMED — in the maintainer's corpus two
+// of 1959 admitted paragraphs carry any non-Latin script, at 0.16% and 0.38%,
+// while #91's incident is 20.9% — but the cut between them is a choice.
+const ScriptCeilingDerived = false
 
 // Terminal explains how a loop ended. It is deliberately separate from
 // RejectionCode, which belongs to a single recorded candidate.
@@ -101,13 +152,19 @@ type TellsVerdict struct {
 type Gate interface {
 	Preserve(current, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
-	Language(current, candidate string) (LanguageVerdict, error)
+	Language(original, current, candidate string) (LanguageVerdict, error)
 }
 
-// LanguageVerdict names the scripts a candidate uses that the current text does
-// not. It is an introduction report, not a language identification: what is
-// measured is scripts, and any introduction at all refuses the candidate.
-type LanguageVerdict struct{ Introduced []string }
+// LanguageVerdict reports two script facts about one candidate, against two
+// different anchors. Introduced names the scripts absent from the CURRENT text,
+// which is #91's rule. Overgrown names the scripts whose count grew out of
+// proportion to the ORIGINAL paragraph, which is #107's — a fixed anchor,
+// because a moving one ratchets. Neither is a language identification: what is
+// measured is scripts.
+type LanguageVerdict struct {
+	Introduced []string
+	Overgrown  []string
+}
 
 type RewriteRequest struct {
 	Prompt                  string
@@ -127,6 +184,10 @@ type Attempt struct {
 	CurrentBand, CandidateBand          eval.Band
 	Preserved                           bool
 	PreserveIdentifiers                 []string
+	// OvergrownScripts names the scripts whose use grew out of proportion to the
+	// ORIGINAL paragraph, in the order they were measured. Recorded whichever
+	// rejection wins the precedence contest: the measurement happened either way.
+	OvergrownScripts                    []string
 	TellsComparison                     int
 	IntroducedScripts                   []string
 	TellsComparable, Accepted           bool
@@ -224,7 +285,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			}
 			attempt.TellsComparison = tells.Comparison
 			attempt.TellsComparable = tells.Comparable
-			language, err := l.Gate.Language(current, candidate)
+			language, err := l.Gate.Language(segment.Text, current, candidate)
 			if err != nil {
 				return Outcome{}, fmt.Errorf("rewrite language gate: %w", err)
 			}
@@ -232,12 +293,19 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			// otherwise rewrite the evidence of an already recorded refusal
 			// when the next candidate is measured.
 			attempt.IntroducedScripts = append([]string(nil), language.Introduced...)
+			attempt.OvergrownScripts = append([]string(nil), language.Overgrown...)
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
 			// Any script the current text does not already use, at any share.
 			case len(language.Introduced) > 0:
 				rejection = RejectionLanguage
+			// A script the ORIGINAL paragraph does not own, grown past the
+			// ceiling. Reported after introduction, which is the more specific
+			// claim, and before the tells and distance comparisons, which are
+			// less actionable.
+			case len(language.Overgrown) > 0:
+				rejection = RejectionLanguageGrowth
 			case !tells.Comparable:
 				rejection = RejectionTellsIncomparable
 			case tells.Comparison > 0:

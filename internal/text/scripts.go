@@ -60,6 +60,43 @@ func (s ScriptSet) Names() []string {
 	return names
 }
 
+// Count returns the letters attributed to name. An absent script, an undeclared
+// name and the zero value all count zero.
+//
+// Read from the counts directly rather than recovered from Share: the round trip
+// through float64 truncates, and 15 of 22 comes back 14.
+func (s ScriptSet) Count(name string) int { return s.counts[name] }
+
+// Exceeding returns the sorted scripts of s that grew out of proportion to
+// original: not established there, over ceiling of s, and either using more
+// letters than original did or taking at least established of s.
+//
+// A script at or above established in original is one of the languages that
+// paragraph is written in and is not constrained — a bilingual paragraph may be
+// rewritten in either of its languages. The count arm keeps a SHORTENING rewrite
+// admissible; the share arm stops a candidate spending a banked count by
+// deleting everything else. Both comparisons against established are inclusive,
+// so a rewrite may keep a script at the threshold and may never climb to it.
+//
+// The ceiling is a parameter because the measurement owns no policy. Neither set
+// is disturbed by asking.
+func (s ScriptSet) Exceeding(original ScriptSet, established, ceiling float64) []string {
+	var names []string
+	for name, count := range s.counts {
+		if original.counts[name] > 0 && original.Share(name) >= established {
+			continue
+		}
+		if s.Share(name) <= ceiling {
+			continue
+		}
+		if count > original.counts[name] || s.Share(name) >= established {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Introduced returns the sorted scripts present in s and absent from current,
 // regardless of their shares. It does not change either set.
 func (s ScriptSet) Introduced(current ScriptSet) []string {
