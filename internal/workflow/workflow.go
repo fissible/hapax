@@ -1109,7 +1109,7 @@ func (g executionGate) Preserve(current, candidate string) (rewrite.Preservation
 // Language reports the scripts the candidate uses that the current text does
 // not. Scripts, not languages: Common and Inherited are attributed to neither,
 // and a script that only LEAVES is not an introduction.
-func (g executionGate) Language(current, candidate string) (rewrite.LanguageVerdict, error) {
+func (g executionGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
 	return rewrite.LanguageVerdict{
 		Introduced: text.Scripts(candidate).Introduced(text.Scripts(current)),
 	}, nil

@@ -103,7 +103,9 @@ var declaredSchema = map[string][]string{
 	// #91. The scripts a refused candidate introduced, mirroring the sibling
 	// above: a child table so the ordinals carry the recorded order.
 	"rewrite_attempt_script": {"invocation_id", "node_id", "attempt_index", "ordinal", "script"},
-	"migration":              {"version", "checksum", "applied_at"},
+	// #107. The sibling of the line above: same shape, same reason.
+	"rewrite_attempt_overgrown_script": {"invocation_id", "node_id", "attempt_index", "ordinal", "script"},
+	"migration":                        {"version", "checksum", "applied_at"},
 }
 
 func tableColumns(t *testing.T, db *sql.DB, table string) []string {
@@ -328,6 +330,10 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			// #91. The same edge as its sibling above, for the same reason: a
 			// script name that outlives the attempt it belongs to is a trace
 			// with nothing left to say what it was a trace of.
+			"rewrite_attempt_overgrown_script": {{
+				Parent:  "rewrite_attempt",
+				Columns: []column{{"invocation_id", "invocation_id"}, {"node_id", "node_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",
+			}},
 			"rewrite_attempt_script": {{
 				Parent:  "rewrite_attempt",
 				Columns: []column{{"invocation_id", "invocation_id"}, {"node_id", "node_id"}, {"attempt_index", "attempt_index"}}, OnDelete: "CASCADE",

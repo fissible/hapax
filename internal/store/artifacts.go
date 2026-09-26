@@ -244,7 +244,9 @@ type RewriteAttempt struct {
 	// IntroducedScripts names the scripts the candidate used that the current
 	// text did not, in the order they were measured. A refusal discards the
 	// prose, so this is the only durable trace that the substitution happened.
-	IntroducedScripts         []string
+	IntroducedScripts []string
+	// OvergrownScripts is a STUB for phase-1 verification only.
+	OvergrownScripts          []string
 	TellsComparison           int
 	TellsComparable, Accepted bool
 	Rejection                 rewrite.RejectionCode

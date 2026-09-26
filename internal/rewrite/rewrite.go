@@ -52,6 +52,8 @@ const (
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
 	RejectionLanguage             RejectionCode = "language"
+	// RejectionLanguageGrowth is a STUB for phase-1 verification only.
+	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
 
 // Terminal explains how a loop ended. It is deliberately separate from
@@ -101,13 +103,20 @@ type TellsVerdict struct {
 type Gate interface {
 	Preserve(current, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
-	Language(current, candidate string) (LanguageVerdict, error)
+	Language(original, current, candidate string) (LanguageVerdict, error)
 }
 
-// LanguageVerdict names the scripts a candidate uses that the current text does
-// not. It is an introduction report, not a language identification: what is
-// measured is scripts, and any introduction at all refuses the candidate.
-type LanguageVerdict struct{ Introduced []string }
+// LanguageVerdict reports two script facts about one candidate, against two
+// different anchors. Introduced names the scripts absent from the CURRENT text,
+// which is #91's rule. Overgrown names the scripts whose count grew out of
+// proportion to the ORIGINAL paragraph, which is #107's — a fixed anchor,
+// because a moving one ratchets. Neither is a language identification: what is
+// measured is scripts.
+type LanguageVerdict struct {
+	Introduced []string
+	// Overgrown is a STUB for phase-1 verification only.
+	Overgrown []string
+}
 
 type RewriteRequest struct {
 	Prompt                  string
@@ -127,6 +136,8 @@ type Attempt struct {
 	CurrentBand, CandidateBand          eval.Band
 	Preserved                           bool
 	PreserveIdentifiers                 []string
+	// OvergrownScripts is a STUB for phase-1 verification only.
+	OvergrownScripts                    []string
 	TellsComparison                     int
 	IntroducedScripts                   []string
 	TellsComparable, Accepted           bool
@@ -224,7 +235,7 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			}
 			attempt.TellsComparison = tells.Comparison
 			attempt.TellsComparable = tells.Comparable
-			language, err := l.Gate.Language(current, candidate)
+			language, err := l.Gate.Language(segment.Text, current, candidate)
 			if err != nil {
 				return Outcome{}, fmt.Errorf("rewrite language gate: %w", err)
 			}
