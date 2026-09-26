@@ -3,6 +3,8 @@ package workflow
 import (
 	"reflect"
 	"testing"
+
+	"github.com/fissible/hapax/internal/rewrite"
 )
 
 // ---------------------------------------------------------------------------
@@ -125,57 +127,62 @@ func TestTheExecutionGateIsNotAHardcodedEmptyVerdict(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// #107: growth, and which argument it is measured against
+// #107: the ceiling, and which argument establishment is judged against
 // ---------------------------------------------------------------------------
 
-// The gate reports the scripts whose count grew out of proportion.
-func TestTheExecutionGateReportsOvergrownScripts(t *testing.T) {
+// The gate reports the scripts that cross the declared ceiling.
+func TestTheExecutionGateReportsScriptsCrossingTheCeiling(t *testing.T) {
 	for _, c := range []struct {
 		name, original, candidate string
 		want                      []string
 	}{
 		{
 			// #107 itself: Han was already present, so nothing is introduced.
-			name:      "one character becomes the paragraph",
+			name:      "two percent becomes the paragraph",
 			original:  "The author 著 never draws it.",
 			candidate: "作者從不畫它，著者亦然，他從未真正描繪過它，也不曾提起。",
 			want:      []string{"Han"},
 		},
 		{
-			// The case the discarded corpus design refused. A longer rewrite in
-			// the same script grows nothing, because the script's share of the
-			// original is exactly one.
-			name:      "lengthening in the same script",
+			// The case the two discarded designs refused. A ceiling does not
+			// move with length, so lengthening is free.
+			name:      "lengthening a monoscript paragraph",
 			original:  "The author never draws it.",
-			candidate: "The author never draws it, and the reader never thinks to ask him why that is.",
+			candidate: "The author never draws it, and the reader never thinks to ask him why.",
 			want:      nil,
 		},
 		{
-			// Keeping one foreign character while the rest shortens. A SHARE
-			// rule refuses this for a change it did not make.
-			name:      "keeping one character while the rest shortens",
-			original:  "The author 著 never draws it at all, he said.",
-			candidate: "The author 著 never draws it.",
+			// MULTI-SCRIPT lengthening, whose absence hid the previous design's
+			// failure: its share of the original is below one, so every
+			// proportional bound refused this.
+			name:      "lengthening a paragraph carrying a foreign character",
+			original:  "The author 著 never draws it.",
+			candidate: "The author 著 never draws it, and the reader never thinks to ask why that is.",
 			want:      nil,
 		},
 		{
-			name:      "removing a script grows nothing",
+			name:      "removing a script while lengthening",
 			original:  "The author 著 never draws it at all, he said.",
 			candidate: "The argument turns on a distinction the author never draws.",
 			want:      nil,
 		},
 		{
-			// Symmetric: it guards whatever the paragraph was written in, not a
-			// privileged script. A Greek-dominant original rewritten mostly into
-			// Latin overgrows Latin.
-			name:      "the original's own dominant script can overgrow",
-			original:  "αβγδ ab 漢",
-			candidate: "The author, автор 著者, never draws it.",
-			want:      []string{"Cyrillic", "Latin"},
+			// Established: Han is half the original, so a bilingual paragraph
+			// may be rewritten in either of its languages.
+			name:      "a script already above the ceiling is unconstrained",
+			original:  "abc 漢字漢",
+			candidate: "作者從不畫它，著者亦然。",
+			want:      nil,
+		},
+		{
+			// Below the ceiling, so this rule is silent and #91's is not.
+			name:      "one introduced character in a long paragraph",
+			original:  "The argument turns on a distinction the author never draws at all in this paragraph.",
+			candidate: "The argument turns 著 on a distinction the author never draws at all in this paragraph.",
+			want:      nil,
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			// original and current coincide here; the anchor is under test below.
 			got, err := executionGate{}.Language(c.original, c.original, c.candidate)
 			if err != nil {
 				t.Fatalf("Language: %v", err)
@@ -190,60 +197,90 @@ func TestTheExecutionGateReportsOvergrownScripts(t *testing.T) {
 	}
 }
 
-// Growth is measured against the FIRST argument, not the second.
+// The gate uses the DECLARED ceiling rather than one of its own.
 //
-// This is the one behaviour a three-argument gate exists for, and the fixtures
-// are chosen so the two anchors disagree: six Han letters are admissible in a
-// long candidate against a 22-letter original, and admissible again in a short
-// candidate against THAT long one — the ratchet — but refused against the
-// original. A gate that measured growth from `current` reports nothing here.
-func TestTheExecutionGateMeasuresGrowthFromTheOriginal(t *testing.T) {
-	const origin = "The author 著 never draws it."
-	const long = "The author 著著著著著著 never draws it, and the reader never thinks to ask him why that is, nor does he ever say, and the argument turns on a distinction he does not draw at all here."
-	const short = "The author 著著著著著著 never draws."
+// A gate that hardcoded a different number would pass the table above on most
+// rows. This pins the boundary exactly: Han is 1 of 20 letters, which is
+// `rewrite.ScriptCeiling` to the digit, and the bound is strict, so it does not
+// cross.
+func TestTheExecutionGateUsesTheDeclaredCeiling(t *testing.T) {
+	if rewrite.ScriptCeiling != 0.05 {
+		t.Fatalf("this test is written against a ceiling of 0.05; it is %v",
+			rewrite.ScriptCeiling)
+	}
+	const onTheCeiling = "abcdefghijklmnopqrs著" // 20 letters, Han exactly 5%
 
-	// The long text is admissible against the original: 6 Han against a bound
-	// of 1/22 * 138 = 6.27.
-	admissible, err := executionGate{}.Language(origin, origin, long)
+	got, err := executionGate{}.Language("abcdefghijklmnopqrst", "abcdefghijklmnopqrst", onTheCeiling)
 	if err != nil {
 		t.Fatalf("Language: %v", err)
 	}
-	if len(admissible.Overgrown) != 0 {
-		t.Fatalf("the long fixture must be admissible against the original or this "+
-			"test proves nothing: %v", admissible.Overgrown)
+	if len(got.Overgrown) != 0 {
+		t.Errorf("Overgrown = %v at exactly the ceiling, want none — the bound is strict",
+			got.Overgrown)
 	}
-
-	// And the short one is admissible against the long one, which is the rung a
-	// moving anchor would allow.
-	ratchet, err := executionGate{}.Language(long, long, short)
-	if err != nil {
-		t.Fatalf("Language: %v", err)
-	}
-	if len(ratchet.Overgrown) != 0 {
-		t.Fatalf("against the long text the short one must be admissible, or the "+
-			"ladder this guards against does not exist: %v", ratchet.Overgrown)
-	}
-
-	// The real call: anchored on the original, with current at the long text.
-	got, err := executionGate{}.Language(origin, long, short)
+	// One letter fewer of Latin puts Han above it: 1 of 19 is 5.26%.
+	above := "abcdefghijklmnopqr著"
+	got, err = executionGate{}.Language("abcdefghijklmnopqrst", "abcdefghijklmnopqrst", above)
 	if err != nil {
 		t.Fatalf("Language: %v", err)
 	}
 	if !reflect.DeepEqual(got.Overgrown, []string{"Han"}) {
-		t.Errorf("Overgrown = %v, want [Han] — growth is measured from the first "+
-			"argument, and measuring from the second reports nothing", got.Overgrown)
+		t.Errorf("Overgrown = %v just above the ceiling, want [Han]", got.Overgrown)
 	}
 }
 
-// Introduction is still measured against the CURRENT text, not the original.
+// Establishment is judged against the FIRST argument, not the second.
+//
+// The ladder the fixed anchor closes, and the ceiling makes it sharp rather than
+// gradual. A candidate sitting exactly on the ceiling is admissible because the
+// bound is strict — and anchored on `current`, it is then ESTABLISHED, so the
+// next candidate is unconstrained and may be entirely Han.
+func TestTheExecutionGateJudgesEstablishmentFromTheOriginal(t *testing.T) {
+	const origin = "abcdefghijklmnopqrst"       // 20 Latin letters, no Han
+	const onTheCeiling = "abcdefghijklmnopqrs著" // 20 letters, Han exactly 5%
+	const allHan = "作者從不畫它，著者亦然。"               // 10 letters, Han 100%
+
+	// Rung one is admissible, which is what makes the ladder available at all.
+	first, err := executionGate{}.Language(origin, origin, onTheCeiling)
+	if err != nil {
+		t.Fatalf("Language: %v", err)
+	}
+	if len(first.Overgrown) != 0 {
+		t.Fatalf("rung one must be admissible or this test proves nothing: %v",
+			first.Overgrown)
+	}
+
+	// Rung two, judged against rung one, is admissible: Han sits AT the ceiling
+	// there, so it is established and unconstrained.
+	ratchet, err := executionGate{}.Language(onTheCeiling, onTheCeiling, allHan)
+	if err != nil {
+		t.Fatalf("Language: %v", err)
+	}
+	if len(ratchet.Overgrown) != 0 {
+		t.Fatalf("against rung one the all-Han candidate must be admissible, or the "+
+			"ladder this guards against does not exist: %v", ratchet.Overgrown)
+	}
+
+	// The real call: anchored on the original, with current at rung one.
+	got, err := executionGate{}.Language(origin, onTheCeiling, allHan)
+	if err != nil {
+		t.Fatalf("Language: %v", err)
+	}
+	if !reflect.DeepEqual(got.Overgrown, []string{"Han"}) {
+		t.Errorf("Overgrown = %v, want [Han] — establishment is judged from the "+
+			"first argument, and judging it from the second admits everything",
+			got.Overgrown)
+	}
+}
+
+// Introduction is still measured against the CURRENT text.
 //
 // The two facts use different anchors on purpose, so one call cannot be
-// collapsed into a single comparison. A gate measuring both from the original
-// would report an introduction for a script the current text already carries.
+// collapsed into a single comparison.
 func TestTheExecutionGateMeasuresIntroductionFromTheCurrentText(t *testing.T) {
 	const origin = "The argument turns on a distinction."
 	const current = "The argument turns 著 on a distinction."
-	const candidate = "The argument turns 著 on a finer distinction."
+	const candidate = "The argument turns 著著著著著著著著 on a finer point."
 
 	got, err := executionGate{}.Language(origin, current, candidate)
 	if err != nil {
@@ -254,8 +291,8 @@ func TestTheExecutionGateMeasuresIntroductionFromTheCurrentText(t *testing.T) {
 		t.Errorf("Introduced = %v, want none — Han is already in the current text",
 			got.Introduced)
 	}
-	// ...but it is absent from the ORIGINAL, so it is overgrowth.
+	// ...but it is absent from the ORIGINAL and well over the ceiling.
 	if !reflect.DeepEqual(got.Overgrown, []string{"Han"}) {
-		t.Errorf("Overgrown = %v, want [Han] — Han is absent from the original", got.Overgrown)
+		t.Errorf("Overgrown = %v, want [Han]", got.Overgrown)
 	}
 }

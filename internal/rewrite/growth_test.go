@@ -4,27 +4,43 @@ package rewrite_test
 // pre-existing character disarms it: a paragraph containing a single Han
 // letter can come back largely Han, introducing nothing.
 //
-// The growth rule, measured in `internal/text`:
+// The rule, measured in `internal/text`: a script already at or above
+// `ScriptCeiling` in the ORIGINAL is established and unconstrained; every other
+// script, present or absent, may not exceed that share of the candidate.
 //
-//	count(candidate, s) <= max( count(original, s), share(original, s) * letters(candidate) )
+// The number is declared rather than derived, and `ScriptCeilingDerived` says
+// so. Three constant-free designs were measured and discarded first — the last
+// two died on the same inequality, refusing every lengthening rewrite of a
+// multi-script paragraph.
 //
 // The half that belongs HERE, rather than in the measurement, is the ANCHOR.
-// `Overgrown` is asked about the paragraph the loop started from, not the
-// advancing `current`, because the carried-over term is absolute and the
-// proportional term is length-relative — so a moving anchor lets a long
-// candidate bank an absolute count that a later short candidate spends at a
-// much higher share. Two accepted attempts and the share multiplies. The live
-// store shows 2 of 7 recorded invocations accepted twice, including #91's own,
-// so this is a reachable sequence rather than a hypothetical one.
+// Establishment is judged against the paragraph the loop started from, not the
+// advancing `current`, and the ceiling makes the ladder sharper rather than
+// milder. A candidate sitting EXACTLY on the ceiling is admissible, because the
+// bound is strict. Anchored on `current`, that candidate is then established —
+// its share is at the ceiling — and the next candidate is unconstrained:
+//
+//	original            Han 0%      not established
+//	attempt 1  Han 1/20 = 5.0%      admissible, the bound is strict
+//	attempt 2  Han 10/10 = 100%     admissible against attempt 1, which is
+//	                                 established at exactly the ceiling
+//
+// Two accepted attempts and the paragraph is entirely Han. The live store shows
+// 2 of 7 recorded invocations accepted twice, including #91's own, so this is a
+// reachable sequence rather than a hypothetical one. A fixed anchor closes it,
+// because the original never becomes established.
 //
 // That makes `Language`'s signature `(original, current, candidate)`: two
 // anchors, one call, because both facts are measured from the same candidate
 // and a second gate method would need its own "consulted once" invariant.
 //
-// Growth subsumes introduction — a script absent from the original has a bound
-// of zero — so the two reasons are ordered rather than independent.
-// `language` wins, because "a script that was never here" is more useful to a
-// writer than "a script grew", and both records are populated either way.
+// The two guards are COMPLEMENTARY at a non-zero ceiling, not nested. #91
+// refuses any introduction however small; this refuses any crossing of the
+// ceiling whether the script was present or not. Measured: one Han character
+// added to a 69-letter paragraph is 1.4% and this rule does not see it, while
+// #91 does. They coincide only at a ceiling of zero, which `internal/text`
+// asserts. When both fire, `language` is reported — a script that was never
+// there is the more specific claim — and both records are populated either way.
 
 import (
 	"context"
@@ -272,10 +288,9 @@ func TestTheAnchorIsTheOriginalAfterARefusal(t *testing.T) {
 
 // Introduction is reported before growth, and both are recorded.
 //
-// The two are not independent: a script absent from the original has a bound of
-// zero, so everything introduced is also overgrown. `language` wins because it
-// is the more specific claim — the script was never there at all — and the
-// record carries both sets so nothing is lost by the choice.
+// A script can be both: introduced AND above the ceiling. `language` wins
+// because it is the more specific claim — the script was never there at all —
+// and the record carries both sets, so choosing a reason loses no evidence.
 func TestIntroductionIsReportedBeforeGrowth(t *testing.T) {
 	gate := passingGate()
 	gate.fallback.introduced = []string{"Greek"}

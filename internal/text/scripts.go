@@ -63,8 +63,8 @@ func (s ScriptSet) Names() []string {
 // Count is a STUB for phase-1 verification only.
 func (s ScriptSet) Count(name string) int { return 0 }
 
-// Overgrown is a STUB for phase-1 verification only.
-func (s ScriptSet) Overgrown(original ScriptSet) []string { return nil }
+// Exceeding is a STUB for phase-1 verification only.
+func (s ScriptSet) Exceeding(original ScriptSet, ceiling float64) []string { return nil }
 
 // Introduced returns the sorted scripts present in s and absent from current,
 // regardless of their shares. It does not change either set.

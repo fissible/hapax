@@ -416,3 +416,76 @@ func TestARefusedOvergrownScriptNameIsNotEchoedBackInTheError(t *testing.T) {
 		}
 	}
 }
+
+// An accepted attempt naming an overgrown script is corruption on READ too.
+//
+// Mirroring the sibling table copied its pattern and dropped this probe, and the
+// omission was proven reachable: moving the accepted-implies-nothing-overgrown
+// clause out of the shared validator into `PutRewriteAttempt` passed the whole
+// store package. A row in that shape can only arrive underneath the store, and
+// it says the gate was bypassed — which is exactly what a reader needs to see.
+func TestAnAcceptedAttemptNamingAnOvergrownScriptIsCorruptionOnRead(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	nodeID := snapshot.Documents[0].Nodes[0].ID
+	accepted := acceptedAttempt(prof.ID, nodeID)
+	if err := s.PutRewriteAttempt(ctx(), accepted); err != nil {
+		t.Fatalf("PutRewriteAttempt: %v", err)
+	}
+
+	if _, err := openRaw(t, s).Exec(
+		"INSERT INTO rewrite_attempt_overgrown_script "+
+			"(invocation_id,node_id,attempt_index,ordinal,script) VALUES (?,?,?,0,'Han')",
+		accepted.InvocationID, accepted.NodeID, accepted.Index); err != nil {
+		t.Fatalf("damaging: %v", err)
+	}
+
+	_, err := s.LoadRewriteAttempt(ctx(), accepted.InvocationID, accepted.NodeID, accepted.Index)
+	if !errors.Is(err, store.ErrCorrupt) {
+		t.Errorf("error = %v, want ErrCorrupt", err)
+	}
+}
+
+// The scripts belong to one attempt each.
+//
+// Two mutations survived without this: dropping `node_id` from the loader's
+// WHERE clause, and dropping `invocation_id`. The cascade test seeds two nodes
+// but DELETES one before loading the other, so it is structurally unable to
+// observe the leak — a test that looks like it covers this and cannot.
+//
+// Three attempts: two nodes under one invocation, and a second invocation on the
+// first node, so a loader missing either predicate reads back a union.
+func TestOvergrownScriptsBelongToOneAttemptEach(t *testing.T) {
+	s := newStore(t)
+	snapshot, prof := seededProfile(t, s)
+	nodes := snapshot.Documents[0].Nodes
+	if len(nodes) < 2 {
+		t.Skip("the seeded snapshot has one node")
+	}
+
+	first := refusedForGrowth(t, prof.ID, nodes[0].ID, "Han")
+	second := refusedForGrowth(t, prof.ID, nodes[1].ID, "Cyrillic")
+	second.InvocationID = first.InvocationID
+	second.CurrentHash = identity.HashBytes([]byte("the second paragraph"))
+	// Same node as `first`, different invocation.
+	third := refusedForGrowth(t, prof.ID, nodes[0].ID, "Greek")
+	third.InvocationID = fakeID("invocation", "second-run")
+	third.CurrentHash = identity.HashBytes([]byte("a later run"))
+
+	for _, want := range []store.RewriteAttempt{first, second, third} {
+		if err := s.PutRewriteAttempt(ctx(), want); err != nil {
+			t.Fatalf("PutRewriteAttempt(%s): %v", want.NodeID, err)
+		}
+	}
+
+	for _, want := range []store.RewriteAttempt{first, second, third} {
+		got, err := s.LoadRewriteAttempt(ctx(), want.InvocationID, want.NodeID, want.Index)
+		if err != nil {
+			t.Fatalf("LoadRewriteAttempt: %v", err)
+		}
+		if !reflect.DeepEqual(got.OvergrownScripts, want.OvergrownScripts) {
+			t.Errorf("invocation %.8s node %.8s read back %v, want %v",
+				want.InvocationID, want.NodeID, got.OvergrownScripts, want.OvergrownScripts)
+		}
+	}
+}

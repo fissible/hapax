@@ -56,6 +56,26 @@ const (
 	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
 
+// ScriptCeiling is the share of a candidate's letters a script may reach when
+// the original paragraph did not already give it that much. A script at or
+// above it in the original is established and unconstrained.
+//
+// STUB for phase-1 verification only.
+const ScriptCeiling = 0.05
+
+// ScriptCeilingDerived records that the number above is NOT derived from a
+// measurement, the way #92 records the same about the paragraph floor. Three
+// constant-free designs were measured and discarded: an order statistic cannot
+// see magnitude, and every share- or proportion-comparing rule refuses ordinary
+// lengthening. The value is evidence-INFORMED — in the maintainer's corpus two
+// of 1959 admitted paragraphs carry any non-Latin script, at 0.16% and 0.38%,
+// while #91's incident is 20.9% — but the cut between them is a choice.
+//
+// STUB for phase-1 verification only.
+const ScriptCeilingDerived = false
+
+const ()
+
 // Terminal explains how a loop ended. It is deliberately separate from
 // RejectionCode, which belongs to a single recorded candidate.
 type Terminal string
