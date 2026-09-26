@@ -74,10 +74,27 @@ package text_test
 // measured, a 200-letter paragraph with 6 Greek letters cut to 70 letters with
 // FOUR is 5.71%, over the ceiling, and refused for a script it shrank.
 //
-// At a ceiling of zero this degenerates to #91's rule exactly, which is asserted
-// below rather than assumed. At a ceiling of one it admits everything. Those two
-// boundaries are what make it a generalisation of the shipped guard rather than
-// a second unrelated one.
+// On its own, though, that condition is a carryover term, and a carryover term
+// is what let a candidate spend a banked count at any share. Measured: a
+// paragraph at Han 21 of 107, which is 19.6% and the shape #91's incident LEFT
+// IN THE FILE, becomes Han 21 of 21 by deleting every Latin letter, and the
+// count never grew. So the condition is disjunctive — a script may keep its
+// letters, but may not take over the paragraph:
+//
+//	refuse  iff  not established
+//	        and  share(candidate) > ceiling
+//	        and  ( count grew  or  share(candidate) > established )
+//
+// The relation to #91 is CONTAINMENT, not equality. An introduced script has an
+// original count of zero, so it is never established and its count always grew:
+// everything #91 refuses, this refuses too at a ceiling of zero. The converse is
+// false, and deliberately so — growth without introduction is the whole subject
+// of #107, so at any ceiling this names scripts #91 does not.
+//
+// An earlier draft claimed the two coincide exactly at a ceiling of zero. That
+// was true of the rule before the count condition and false after it, and the
+// claim outlived the change. Third time in this issue that a rule change left a
+// claim behind, so: the header is re-derived with the fixtures, not after them.
 
 import (
 	"reflect"
@@ -293,6 +310,41 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			want:      nil,
 		},
 		{
+			// DELETION, at an equal count. Han is 21 of 107 in the original —
+			// 19.6%, the shape #91's incident left in the file — and 21 of 21 in
+			// the candidate, which deleted every Latin letter. The count never
+			// grew, so the count arm alone admits it; the share arm refuses it.
+			name:      "taking over the paragraph by deleting the rest",
+			original:  "The author 著著著著著著著著著著著著著著著著著著著著著 never draws it at all and the reader never once asks him why that is so",
+			candidate: "著著著著著著著著著著著著著著著著著著著著著",
+			want:      []string{"Han"},
+		},
+		{
+			// The count arm's own boundary: the CANDIDATE is over the ceiling
+			// at 2 of 23, or 8.7%, the counts are equal at 2, and 8.7% is under
+			// establishment so the share arm is silent too. Admissible — and
+			// without this row `>` and `>=` on the count are indistinguishable.
+			name:      "equal counts over the ceiling but under establishment",
+			original:  "The author 著著 never draws it at all and the reader never once asks him why",
+			candidate: "The author 著著 never draws it",
+			want:      nil,
+		},
+		{
+			// TWO sub-established scripts. Neither Greek nor Han is established
+			// at 25%, both are far over the 5% ceiling, and a real rewrite grows
+			// both — so both are refused. This is the cost of an absolute
+			// establishment share, recorded here rather than discovered later:
+			// a paragraph mixing scripts in the band between the two thresholds
+			// cannot grow either of them.
+			name: "a rewrite of a paragraph with two scripts in the band",
+			// Greek 15 of 66 is 22.7% and Han 11 of 66 is 16.7% — both over the
+			// ceiling, both under establishment — and the candidate grows each
+			// by one letter.
+			original:  "abcdefghijklmnopqrstuvwxyzabcdefghijklmn αβγδεζηικλμνξοπ 著者作家文筆漢字語文書",
+			candidate: "abcdefghijklmnopqrstuvwxyzabcdefghijklmn αβγδεζηικλμνξοπρ 著者作家文筆漢字語文書物",
+			want:      []string{"Greek", "Han"},
+		},
+		{
 			name:      "a letterless candidate crosses nothing",
 			original:  "The argument turns on a distinction the author never draws.",
 			candidate: "1979 — (42) !!",
@@ -403,12 +455,15 @@ func TestAScriptExactlyOnTheCeilingHasNotCrossedIt(t *testing.T) {
 	}
 }
 
-// At a ceiling of zero this is exactly #91's rule.
+// Everything #91 refuses, this refuses too — one-sided.
 //
-// The two guards are then one guard at two settings rather than two unrelated
-// ones, and a drift between them shows up here. At a ceiling of one nothing can
-// cross, because no share exceeds one.
-func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
+// An introduced script has an original count of zero, so `grew` and
+// `!established` are automatic and only the ceiling can excuse it; at a ceiling
+// of zero nothing is excused. The converse does NOT hold and must not be
+// asserted: growth without introduction is what #107 exists for.
+//
+// At a ceiling of one nothing crosses, because no share exceeds one.
+func TestEverythingTheShippedGuardRefusesThisRefusesToo(t *testing.T) {
 	// Establishment is held ABOVE one so nothing is ever established here; the
 	// boundary being probed is the ceiling's.
 	const established = 1.1
@@ -425,12 +480,15 @@ func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
 		for _, candidate := range texts {
 			originalSet, candidateSet := text.Scripts(original), text.Scripts(candidate)
 
-			atZero := candidateSet.Exceeding(originalSet, established, 0)
-			introduced := candidateSet.Introduced(originalSet)
-			if len(atZero) != 0 || len(introduced) != 0 {
-				if !reflect.DeepEqual(atZero, introduced) {
-					t.Errorf("%q -> %q: at ceiling 0 Exceeding() = %v but Introduced() = %v",
-						original, candidate, atZero, introduced)
+			atZero := map[string]bool{}
+			for _, name := range candidateSet.Exceeding(originalSet, established, 0) {
+				atZero[name] = true
+			}
+			for _, name := range candidateSet.Introduced(originalSet) {
+				if !atZero[name] {
+					t.Errorf("%q -> %q: %s is introduced but not named at ceiling 0: %v",
+						original, candidate, name,
+						candidateSet.Exceeding(originalSet, established, 0))
 				}
 			}
 			if got := candidateSet.Exceeding(originalSet, established, 1); len(got) != 0 {
@@ -468,7 +526,11 @@ func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
 				isEstablished := originalSet.Count(name) > 0 &&
 					originalSet.Share(name) >= established
 				overCeiling := candidateSet.Share(name) > ceiling
-				grew := candidateSet.Count(name) > originalSet.Count(name)
+				// Disjunctive: growing the count, OR taking over the
+				// paragraph without growing it. The second arm is what stops a
+				// candidate spending a banked count by deleting everything else.
+				grew := candidateSet.Count(name) > originalSet.Count(name) ||
+					candidateSet.Share(name) > established
 				if !isEstablished && overCeiling && grew {
 					want = append(want, name)
 				}

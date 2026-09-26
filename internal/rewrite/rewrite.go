@@ -74,6 +74,19 @@ const ScriptCeiling = 0.05
 // put the line one quotation wide: at 5%, sixteen CJK letters establish Han in
 // half the corpus's paragraphs, after which the guard is off at any share.
 //
+// Two consequences, neither of them evidenced, both recorded rather than left to
+// be discovered:
+//
+// As an absolute share it is an implicit cap on how many languages a paragraph
+// may have — at 0.25, four. And a paragraph carrying two scripts BETWEEN the
+// ceiling and this threshold cannot grow either of them: measured, 60% Latin
+// with Greek and Han at 20% each refuses a rewrite that adds one letter of
+// either, and refuses both when a real rewrite grows both.
+//
+// The band is empty in the maintainer's corpus — no admitted paragraph carries
+// any non-Latin script above 0.4% — so the cost falls on writers who genuinely
+// mix scripts in that range, and for them this guard is too strict.
+//
 // STUB for phase-1 verification only.
 const ScriptEstablished = 0.25
 

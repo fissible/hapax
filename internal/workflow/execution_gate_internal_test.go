@@ -229,6 +229,44 @@ func TestTheExecutionGateUsesTheDeclaredCeiling(t *testing.T) {
 	}
 }
 
+// The gate uses the declared ESTABLISHMENT threshold, not a literal of its own.
+//
+// Its sibling got a boundary pair and this did not, so substituting the gate's
+// threshold directly, the package accepted anything in (0.0455, 0.50] — a
+// ten-fold range whose low end sits a thousandth above the ceiling. A policy
+// change to the constant could also ship with the binary unchanged, because the
+// call site could carry a literal.
+//
+// The pair: an original with Han at exactly 25% is established and the candidate
+// is free; one letter more of Latin puts it at 24.4% and the same candidate is
+// refused.
+func TestTheExecutionGateUsesTheDeclaredEstablishmentThreshold(t *testing.T) {
+	if rewrite.ScriptEstablished != 0.25 {
+		t.Fatalf("this test is written against an establishment threshold of 0.25; "+
+			"it is %v", rewrite.ScriptEstablished)
+	}
+	const atThreshold = "abcdefghijklmno漢字漢字漢"     // 20 letters, Han 5 = 25.00%
+	const belowThreshold = "abcdefghijklmnop漢字漢字漢" // 21 letters, Han 5 = 23.81%
+	const allHan = "作者從不畫它，著者亦然。"
+
+	established, err := executionGate{}.Language(atThreshold, atThreshold, allHan)
+	if err != nil {
+		t.Fatalf("Language: %v", err)
+	}
+	if len(established.Overgrown) != 0 {
+		t.Errorf("Overgrown = %v at exactly the establishment threshold, want none",
+			established.Overgrown)
+	}
+
+	notYet, err := executionGate{}.Language(belowThreshold, belowThreshold, allHan)
+	if err != nil {
+		t.Fatalf("Language: %v", err)
+	}
+	if !reflect.DeepEqual(notYet.Overgrown, []string{"Han"}) {
+		t.Errorf("Overgrown = %v just below the threshold, want [Han]", notYet.Overgrown)
+	}
+}
+
 // Both thresholds are judged against the FIRST argument, not the second.
 //
 // The route the anchor closes is the COUNT condition. Raising establishment

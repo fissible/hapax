@@ -122,5 +122,19 @@ func TestTheRunnerAcceptsACandidateBelowTheScriptCeiling(t *testing.T) {
 			}
 		}
 	}
-	_ = workflow.RewriteState(result.State)
+	// And ACCEPTED, not merely unrefused. Without this the test passes on a run
+	// that never reached the gate at all, which is exactly the vacuity it exists
+	// to rule out for its sibling.
+	if result.State != workflow.RewriteImproved {
+		t.Errorf("State = %q, want %q", result.State, workflow.RewriteImproved)
+	}
+	if result.Improved != 1 {
+		t.Errorf("Improved = %d, want 1", result.Improved)
+	}
+	if len(result.Outcomes) == 0 || !result.Outcomes[0].Changed {
+		t.Error("the first target did not change")
+	}
+	if !strings.Contains(string(result.Bytes), admissible) {
+		t.Error("the accepted candidate was not written into the draft")
+	}
 }
