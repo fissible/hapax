@@ -91,9 +91,13 @@ const ScriptCeiling = 0.05
 // with Greek and Han at 20% each refuses a rewrite that adds one letter of
 // either, and refuses both when a real rewrite grows both.
 //
-// The band is empty in the maintainer's corpus — no admitted paragraph carries
-// any non-Latin script above 0.4% — so the cost falls on writers who genuinely
-// mix scripts in that range, and for them this guard is too strict.
+// The band is empty in the maintainer's corpus ONLY once hapax's own output
+// files are excluded (#109). Stated without that caveat the claim is false: at
+// the shipped floor the corpus contains a paragraph at 40.65% Han, 155 letters
+// with 63 Han — which is #91's own published incident, re-ingested as authorial
+// evidence. So the cost of this band falls on writers who genuinely mix scripts
+// in it, and both numbers here should be re-measured against a corpus that does
+// not contain the tool's output. See #109.
 const ScriptEstablished = 0.25
 
 // ScriptCeilingDerived records that the numbers above are NOT derived from a
