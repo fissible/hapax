@@ -127,7 +127,7 @@ func TestBothGatesAreAskedAboutTheOriginalAtEveryDepth(t *testing.T) {
 		t.Fatalf("the fixture must accept all FOUR candidates or depth is not under "+
 			"test: changed=%v text=%q", got.Changed, got.Text)
 	}
-	// Exactly three, because one call per candidate is the contract — the same
+	// Exactly four, because one call per candidate is the contract — the same
 	// invariant `TestLanguageIsConsultedOncePerCandidate` states for the other
 	// gate. An implementation checking BOTH anchors would be strictly safer and
 	// is still refused here, deliberately: two calls per candidate doubles the
