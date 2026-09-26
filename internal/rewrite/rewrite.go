@@ -28,7 +28,7 @@ const (
 )
 
 func RejectionCodes() []RejectionCode {
-	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
 }
 
 var (
@@ -52,7 +52,10 @@ const (
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
 	RejectionLanguage             RejectionCode = "language"
-	// RejectionLanguageGrowth is a STUB for phase-1 verification only.
+	// RejectionLanguageGrowth refuses a candidate that grew a script the ORIGINAL
+	// paragraph does not count as one of its own past ScriptCeiling. #91's sibling
+	// and not its replacement: that one refuses any INTRODUCTION however small,
+	// this one refuses a crossing whether the script was present or not.
 	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
 
@@ -60,7 +63,12 @@ const (
 // the script is not established in the original and the candidate uses MORE of
 // it than the original did.
 //
-// STUB for phase-1 verification only.
+// The value is DECLARED, not derived: see ScriptCeilingDerived. It is
+// evidence-informed — of 1959 admitted paragraphs in the maintainer's corpus,
+// two carry any non-Latin script at all, at 0.16% and 0.38%, while #91's
+// incident is 20.9% — so any ceiling between roughly 1% and 15% separates every
+// observed legitimate use from the incident by more than an order of magnitude
+// in both directions.
 const ScriptCeiling = 0.05
 
 // ScriptEstablished is the share of the ORIGINAL paragraph at which a script
@@ -86,8 +94,6 @@ const ScriptCeiling = 0.05
 // The band is empty in the maintainer's corpus — no admitted paragraph carries
 // any non-Latin script above 0.4% — so the cost falls on writers who genuinely
 // mix scripts in that range, and for them this guard is too strict.
-//
-// STUB for phase-1 verification only.
 const ScriptEstablished = 0.25
 
 // ScriptCeilingDerived records that the numbers above are NOT derived from a
@@ -97,8 +103,6 @@ const ScriptEstablished = 0.25
 // lengthening. The value is evidence-INFORMED — in the maintainer's corpus two
 // of 1959 admitted paragraphs carry any non-Latin script, at 0.16% and 0.38%,
 // while #91's incident is 20.9% — but the cut between them is a choice.
-//
-// STUB for phase-1 verification only.
 const ScriptCeilingDerived = false
 
 // Terminal explains how a loop ended. It is deliberately separate from
@@ -159,8 +163,7 @@ type Gate interface {
 // measured is scripts.
 type LanguageVerdict struct {
 	Introduced []string
-	// Overgrown is a STUB for phase-1 verification only.
-	Overgrown []string
+	Overgrown  []string
 }
 
 type RewriteRequest struct {
@@ -181,7 +184,9 @@ type Attempt struct {
 	CurrentBand, CandidateBand          eval.Band
 	Preserved                           bool
 	PreserveIdentifiers                 []string
-	// OvergrownScripts is a STUB for phase-1 verification only.
+	// OvergrownScripts names the scripts whose use grew out of proportion to the
+	// ORIGINAL paragraph, in the order they were measured. Recorded whichever
+	// rejection wins the precedence contest: the measurement happened either way.
 	OvergrownScripts                    []string
 	TellsComparison                     int
 	IntroducedScripts                   []string
@@ -288,12 +293,19 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			// otherwise rewrite the evidence of an already recorded refusal
 			// when the next candidate is measured.
 			attempt.IntroducedScripts = append([]string(nil), language.Introduced...)
+			attempt.OvergrownScripts = append([]string(nil), language.Overgrown...)
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
 			// Any script the current text does not already use, at any share.
 			case len(language.Introduced) > 0:
 				rejection = RejectionLanguage
+			// A script the ORIGINAL paragraph does not own, grown past the
+			// ceiling. Reported after introduction, which is the more specific
+			// claim, and before the tells and distance comparisons, which are
+			// less actionable.
+			case len(language.Overgrown) > 0:
+				rejection = RejectionLanguageGrowth
 			case !tells.Comparable:
 				rejection = RejectionTellsIncomparable
 			case tells.Comparison > 0:

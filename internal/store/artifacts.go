@@ -245,7 +245,10 @@ type RewriteAttempt struct {
 	// text did not, in the order they were measured. A refusal discards the
 	// prose, so this is the only durable trace that the substitution happened.
 	IntroducedScripts []string
-	// OvergrownScripts is a STUB for phase-1 verification only.
+	// OvergrownScripts names the scripts whose use grew out of proportion to the
+	// ORIGINAL paragraph, in the order they were measured. A separate column from
+	// the one above because the two are independent measurements against
+	// different anchors, and one attempt can carry both.
 	OvergrownScripts          []string
 	TellsComparison           int
 	TellsComparable, Accepted bool
@@ -1254,9 +1257,10 @@ func invalidAttemptField(stored RewriteAttempt) string {
 	if !known(stored.ProviderID, llm.Providers()) || !known(stored.CurrentBand, eval.Bands()) || !known(stored.CandidateBand, eval.Bands()) || !known(stored.Rejection, rewrite.RejectionCodes()) || !finiteAll(stored.CurrentDistance, stored.CandidateDistance) {
 		return "decision metadata"
 	}
-	// An accepted attempt introduced nothing: any introduction refuses, so a
-	// record in that shape means the gate was bypassed.
-	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "") != (stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) || (stored.Accepted && len(stored.IntroducedScripts) > 0) {
+	// An accepted attempt introduced nothing and grew nothing: either refuses, so
+	// a record in that shape means the gate was bypassed. Both clauses live HERE,
+	// in the shared validator, so the rule runs on read as well as on write.
+	if stored.Accepted != (stored.Rejection == rewrite.RejectionNone) || (stored.Accepted && (stored.CurrentBand == "") != (stored.CandidateBand == "")) || (stored.Preserved && len(stored.PreserveIdentifiers) > 0) || (stored.Accepted && len(stored.IntroducedScripts) > 0) || (stored.Accepted && len(stored.OvergrownScripts) > 0) {
 		return "decision state"
 	}
 	for _, identifier := range stored.PreserveIdentifiers {
@@ -1273,6 +1277,13 @@ func invalidAttemptField(stored RewriteAttempt) string {
 			return "introduced scripts"
 		}
 		seen[script] = true
+	}
+	overgrown := make(map[string]bool, len(stored.OvergrownScripts))
+	for _, script := range stored.OvergrownScripts {
+		if !validScriptName(script) || overgrown[script] {
+			return "overgrown scripts"
+		}
+		overgrown[script] = true
 	}
 	return ""
 }
@@ -1333,6 +1344,11 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 		}
 		for ordinal, script := range x.IntroducedScripts {
 			if _, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt_script (invocation_id,node_id,attempt_index,ordinal,script) VALUES (?,?,?,?,?)", x.InvocationID, x.NodeID, x.Index, ordinal, script); err != nil {
+				return err
+			}
+		}
+		for ordinal, script := range x.OvergrownScripts {
+			if _, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt_overgrown_script (invocation_id,node_id,attempt_index,ordinal,script) VALUES (?,?,?,?,?)", x.InvocationID, x.NodeID, x.Index, ordinal, script); err != nil {
 				return err
 			}
 		}
@@ -1398,13 +1414,32 @@ func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID strin
 	if err = scripts.Err(); err != nil {
 		return x, err
 	}
+	overgrown, err := query.QueryContext(ctx, "SELECT ordinal,script FROM rewrite_attempt_overgrown_script WHERE invocation_id=? AND node_id=? AND attempt_index=? ORDER BY ordinal", id, nodeID, index)
+	if err != nil {
+		return x, err
+	}
+	defer overgrown.Close()
+	for ordinal := 0; overgrown.Next(); ordinal++ {
+		var storedOrdinal int
+		var script string
+		if err = overgrown.Scan(&storedOrdinal, &script); err != nil {
+			return x, err
+		}
+		if storedOrdinal != ordinal {
+			return x, ErrCorrupt
+		}
+		x.OvergrownScripts = append(x.OvergrownScripts, script)
+	}
+	if err = overgrown.Err(); err != nil {
+		return x, err
+	}
 	if !validAttempt(x) {
 		return x, ErrCorrupt
 	}
 	return x, nil
 }
 func sameAttempt(a, b RewriteAttempt) bool {
-	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts)
+	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts) && sameSet(a.OvergrownScripts, b.OvergrownScripts)
 }
 
 type recorder struct {
@@ -1431,6 +1466,7 @@ func (r recorder) RecordAttempt(attempt rewrite.Attempt) error {
 		Preserved:           attempt.Preserved,
 		PreserveIdentifiers: attempt.PreserveIdentifiers,
 		IntroducedScripts:   attempt.IntroducedScripts,
+		OvergrownScripts:    attempt.OvergrownScripts,
 		TellsComparison:     attempt.TellsComparison,
 		TellsComparable:     attempt.TellsComparable,
 		Accepted:            attempt.Accepted,
