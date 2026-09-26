@@ -14,21 +14,24 @@ package rewrite_test
 // multi-script paragraph.
 //
 // The half that belongs HERE, rather than in the measurement, is the ANCHOR.
-// Establishment is judged against the paragraph the loop started from, not the
-// advancing `current`, and the ceiling makes the ladder sharper rather than
-// milder. A candidate sitting EXACTLY on the ceiling is admissible, because the
-// bound is strict. Anchored on `current`, that candidate is then established —
-// its share is at the ceiling — and the next candidate is unconstrained:
+// Both thresholds are judged against the paragraph the loop started from, not
+// the advancing `current`. The route the anchor closes is the COUNT condition,
+// and it is worth being exact about which mechanism does the work, because
+// raising the establishment threshold above the ceiling already closed a
+// different one: a candidate can never reach 25% while anything over 5% is
+// refused, so no rewrite can make a script established.
 //
-//	original            Han 0%      not established
-//	attempt 1  Han 1/20 = 5.0%      admissible, the bound is strict
-//	attempt 2  Han 10/10 = 100%     admissible against attempt 1, which is
-//	                                 established at exactly the ceiling
+// What remains is banking a count at exactly the ceiling and then shrinking:
 //
-// Two accepted attempts and the paragraph is entirely Han. The live store shows
-// 2 of 7 recorded invocations accepted twice, including #91's own, so this is a
-// reachable sequence rather than a hypothetical one. A fixed anchor closes it,
-// because the original never becomes established.
+//	original            Han 0 of 20             0%
+//	attempt 1           Han 1 of 20           5.0%   admissible, the bound is strict
+//	attempt 2           Han 1 of 10          10.0%   admissible against attempt 1,
+//	                                                  because the COUNT did not grow
+//
+// Against the original, attempt 2 grew from 0 to 1 and sits at twice the
+// ceiling, so a fixed anchor refuses it. Measured, all three rungs. The live
+// store shows 2 of 7 recorded invocations accepted twice, including #91's own,
+// so this is a reachable sequence rather than a hypothetical one.
 //
 // That makes `Language`'s signature `(original, current, candidate)`: two
 // anchors, one call, because both facts are measured from the same candidate

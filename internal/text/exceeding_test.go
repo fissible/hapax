@@ -56,10 +56,23 @@ package text_test
 //
 // # The rule
 //
-// A script already at or above the ceiling in the ORIGINAL is established, and
-// is not constrained — a bilingual paragraph may be rewritten in either of its
-// languages. Every other script, present or absent, may not exceed the ceiling
-// in the candidate.
+// A script at or above `established` in the ORIGINAL is one of the languages
+// that paragraph is written in, and is not constrained — a bilingual paragraph
+// may be rewritten in either of its languages. Every other script, present or
+// absent, may not exceed `ceiling` of the candidate WHILE USING MORE LETTERS OF
+// IT than the original did.
+//
+// The two thresholds are separate parameters because they answer two questions
+// and only one has evidence. The corpus says how much of a script a candidate
+// may contain; it says nothing about how much a paragraph must already hold for
+// that script to be its own. One number for both put the line one quotation
+// wide — at 5%, sixteen CJK letters establish Han in half the corpus's
+// paragraphs, after which the guard is off at any share.
+//
+// The count condition is what keeps a SHORTENING rewrite admissible. A ceiling
+// alone reintroduces the failure that ruled out shares in the first place:
+// measured, a 200-letter paragraph with 6 Greek letters cut to 70 letters with
+// FOUR is 5.71%, over the ceiling, and refused for a script it shrank.
 //
 // At a ceiling of zero this degenerates to #91's rule exactly, which is asserted
 // below rather than assumed. At a ceiling of one it admits everything. Those two
@@ -198,7 +211,7 @@ func TestTheZeroScriptSetCountsZero(t *testing.T) {
 
 // The rule, as measured cases at the ceiling the policy declares.
 func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
-	const ceiling = 0.05
+	const established, ceiling = 0.25, 0.05
 	for _, c := range []struct {
 		name, original, candidate string
 		want                      []string
@@ -268,6 +281,18 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			want:      nil,
 		},
 		{
+			// SHORTENING, with the script's own letters REMOVED. Greek is 2 of
+			// 49 in the original and 1 of 18 in the candidate: 5.56%, over the
+			// ceiling, on one fewer Greek letter. A ceiling alone refuses this
+			// for a script it shrank, which is the failure that ruled out
+			// shares in the first place, so the rule also requires the count to
+			// have grown.
+			name:      "shortening past the ceiling while removing the script",
+			original:  "The author never draws it at all and the reader never asks αβ",
+			candidate: "The author draws α now",
+			want:      nil,
+		},
+		{
 			name:      "a letterless candidate crosses nothing",
 			original:  "The argument turns on a distinction the author never draws.",
 			candidate: "1979 — (42) !!",
@@ -290,7 +315,7 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 		},
 	} {
 		t.Run(c.name, func(t *testing.T) {
-			got := text.Scripts(c.candidate).Exceeding(text.Scripts(c.original), ceiling)
+			got := text.Scripts(c.candidate).Exceeding(text.Scripts(c.original), established, ceiling)
 			if len(got) == 0 && len(c.want) == 0 {
 				return
 			}
@@ -298,6 +323,33 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 				t.Errorf("Exceeding() = %v, want %v", got, c.want)
 			}
 		})
+	}
+}
+
+// A script exactly ON the establishment threshold is established.
+//
+// The partner of the ceiling boundary below, and the one no other fixture
+// covers: nothing in the whole-rule cross-check puts a script exactly on the
+// threshold on the ORIGINAL side, so `>=` survived as `>` there. The two
+// comparisons are independent decisions and each needs its own witness.
+func TestAScriptExactlyOnTheEstablishmentThresholdIsEstablished(t *testing.T) {
+	// Han is 5 of 20 letters, which is exactly a quarter.
+	original := text.Scripts("abcdefghijklmno漢字漢字漢")
+	if original.Count("Han") != 5 || original.Letters() != 20 {
+		t.Fatalf("the fixture is Han=%d of %d letters; it must be exactly 5 of 20",
+			original.Count("Han"), original.Letters())
+	}
+	candidate := text.Scripts("作者從不畫它，著者亦然。") // 10 letters, all Han
+
+	// At exactly the threshold it is established, so the ceiling does not apply
+	// however much Han the candidate uses.
+	if got := candidate.Exceeding(original, 0.25, 0.05); len(got) != 0 {
+		t.Errorf("at an establishment threshold of exactly its own share, "+
+			"Exceeding() = %v, want none", got)
+	}
+	// A hair above, and it is not established.
+	if got := candidate.Exceeding(original, 0.26, 0.05); !reflect.DeepEqual(got, []string{"Han"}) {
+		t.Errorf("just above the threshold, Exceeding() = %v, want [Han]", got)
 	}
 }
 
@@ -310,6 +362,7 @@ func TestExceedingRespondsToTheCeilingItIsGiven(t *testing.T) {
 	original := text.Scripts("abcdefghijklmnopqrstu")   // Latin 21, no Han
 	candidate := text.Scripts("abcdefghijklmno漢字漢字漢字漢") // Latin 15, Han 7 of 22
 
+	const established = 0.25
 	for _, c := range []struct {
 		ceiling float64
 		want    []string
@@ -320,7 +373,7 @@ func TestExceedingRespondsToTheCeilingItIsGiven(t *testing.T) {
 		{0.32, nil}, // just above 7/22
 		{0.50, nil},
 	} {
-		got := candidate.Exceeding(original, c.ceiling)
+		got := candidate.Exceeding(original, established, c.ceiling)
 		if len(got) == 0 && len(c.want) == 0 {
 			continue
 		}
@@ -333,6 +386,7 @@ func TestExceedingRespondsToTheCeilingItIsGiven(t *testing.T) {
 // The ceiling is a strict bound: a script sitting exactly on it has not crossed
 // it. Asserted because `>` and `>=` are the same on every inexact fixture.
 func TestAScriptExactlyOnTheCeilingHasNotCrossedIt(t *testing.T) {
+	const established = 0.25
 	original := text.Scripts("abcdefghijklmnopqrstu")
 	// Han 5 of 20 letters is exactly one quarter.
 	candidate := text.Scripts("abcdefghijklmno漢字漢字漢")
@@ -341,10 +395,10 @@ func TestAScriptExactlyOnTheCeilingHasNotCrossedIt(t *testing.T) {
 			got, candidate.Letters())
 	}
 
-	if got := candidate.Exceeding(original, 0.25); len(got) != 0 {
+	if got := candidate.Exceeding(original, established, 0.25); len(got) != 0 {
 		t.Errorf("at a ceiling of exactly its own share, Exceeding() = %v, want none", got)
 	}
-	if got := candidate.Exceeding(original, 0.24); !reflect.DeepEqual(got, []string{"Han"}) {
+	if got := candidate.Exceeding(original, established, 0.24); !reflect.DeepEqual(got, []string{"Han"}) {
 		t.Errorf("just below, Exceeding() = %v, want [Han]", got)
 	}
 }
@@ -355,6 +409,9 @@ func TestAScriptExactlyOnTheCeilingHasNotCrossedIt(t *testing.T) {
 // ones, and a drift between them shows up here. At a ceiling of one nothing can
 // cross, because no share exceeds one.
 func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
+	// Establishment is held ABOVE one so nothing is ever established here; the
+	// boundary being probed is the ceiling's.
+	const established = 1.1
 	texts := []string{
 		"The argument turns on a distinction the author never draws.",
 		"The author 著 never draws it.",
@@ -368,7 +425,7 @@ func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
 		for _, candidate := range texts {
 			originalSet, candidateSet := text.Scripts(original), text.Scripts(candidate)
 
-			atZero := candidateSet.Exceeding(originalSet, 0)
+			atZero := candidateSet.Exceeding(originalSet, established, 0)
 			introduced := candidateSet.Introduced(originalSet)
 			if len(atZero) != 0 || len(introduced) != 0 {
 				if !reflect.DeepEqual(atZero, introduced) {
@@ -376,7 +433,7 @@ func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
 						original, candidate, atZero, introduced)
 				}
 			}
-			if got := candidateSet.Exceeding(originalSet, 1); len(got) != 0 {
+			if got := candidateSet.Exceeding(originalSet, established, 1); len(got) != 0 {
 				t.Errorf("%q -> %q: at ceiling 1, Exceeding() = %v, want none",
 					original, candidate, got)
 			}
@@ -387,7 +444,7 @@ func TestTheCeilingBoundariesAgreeWithTheShippedGuard(t *testing.T) {
 // Exceeding is exactly the rule, checked against the shares rather than against
 // a second implementation of it.
 func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
-	const ceiling = 0.05
+	const established, ceiling = 0.25, 0.05
 	texts := []string{
 		"The argument turns on a distinction the author never draws.",
 		"The author 著 never draws it.",
@@ -405,14 +462,20 @@ func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
 
 			var want []string
 			for _, name := range candidateSet.Names() {
-				established := originalSet.Count(name) > 0 && originalSet.Share(name) >= ceiling
-				if !established && candidateSet.Share(name) > ceiling {
+				// Three conditions, written separately because they are three
+				// decisions: establishment against its own threshold, the
+				// ceiling against the candidate, and growth in absolute letters.
+				isEstablished := originalSet.Count(name) > 0 &&
+					originalSet.Share(name) >= established
+				overCeiling := candidateSet.Share(name) > ceiling
+				grew := candidateSet.Count(name) > originalSet.Count(name)
+				if !isEstablished && overCeiling && grew {
 					want = append(want, name)
 				}
 			}
 			sort.Strings(want)
 
-			got := candidateSet.Exceeding(originalSet, ceiling)
+			got := candidateSet.Exceeding(originalSet, established, ceiling)
 			if len(got) == 0 && len(want) == 0 {
 				continue
 			}
@@ -425,7 +488,7 @@ func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
 
 // Sorted, so the record is stable and two equal answers compare equal.
 func TestExceedingIsSorted(t *testing.T) {
-	got := text.Scripts("автор 著者 αβγ").Exceeding(text.Scripts("x"), 0.05)
+	got := text.Scripts("автор 著者 αβγ").Exceeding(text.Scripts("x"), 0.25, 0.05)
 	if !sort.StringsAreSorted(got) {
 		t.Errorf("Exceeding() = %v, which is not sorted", got)
 	}
@@ -437,13 +500,14 @@ func TestExceedingIsSorted(t *testing.T) {
 // Neither set is disturbed by asking, and asking twice answers the same. The
 // gate asks about several candidates against one original.
 func TestExceedingChangesNeitherSet(t *testing.T) {
+	const established = 0.25
 	original := text.Scripts("The author 著 never draws it.")
 	candidate := text.Scripts("作者從不畫它，著者亦然，他從未真正描繪過它，也不曾提起。")
 	originalHan, candidateHan := original.Count("Han"), candidate.Count("Han")
 	originalLetters, candidateLetters := original.Letters(), candidate.Letters()
 
-	first := candidate.Exceeding(original, 0.05)
-	second := candidate.Exceeding(original, 0.05)
+	first := candidate.Exceeding(original, established, 0.05)
+	second := candidate.Exceeding(original, established, 0.05)
 
 	if !reflect.DeepEqual(first, second) {
 		t.Errorf("asked twice, answered %v then %v", first, second)
@@ -459,17 +523,18 @@ func TestExceedingChangesNeitherSet(t *testing.T) {
 // The method is total: the gate can reach an empty set through an empty string,
 // and a nonsensical ceiling must produce an answer rather than a panic.
 func TestExceedingIsTotal(t *testing.T) {
+	const established = 0.25
 	var zero text.ScriptSet
 	prose := text.Scripts("The argument turns on a distinction.")
 
-	if got := prose.Exceeding(zero, 0.05); !reflect.DeepEqual(got, []string{"Latin"}) {
+	if got := prose.Exceeding(zero, established, 0.05); !reflect.DeepEqual(got, []string{"Latin"}) {
 		t.Errorf("against the zero value, prose gives %v, want [Latin]", got)
 	}
-	if got := zero.Exceeding(prose, 0.05); len(got) != 0 {
+	if got := zero.Exceeding(prose, established, 0.05); len(got) != 0 {
 		t.Errorf("the zero value crosses %v", got)
 	}
 	for _, ceiling := range []float64{-1, 2} {
-		if got := prose.Exceeding(zero, ceiling); ceiling < 0 && len(got) == 0 {
+		if got := prose.Exceeding(zero, established, ceiling); ceiling < 0 && len(got) == 0 {
 			t.Errorf("at ceiling %v, Exceeding() = %v; a negative ceiling admits nothing",
 				ceiling, got)
 		} else if ceiling > 1 && len(got) != 0 {

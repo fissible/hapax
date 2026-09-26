@@ -314,6 +314,27 @@ func TestDeclaredFigures(t *testing.T) {
 	if got.Exemplars != 3 {
 		t.Errorf("default exemplars = %d, want 3", got.Exemplars)
 	}
+	// #107's two declared numbers. They are consumed only by the workflow gate,
+	// so without this the package that DECLARES them pins neither, and changing
+	// either one is caught — if at all — by another package's internal test.
+	if rewrite.ScriptCeiling != 0.05 {
+		t.Errorf("ScriptCeiling = %v, want 0.05", rewrite.ScriptCeiling)
+	}
+	if rewrite.ScriptEstablished != 0.25 {
+		t.Errorf("ScriptEstablished = %v, want 0.25", rewrite.ScriptEstablished)
+	}
+	// They are two numbers because they answer two questions, and only one has
+	// evidence. Equal values would silently re-merge the decisions.
+	if rewrite.ScriptEstablished <= rewrite.ScriptCeiling {
+		t.Errorf("ScriptEstablished %v is not above ScriptCeiling %v; a script would "+
+			"become established at the moment it is refused",
+			rewrite.ScriptEstablished, rewrite.ScriptCeiling)
+	}
+	// And the flag that says the numbers are undeliverable must keep saying so.
+	// Flipping it to true asserts a measurement nobody made.
+	if rewrite.ScriptCeilingDerived {
+		t.Error("ScriptCeilingDerived is true; no derivation exists for either number")
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -56,14 +56,28 @@ const (
 	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
 
-// ScriptCeiling is the share of a candidate's letters a script may reach when
-// the original paragraph did not already give it that much. A script at or
-// above it in the original is established and unconstrained.
+// ScriptCeiling is the share of a candidate's letters a script may reach, when
+// the script is not established in the original and the candidate uses MORE of
+// it than the original did.
 //
 // STUB for phase-1 verification only.
 const ScriptCeiling = 0.05
 
-// ScriptCeilingDerived records that the number above is NOT derived from a
+// ScriptEstablished is the share of the ORIGINAL paragraph at which a script
+// counts as one of the languages that paragraph is written in, and is no longer
+// constrained by the ceiling.
+//
+// It is a separate number from the ceiling because it answers a different
+// question, and only the ceiling has evidence behind it. The corpus says how
+// much of a script a candidate may contain; it says nothing about how much a
+// paragraph must already hold before that script is its own. Sharing one number
+// put the line one quotation wide: at 5%, sixteen CJK letters establish Han in
+// half the corpus's paragraphs, after which the guard is off at any share.
+//
+// STUB for phase-1 verification only.
+const ScriptEstablished = 0.25
+
+// ScriptCeilingDerived records that the numbers above are NOT derived from a
 // measurement, the way #92 records the same about the paragraph floor. Three
 // constant-free designs were measured and discarded: an order statistic cannot
 // see magnitude, and every share- or proportion-comparing rule refuses ordinary
@@ -73,8 +87,6 @@ const ScriptCeiling = 0.05
 //
 // STUB for phase-1 verification only.
 const ScriptCeilingDerived = false
-
-const ()
 
 // Terminal explains how a loop ended. It is deliberately separate from
 // RejectionCode, which belongs to a single recorded candidate.

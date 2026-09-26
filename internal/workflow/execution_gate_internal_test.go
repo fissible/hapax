@@ -229,19 +229,20 @@ func TestTheExecutionGateUsesTheDeclaredCeiling(t *testing.T) {
 	}
 }
 
-// Establishment is judged against the FIRST argument, not the second.
+// Both thresholds are judged against the FIRST argument, not the second.
 //
-// The ladder the fixed anchor closes, and the ceiling makes it sharp rather than
-// gradual. A candidate sitting exactly on the ceiling is admissible because the
-// bound is strict — and anchored on `current`, it is then ESTABLISHED, so the
-// next candidate is unconstrained and may be entirely Han.
-func TestTheExecutionGateJudgesEstablishmentFromTheOriginal(t *testing.T) {
-	const origin = "abcdefghijklmnopqrst"       // 20 Latin letters, no Han
-	const onTheCeiling = "abcdefghijklmnopqrs著" // 20 letters, Han exactly 5%
-	const allHan = "作者從不畫它，著者亦然。"               // 10 letters, Han 100%
+// The route the anchor closes is the COUNT condition. Raising establishment
+// above the ceiling already closed the other one — a rewrite cannot make a
+// script established, because anything over the ceiling is refused long before
+// 25%. What remains is banking a count at exactly the ceiling and then
+// shrinking, which doubles the share while the count stays flat.
+func TestTheExecutionGateJudgesBothThresholdsFromTheOriginal(t *testing.T) {
+	const origin = "abcdefghijklmnopqrst" // 20 Latin, Han 0
+	const banked = "abcdefghijklmnopqrs著" // 20 letters, Han 1 = 5.00%
+	const shrunk = "abcdefghi著"           // 10 letters, Han 1 = 10.00%
 
-	// Rung one is admissible, which is what makes the ladder available at all.
-	first, err := executionGate{}.Language(origin, origin, onTheCeiling)
+	// Rung one is admissible: exactly on the ceiling, and the bound is strict.
+	first, err := executionGate{}.Language(origin, origin, banked)
 	if err != nil {
 		t.Fatalf("Language: %v", err)
 	}
@@ -250,25 +251,26 @@ func TestTheExecutionGateJudgesEstablishmentFromTheOriginal(t *testing.T) {
 			first.Overgrown)
 	}
 
-	// Rung two, judged against rung one, is admissible: Han sits AT the ceiling
-	// there, so it is established and unconstrained.
-	ratchet, err := executionGate{}.Language(onTheCeiling, onTheCeiling, allHan)
+	// Rung two, judged against rung one, is admissible because the COUNT did not
+	// grow — one Han letter before and one after — even though the share doubled.
+	ratchet, err := executionGate{}.Language(banked, banked, shrunk)
 	if err != nil {
 		t.Fatalf("Language: %v", err)
 	}
 	if len(ratchet.Overgrown) != 0 {
-		t.Fatalf("against rung one the all-Han candidate must be admissible, or the "+
+		t.Fatalf("against rung one the shrunk candidate must be admissible, or the "+
 			"ladder this guards against does not exist: %v", ratchet.Overgrown)
 	}
 
-	// The real call: anchored on the original, with current at rung one.
-	got, err := executionGate{}.Language(origin, onTheCeiling, allHan)
+	// The real call: anchored on the original, with current at rung one. The
+	// count grew from zero and the share is twice the ceiling.
+	got, err := executionGate{}.Language(origin, banked, shrunk)
 	if err != nil {
 		t.Fatalf("Language: %v", err)
 	}
 	if !reflect.DeepEqual(got.Overgrown, []string{"Han"}) {
-		t.Errorf("Overgrown = %v, want [Han] — establishment is judged from the "+
-			"first argument, and judging it from the second admits everything",
+		t.Errorf("Overgrown = %v, want [Han] — both thresholds are judged from the "+
+			"first argument, and judging them from the second admits this",
 			got.Overgrown)
 	}
 }
