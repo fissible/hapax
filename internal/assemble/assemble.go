@@ -23,8 +23,6 @@ var (
 	ErrExcision = errors.New("assemble leaf contains excisions")
 	// ErrInvalidText reports an empty or invalid UTF-8 replacement.
 	ErrInvalidText = errors.New("assemble invalid replacement text")
-	// ErrNotOneLeaf is a STUB for phase-1 verification only.
-	ErrNotOneLeaf = errors.New("assemble replacement is not one leaf in place")
 )
 
 // Replacement substitutes Text for one included leaf's raw byte Span.

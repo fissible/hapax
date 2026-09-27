@@ -28,7 +28,7 @@ const (
 )
 
 func RejectionCodes() []RejectionCode {
-	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved}
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved, RejectionNotSpliceable}
 }
 
 var (
@@ -51,7 +51,17 @@ const (
 	RejectionTellsIncomparable    RejectionCode = "tells-incomparable"
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
-	RejectionLanguage             RejectionCode = "language"
+	// RejectionNotSpliceable refuses a candidate that would not splice back into
+	// its document as exactly one included leaf in the same place.
+	//
+	// It is declared LAST because it is reported last, and it is reported last
+	// because it is the only rejection whose verdict depends on the surrounding
+	// DOCUMENT rather than only on the two texts — so unlike every other code
+	// here, it cannot be reproduced from a `rewrite_attempt` row alone.
+	//
+	// STUB for phase-1 verification only.
+	RejectionNotSpliceable RejectionCode = "not-spliceable"
+	RejectionLanguage      RejectionCode = "language"
 	// RejectionLanguageGrowth refuses a candidate that grew a script the ORIGINAL
 	// paragraph does not count as one of its own past ScriptCeiling. #91's sibling
 	// and not its replacement: that one refuses any INTRODUCTION however small,
@@ -161,6 +171,11 @@ type Gate interface {
 	Preserve(original, candidate string) (Preservation, error)
 	Tells(current, candidate string) (TellsVerdict, error)
 	Language(original, current, candidate string) (LanguageVerdict, error)
+	// SpliceableIntoOriginal reports whether the candidate, spliced into the
+	// ORIGINAL document at the ORIGINAL span, is still exactly one included leaf
+	// in the same place. The anchor is in the name because the gate holds the
+	// document as construction state rather than taking it as an argument.
+	SpliceableIntoOriginal(candidate string) (SpliceVerdict, error)
 }
 
 // LanguageVerdict reports two script facts about one candidate, against two
@@ -173,6 +188,13 @@ type LanguageVerdict struct {
 	Introduced []string
 	Overgrown  []string
 }
+
+// SpliceVerdict reports whether a candidate survives being put back where it
+// came from. Intact is false when the replaced span would become more than one
+// leaf, none at all, a different span, or a leaf in different containers.
+//
+// STUB for phase-1 verification only.
+type SpliceVerdict struct{ Intact bool }
 
 type RewriteRequest struct {
 	Prompt                  string

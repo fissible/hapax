@@ -1099,7 +1099,18 @@ func (s executionSelector) Exemplars(n int) ([]string, error) {
 	return append([]string(nil), s.texts...), nil
 }
 
-type executionGate struct{ register string }
+// executionGate is constructed per target, so it can hold the document and the
+// target span the splice check needs. #115.
+type executionGate struct {
+	register string
+	doc      *text.Document
+	span     text.Span
+}
+
+// SpliceableIntoOriginal is a STUB for phase-1 verification only.
+func (g executionGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	return rewrite.SpliceVerdict{Intact: true}, nil
+}
 
 // Preserve compares the candidate against the ORIGINAL paragraph. preserve.Check
 // is not transitive — its entity watch set is built from both texts — so
@@ -1299,7 +1310,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 			return result, err
 		}
 		passage := string(doc.Raw()[target.Offset : target.Offset+target.Length])
-		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register}, Provider: provider, Store: s.Recorder(ctx), Options: options}
+		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register, doc, text.Span{Offset: target.Offset, Length: target.Length}}, Provider: provider, Store: s.Recorder(ctx), Options: options}
 		out, err := loop.Rewrite(ctx, rewrite.Segment{Text: passage, SpanRef: target.NodeID})
 		if err != nil {
 			return ExecuteResult{}, err

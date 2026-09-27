@@ -187,6 +187,10 @@ type gateVerdict struct {
 	introduced []string
 	// Empty means nothing grew out of proportion to the original.
 	overgrown []string
+	// spliceable is the DEFAULT-TRUE field in this struct, so a zero gateVerdict
+	// is not silently unspliceable. passingGate and every fixture that builds a
+	// verdict literal set it explicitly for that reason.
+	spliceable bool
 }
 
 type fakeGate struct {
@@ -223,6 +227,10 @@ func (f *fakeGate) Language(original, current, candidate string) (rewrite.Langua
 	return rewrite.LanguageVerdict{Introduced: v.introduced, Overgrown: v.overgrown}, nil
 }
 
+func (f *fakeGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	return rewrite.SpliceVerdict{Intact: f.verdict(candidate).spliceable}, nil
+}
+
 func (f *fakeGate) verdict(candidate string) gateVerdict {
 	if v, ok := f.verdicts[candidate]; ok {
 		return v
@@ -231,7 +239,9 @@ func (f *fakeGate) verdict(candidate string) gateVerdict {
 }
 
 func passingGate() *fakeGate {
-	return &fakeGate{fallback: gateVerdict{preserved: true, comparison: -1, comparable: true}}
+	return &fakeGate{fallback: gateVerdict{
+		preserved: true, comparison: -1, comparable: true, spliceable: true,
+	}}
 }
 
 type request struct {
@@ -1253,7 +1263,12 @@ func TestAStructurallyInvalidCandidateSkipsTheGuards(t *testing.T) {
 
 type countingGate struct {
 	*fakeGate
-	preserveCalls, tellsCalls, languageCalls int
+	preserveCalls, tellsCalls, languageCalls, spliceCalls int
+}
+
+func (c *countingGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	c.spliceCalls++
+	return c.fakeGate.SpliceableIntoOriginal(candidate)
 }
 
 func (c *countingGate) Preserve(original, candidate string) (rewrite.Preservation, error) {

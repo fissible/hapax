@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/rewrite"
+	"github.com/fissible/hapax/internal/text"
 )
 
 // ---------------------------------------------------------------------------
@@ -371,5 +372,170 @@ func TestTheExecutionGatePreservesAgainstTheFirstArgument(t *testing.T) {
 	if len(got.Identifiers) != 1 || got.Identifiers[0] != want {
 		t.Errorf("Identifiers = %v, want [%s] — an argument-swapped gate records an "+
 			"invention instead", got.Identifiers, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #115: would the candidate splice back as one leaf in the same place?
+// ---------------------------------------------------------------------------
+//
+// The gate holds the document and the target span, so it can answer what the
+// loop cannot: what this candidate BECOMES once put back where it came from.
+//
+// Every fixture below is measured against a real two-paragraph draft. The three
+// conditions — exactly one included leaf, at exactly that span, in the same
+// containers — are separated across fixtures, because a mutation dropping any one
+// of them passed an earlier draft where they were not.
+//
+// NOT fixtured, and said so rather than implied: whether the check counts
+// `Leaves()` or `IncludedLeaves()`. Separating those needs a spliced result whose
+// leaf is EXCLUDED at exactly the right span with the right containers, and the
+// shapes that exclude a leaf — block quotes, headings, non-sentential list items
+// — are all refused as `not-one-segment` before the gate runs. The word
+// "included" in this check is therefore unpinned here.
+
+const gateFirst = "A paragraph of ordinary prose that runs on past a single sentence so the " +
+	"structure pass reads it as prose rather than as a heading; it says a thing."
+const gateSecond = "A second paragraph doing likewise, at enough length to clear the floor and " +
+	"be measured on its own terms rather than skipped."
+
+// gateFor builds the gate a target would get: the document, and the span of the
+// leaf whose raw bytes are want.
+func gateFor(t *testing.T, body, want string) executionGate {
+	t.Helper()
+	doc, err := text.Admit([]byte(body))
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		if string(doc.Raw()[leaf.Span.Offset:leaf.Span.Offset+leaf.Span.Length]) == want {
+			return executionGate{register: "essays", doc: doc, span: leaf.Span}
+		}
+	}
+	t.Fatalf("no included leaf holds the wanted text")
+	return executionGate{}
+}
+
+func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
+	plain := gateFirst + "\n\n" + gateSecond + "\n\n"
+	// A document whose first paragraph is a LIST ITEM, so a legitimate rewrite of
+	// a nested paragraph can be shown to be admissible.
+	nested := "- " + gateFirst + "\n\n" + gateSecond + "\n\n"
+
+	for _, c := range []struct {
+		name, body, target, candidate string
+		want                          bool
+	}{
+		{
+			name: "a plain rewrite in a plain place", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: true,
+		},
+		{
+			// TRAILING WHITESPACE. The re-parsed leaf excludes it, so its length is
+			// one byte short of the replacement text — measured, leaf 0+148 against
+			// 149 bytes of text. A literal span comparison refuses this, and it
+			// breaks a committed test in `internal/assemble` that splices exactly
+			// such a replacement.
+			name: "a rewrite with a trailing space", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here. ",
+			want: true,
+		},
+		{
+			// CONTAINERS, and the case an implementation hardcoding `[document]`
+			// would refuse. The original is `[document list list-item]` and the
+			// candidate keeps it there, because the span excludes the marker.
+			name: "a plain rewrite of a list item", body: nested, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: true,
+		},
+		{
+			// CONTAINERS again, the other way: the original is top-level and the
+			// candidate puts it inside a list. One included leaf, still
+			// `role=paragraph`, so neither a leaf count nor a role check sees it.
+			name: "a rewrite that becomes a list item", body: plain, target: gateFirst,
+			candidate: "- A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: false,
+		},
+		{
+			// LEAF COUNT. Measured: this scores as ONE segment, because only one
+			// half clears the lexical floor, so the loop hands it here — and
+			// spliced it is two leaves, the short one unscoreable forever.
+			name: "a rewrite that splits in two", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph here.\n\nAnd a second half that runs on past " +
+				"a single sentence so the structure pass reads it as prose in its own right.",
+			want: false,
+		},
+		{
+			// ZERO leaves, and NON-LOCAL damage: an unterminated fence swallows the
+			// rest of the document into one code block, so the second paragraph
+			// disappears too. It also defeats a string heuristic that only looks
+			// for a list marker or a blank line — this candidate has neither.
+			name: "a rewrite opening an unterminated fence", body: plain, target: gateFirst,
+			candidate: "```\nA rewritten paragraph of ordinary prose that runs on past a " +
+				"single sentence so the structure pass reads it as code now.",
+			want: false,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := gateFor(t, c.body, c.target).SpliceableIntoOriginal(c.candidate)
+			if err != nil {
+				t.Fatalf("SpliceableIntoOriginal: %v", err)
+			}
+			if got.Intact != c.want {
+				t.Errorf("Intact = %v, want %v", got.Intact, c.want)
+			}
+		})
+	}
+}
+
+// The check reads the document it was built with, not the candidate alone.
+//
+// Parsed in isolation a list-item rewrite reports `containers=[document]`, so an
+// implementation that checked the candidate on its own would refuse every
+// legitimate nested rewrite — the same defect as hardcoding `[document]`. This
+// pins it from the other side: the SAME candidate is admissible in a nested place
+// and refused in a plain one, so the verdict cannot be a function of the
+// candidate text.
+func TestTheSpliceVerdictDependsOnTheDocumentNotTheCandidateAlone(t *testing.T) {
+	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +
+		"sentence so the structure pass still reads it as prose here."
+	const listed = "- " + candidate
+
+	plain := gateFirst + "\n\n" + gateSecond + "\n\n"
+	nested := "- " + gateFirst + "\n\n" + gateSecond + "\n\n"
+
+	// The bare candidate: admissible in both, because the span excludes any marker.
+	for _, c := range []struct{ name, body string }{{"plain", plain}, {"nested", nested}} {
+		got, err := gateFor(t, c.body, gateFirst).SpliceableIntoOriginal(candidate)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !got.Intact {
+			t.Errorf("%s: a bare candidate should splice cleanly", c.name)
+		}
+	}
+
+	// The marked-up candidate: refused in a plain place, because it ADDS a list.
+	got, err := gateFor(t, plain, gateFirst).SpliceableIntoOriginal(listed)
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+	if got.Intact {
+		t.Error("a candidate adding a list marker to a top-level paragraph should be refused")
+	}
+
+	// And in a nested place it is refused too, because it adds a SECOND list.
+	// Same text, and the verdict turns on the document both times.
+	got, err = gateFor(t, nested, gateFirst).SpliceableIntoOriginal(listed)
+	if err != nil {
+		t.Fatalf("nested: %v", err)
+	}
+	if got.Intact {
+		t.Error("a candidate nesting a list inside a list item should be refused")
 	}
 }
