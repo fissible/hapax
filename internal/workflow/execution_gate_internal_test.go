@@ -382,10 +382,28 @@ func TestTheExecutionGatePreservesAgainstTheFirstArgument(t *testing.T) {
 // The gate holds the document and the target span, so it can answer what the
 // loop cannot: what this candidate BECOMES once put back where it came from.
 //
-// Every fixture below is measured against a real two-paragraph draft. The three
-// conditions — exactly one included leaf, at exactly that span, in the same
-// containers — are separated across fixtures, because a mutation dropping any one
-// of them passed an earlier draft where they were not.
+// Every fixture below is measured against a real two-paragraph draft.
+//
+// Span identity and containers are each INDEPENDENTLY NECESSARY, and a fixture
+// isolates each. Exactly-one-leaf is not: leaves are disjoint, so if an included
+// leaf's span equals the region exactly no second leaf can intersect it, and if
+// none equals it span identity already refuses — including the zero case. The
+// count is written for readability, not for coverage, and a mutation relaxing it
+// passes by design.
+//
+// Containers is load-bearing BECAUSE of the whitespace tolerance, which is the
+// connection I had not seen. Leading whitespace is trimmed out of the span
+// comparison, and in CommonMark leading whitespace is also a container-
+// establishing prefix: two spaces is the content indent of `- `, so the same
+// indent that the span comparison forgives is what moves a paragraph into the
+// list above it. Measured, with the original at `[document]`:
+//
+//	"  " + prose, no list above   [paragraph @152+76 [document]]
+//	"  " + prose, below a list    [paragraph @154+76 [document list list-item]]
+//
+// Same candidate, same span after trimming, and only containers separates them.
+// An earlier draft of this header claimed all three conditions were separated
+// when none of them was.
 //
 // `Leaves()` versus `IncludedLeaves()` IS separated, by the short-rewrite pair.
 // An earlier draft claimed it could not be, on the grounds that every excluding
@@ -498,6 +516,34 @@ func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
 			want:      false,
 		},
 		{
+			// The whitespace rule, pinned. Without this row an implementer may
+			// trim only the trailing end, which passes everything else — and
+			// which of the two rules they pick decides whether the containers
+			// violation below is even reachable.
+			name: "an indented rewrite with no list above it", body: plain, target: gateSecond,
+			candidate: "  A rewritten paragraph of ordinary prose that runs on past a single sentence.",
+			want:      true,
+		},
+		{
+			// CONTAINERS, isolated. Same candidate as the row above, same span
+			// after trimming, one included leaf — and the two spaces absorb it
+			// into the list item above, so `[document]` becomes
+			// `[document list list-item]`.
+			name: "an indented rewrite directly below a list", body: nested, target: gateSecond,
+			candidate: "  A rewritten paragraph of ordinary prose that runs on past a single sentence.",
+			want:      false,
+		},
+		{
+			// SPAN identity, isolated. The image half is excluded by role, so
+			// there is exactly ONE included leaf, in exactly the original's
+			// containers — and it covers 53 bytes of a 110-byte region. The image
+			// is orphaned inside the replaced span, which is the harm.
+			name: "a rewrite trailing an image-only paragraph", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on.\n\n" +
+				"![a photograph of the thing](https://example.com/p.png)",
+			want: false,
+		},
+		{
 			// ZERO leaves, and NON-LOCAL damage: an unterminated fence swallows the
 			// rest of the document into one code block, so the second paragraph
 			// disappears too. It also defeats a string heuristic that only looks
@@ -572,8 +618,22 @@ func TestTheSpliceVerdictDependsOnTheDocumentNotTheCandidateAlone(t *testing.T) 
 	}
 }
 
-// The gate re-parses the whole document once per candidate, so the cost is
-// O(document) per attempt and the header's 89.6 ms figure needs an anchor.
+// The gate re-parses the document per candidate, so the cost is O(document) per
+// attempt and the figures in this file need an anchor rather than a citation.
+//
+// It measures MORE than one parse: a correct gate structures the input to find
+// the original leaf, `assemble.Assemble` structures it again to validate the
+// span, and then the spliced output is admitted and structured. Three passes, so
+// this reports well above the 89.6 ms that one `Admit`+`Structure` costs at this
+// size. Two of the three are removable — the original leaf and the input
+// structure are invariant across a target's attempts, and `executionGate` is
+// constructed per target — but that is an implementation choice, not a contract.
+//
+// The fixture is also the CHEAPEST possible document of its size: one paragraph
+// pair repeated, no headings, lists or fences. Real prose costs far more per
+// byte — measured, 19.7 ms for 72 KB of PROJECT.md against 3.5 ms for 50 KB of
+// this shape — so the number here understates the worst case while overshooting
+// the single-parse figure.
 //
 // `Admit` is linear at roughly 62 MB/s; the cost is the goldmark tree build, and
 // that is SUPERLINEAR — measured, 3.9× the bytes cost 37× the time. Targets grow
@@ -594,7 +654,8 @@ func BenchmarkSpliceGateOnARealisticDraft(b *testing.B) {
 	}
 	leaves := doc.Structure(text.DefaultStructureOptions()).IncludedLeaves()
 	if len(leaves) < 100 {
-		b.Fatalf("the fixture admits %d leaves; it must be a realistic draft", len(leaves))
+		b.Fatalf("the fixture admits %d leaves; it must be large enough for the parse "+
+			"to dominate", len(leaves))
 	}
 	gate := executionGate{register: "essays", doc: doc, span: leaves[0].Span}
 	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +

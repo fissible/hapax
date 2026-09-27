@@ -9,12 +9,30 @@ import (
 // #115 adds `not-spliceable` to the rejection vocabulary, so `rewrite_attempt` is
 // rebuilt a fifth time — SQLite cannot alter a CHECK in place.
 //
-// Data preservation across that rebuild is already covered: #107's migration test
-// truncates the list to before its own rebuild and migrates all the way forward,
-// so every later rebuild's copy runs under it. What is NOT covered without this
-// file is whether the new code can be stored at all, and whether the CHECK and
-// the Go vocabulary still agree — two hand-maintained copies of one enum, now in
-// five copy-pasted versions (#120).
+// Two things are already covered elsewhere, and an earlier version of this
+// comment claimed the opposite about both.
+//
+// Data preservation across the rebuild is NOT covered by #107's migration test —
+// that seeds at the version where `rewrite_attempt_overgrown_script` does not yet
+// exist — so `splice_migration_internal_test.go` in this package supplies it. This
+// comment used to assert the coverage that sibling file opens by denying.
+//
+// Agreement between the CHECK and the Go vocabulary IS covered:
+// `declaredVocabularies()` derives the rejection set from
+// `rewrite.RejectionCodes()`, so `TestEveryDeclaredEnumValueIsAcceptedByTheSchema`
+// fails the moment a code is declared in Go and forgotten in the migration — it is
+// in this slice's own red list for that reason. I filed #120 claiming that check
+// did not exist and closed it as invalid; the sentence citing #120 as an open
+// problem was left behind.
+//
+// So one thing is left for THIS file: that the new code survives the Go write
+// path, PutRewriteAttempt through LoadRewriteAttempt.
+//
+// An earlier draft also required a splice refusal to carry no script evidence.
+// That is false — every gate is consulted whatever the first one says, so the
+// scripts are measured and belong in the record — and singling this code out
+// would have been arbitrary anyway, since `tells-worse` and `not-improved` can
+// carry them too.
 
 // The new code round-trips, so the CHECK admits what RejectionCodes() declares.
 func TestASpliceRefusalRoundTrips(t *testing.T) {

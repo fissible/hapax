@@ -32,6 +32,19 @@ import (
 // Two rows at a NON-ZERO attempt index, for the reason #107 documented: with one
 // row at ordinal 0 on an attempt at index 0, `attempt_index` and `ordinal` hold
 // the same value and a transposition between them is the identity.
+//
+// # The trap this test exists to catch, for whoever writes the migration
+//
+// #107's `CREATE TABLE rewrite_attempt_overgrown_script` runs AFTER its rename, so
+// its foreign key names `rewrite_attempt`. Copied verbatim into a rebuild, that
+// key points at the table about to be dropped, while the two `_new` children point
+// at `rewrite_attempt_new`. Foreign keys are on from version 7 onward, so
+// `DROP TABLE rewrite_attempt` cascades and empties the new child — bisected, the
+// INSERT lands two rows and the DROP takes them to zero while the other two
+// children stay at two. Retarget the key to `rewrite_attempt_new`.
+//
+// Without this test that loss is silent and the suite is green. With it, the
+// failure is `ordinals = [], want [0 1]`.
 
 // spliceMigration is the index of #115's rebuild, so truncating the list leaves
 // the schema as it stood after #107's — the version this upgrade starts from, and
