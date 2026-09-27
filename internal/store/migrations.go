@@ -124,4 +124,35 @@ ALTER TABLE rewrite_attempt_new RENAME TO rewrite_attempt;
 ALTER TABLE rewrite_attempt_identifier_new RENAME TO rewrite_attempt_identifier;
 ALTER TABLE rewrite_attempt_script_new RENAME TO rewrite_attempt_script;
 CREATE TABLE rewrite_attempt_overgrown_script (invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'), node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*'), attempt_index INTEGER NOT NULL CHECK(attempt_index>=0), ordinal INTEGER NOT NULL CHECK(ordinal>=0), script TEXT NOT NULL CHECK(script GLOB '[A-Z]*' AND script NOT GLOB '*[^A-Za-z_]*' AND length(script) BETWEEN 2 AND 40), PRIMARY KEY(invocation_id,node_id,attempt_index,ordinal), FOREIGN KEY(invocation_id,node_id,attempt_index) REFERENCES rewrite_attempt(invocation_id,node_id,attempt_index) ON DELETE CASCADE);
+`, `
+-- #115. Nothing checked what an accepted candidate BECOMES once spliced back
+-- into its document, so a rewrite could move a paragraph into a list or split
+-- it in two while the caller was told its prose improved. The fourth gate
+-- refuses such a candidate, which puts not-spliceable in the rejection
+-- vocabulary — and SQLite cannot add to a CHECK in place, so rewrite_attempt is
+-- rebuilt for the fifth time. All THREE children are carried over now.
+--
+-- rewrite_attempt_overgrown_script is rebuilt rather than left alone, and its
+-- foreign key is retargeted. Migration 9 created it AFTER its rename, so the
+-- statement above names rewrite_attempt — the table this migration is about to
+-- drop. Copied verbatim, the key would point at the doomed table while the
+-- other two children point at _new, and since foreign keys are on from
+-- migration 7 the DROP would cascade and silently empty the child.
+-- Measured: the INSERT lands two rows and the DROP takes them to zero.
+CREATE TABLE rewrite_attempt_new (invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'), attempt_index INTEGER NOT NULL CHECK(attempt_index>=0), profile_id TEXT NOT NULL CHECK(length(profile_id)=64 AND profile_id NOT GLOB '*[^0-9a-f]*') REFERENCES profile(id) ON DELETE CASCADE, provider_id TEXT NOT NULL CHECK(provider_id IN ('ollama','anthropic')), node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*') REFERENCES node(node_id) ON DELETE CASCADE, current_hash TEXT NOT NULL CHECK(length(current_hash)=64 AND current_hash NOT GLOB '*[^0-9a-f]*'), candidate_hash TEXT NOT NULL CHECK(length(candidate_hash)=64 AND candidate_hash NOT GLOB '*[^0-9a-f]*'), current_distance REAL NOT NULL, candidate_distance REAL NOT NULL, current_band TEXT NOT NULL CHECK(current_band IN ('','in-range','drifting','not-you')), candidate_band TEXT NOT NULL CHECK(candidate_band IN ('','in-range','drifting','not-you')), preserved INTEGER NOT NULL CHECK(preserved IN (0,1)), tells_comparison INTEGER NOT NULL, tells_comparable INTEGER NOT NULL CHECK(tells_comparable IN (0,1)), accepted INTEGER NOT NULL CHECK(accepted IN (0,1)), rejection TEXT NOT NULL CHECK(rejection IN ('','not-one-segment','unscoreable','candidate-unscoreable','uncalibrated','different-features','not-preserved','language','language-growth','tells-incomparable','tells-worse','not-improved','not-spliceable')) CHECK((accepted=1)=(rejection='')) CHECK(accepted=0 OR (current_band<>'') = (candidate_band<>'')), PRIMARY KEY(invocation_id,node_id,attempt_index));
+INSERT INTO rewrite_attempt_new SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection FROM rewrite_attempt;
+CREATE TABLE rewrite_attempt_identifier_new (invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'), node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*'), attempt_index INTEGER NOT NULL CHECK(attempt_index>=0), ordinal INTEGER NOT NULL CHECK(ordinal>=0), identifier TEXT NOT NULL CHECK(identifier GLOB 'preserve-v1:*:*:????????????????' AND identifier NOT GLOB '*[^a-z0-9:-]*'), PRIMARY KEY(invocation_id,node_id,attempt_index,ordinal), FOREIGN KEY(invocation_id,node_id,attempt_index) REFERENCES rewrite_attempt_new(invocation_id,node_id,attempt_index) ON DELETE CASCADE);
+INSERT INTO rewrite_attempt_identifier_new SELECT invocation_id,node_id,attempt_index,ordinal,identifier FROM rewrite_attempt_identifier;
+CREATE TABLE rewrite_attempt_script_new (invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'), node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*'), attempt_index INTEGER NOT NULL CHECK(attempt_index>=0), ordinal INTEGER NOT NULL CHECK(ordinal>=0), script TEXT NOT NULL CHECK(script GLOB '[A-Z]*' AND script NOT GLOB '*[^A-Za-z_]*' AND length(script) BETWEEN 2 AND 40), PRIMARY KEY(invocation_id,node_id,attempt_index,ordinal), FOREIGN KEY(invocation_id,node_id,attempt_index) REFERENCES rewrite_attempt_new(invocation_id,node_id,attempt_index) ON DELETE CASCADE);
+INSERT INTO rewrite_attempt_script_new SELECT invocation_id,node_id,attempt_index,ordinal,script FROM rewrite_attempt_script;
+CREATE TABLE rewrite_attempt_overgrown_script_new (invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'), node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*'), attempt_index INTEGER NOT NULL CHECK(attempt_index>=0), ordinal INTEGER NOT NULL CHECK(ordinal>=0), script TEXT NOT NULL CHECK(script GLOB '[A-Z]*' AND script NOT GLOB '*[^A-Za-z_]*' AND length(script) BETWEEN 2 AND 40), PRIMARY KEY(invocation_id,node_id,attempt_index,ordinal), FOREIGN KEY(invocation_id,node_id,attempt_index) REFERENCES rewrite_attempt_new(invocation_id,node_id,attempt_index) ON DELETE CASCADE);
+INSERT INTO rewrite_attempt_overgrown_script_new SELECT invocation_id,node_id,attempt_index,ordinal,script FROM rewrite_attempt_overgrown_script;
+DROP TABLE rewrite_attempt_identifier;
+DROP TABLE rewrite_attempt_script;
+DROP TABLE rewrite_attempt_overgrown_script;
+DROP TABLE rewrite_attempt;
+ALTER TABLE rewrite_attempt_new RENAME TO rewrite_attempt;
+ALTER TABLE rewrite_attempt_identifier_new RENAME TO rewrite_attempt_identifier;
+ALTER TABLE rewrite_attempt_script_new RENAME TO rewrite_attempt_script;
+ALTER TABLE rewrite_attempt_overgrown_script_new RENAME TO rewrite_attempt_overgrown_script;
 `}

@@ -60,8 +60,6 @@ const (
 	// because it is the only rejection whose verdict depends on the surrounding
 	// DOCUMENT rather than only on the two texts — so unlike every other code
 	// here, it cannot be reproduced from a `rewrite_attempt` row alone.
-	//
-	// STUB for phase-1 verification only.
 	RejectionNotSpliceable RejectionCode = "not-spliceable"
 	RejectionLanguage      RejectionCode = "language"
 	// RejectionLanguageGrowth refuses a candidate that grew a script the ORIGINAL
@@ -194,8 +192,6 @@ type LanguageVerdict struct {
 // SpliceVerdict reports whether a candidate survives being put back where it
 // came from. Intact is false when the replaced span would become more than one
 // leaf, none at all, a different span, or a leaf in different containers.
-//
-// STUB for phase-1 verification only.
 type SpliceVerdict struct{ Intact bool }
 
 type RewriteRequest struct {
@@ -330,6 +326,16 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			// when the next candidate is measured.
 			attempt.IntroducedScripts = append([]string(nil), language.Introduced...)
 			attempt.OvergrownScripts = append([]string(nil), language.Overgrown...)
+			// Consulted unconditionally like the other three, even though it is
+			// the most expensive of the four: what a candidate BECOMES once
+			// spliced is evidence whichever refusal wins below. The anchors are
+			// in the method's name rather than its signature, because this gate
+			// holds the ORIGINAL document and the ORIGINAL span as construction
+			// state and the loop has neither.
+			splice, err := l.Gate.SpliceableIntoOriginal(candidate)
+			if err != nil {
+				return Outcome{}, fmt.Errorf("rewrite splice gate: %w", err)
+			}
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
@@ -348,6 +354,14 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 				rejection = RejectionTellsWorse
 			case candidateScored.Distance.Value > currentScored.Distance.Value-Epsilon:
 				rejection = RejectionNotImproved
+			// LAST, below not-improved. Every case above is a function of the
+			// recorded texts, so a stored `rewrite_attempt` row can be replayed
+			// and its `rejection` recomputed; this one is a function of the
+			// document and the span, and the row carries only `node_id`.
+			// Ranking it higher would stop `rejection` being reproducible from
+			// the evidence stored beside it.
+			case !splice.Intact:
+				rejection = RejectionNotSpliceable
 			}
 		}
 
