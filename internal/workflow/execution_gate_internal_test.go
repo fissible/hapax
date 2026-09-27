@@ -465,9 +465,21 @@ func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
 		},
 		{
 			// TRAILING WHITESPACE. The re-parsed leaf excludes it, so the leaf is
-			// exactly one byte shorter than the replacement text. A literal span
-			// comparison refuses this, and it breaks a committed test in
-			// `internal/assemble` that splices exactly such a replacement.
+			// exactly one byte shorter than the replacement text, and a literal
+			// span comparison refuses it.
+			//
+			// An earlier version of this comment said that refusal "breaks a
+			// committed test in `internal/assemble`". Measured: with no trimming
+			// at all, `./internal/assemble` stays green — it never consults this
+			// gate, so nothing there can break. The claim was true of an earlier
+			// design in which the check lived inside `Assemble`, and it survived
+			// the move without being re-derived.
+			//
+			// What IS true, and is the reason trailing whitespace must be
+			// tolerated: `internal/assemble`'s
+			// TestLaterSpansAreNotShiftedByEarlierReplacements splices
+			// `strings.Repeat("long ", 20)`, so a replacement ending in a space is
+			// a committed, legitimate shape.
 			name: "a rewrite with a trailing space", body: plain, target: gateFirst,
 			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
 				"sentence so the structure pass still reads it as prose here. ",
