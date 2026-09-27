@@ -54,7 +54,9 @@ const (
 	// RejectionNotSpliceable refuses a candidate that would not splice back into
 	// its document as exactly one included leaf in the same place.
 	//
-	// It is declared LAST because it is reported last, and it is reported last
+	// It is last in RejectionCodes() because it is reported last — this const
+	// block never encoded precedence, and tells and not-improved sit above
+	// language here while being reported after it. It is reported last
 	// because it is the only rejection whose verdict depends on the surrounding
 	// DOCUMENT rather than only on the two texts — so unlike every other code
 	// here, it cannot be reproduced from a `rewrite_attempt` row alone.

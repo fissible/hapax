@@ -70,7 +70,7 @@ import (
 // A candidate that would not splice back as one leaf in place is refused.
 func TestACandidateThatWouldNotSpliceIsRefused(t *testing.T) {
 	gate := passingGate()
-	gate.fallback.spliceable = false
+	gate.fallback.unspliceable = true
 	loop, _, _, _, store := loopOver(t,
 		map[string]score.Report{original: scored(0.90), better: scored(0.30)},
 		[]string{better}, gate)
@@ -164,7 +164,7 @@ func TestEveryOtherRejectionIsReportedBeforeUnspliceable(t *testing.T) {
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			gate := passingGate()
-			gate.fallback.spliceable = false
+			gate.fallback.unspliceable = true
 			c.mutate(gate)
 			loop, _, _, _, _ := loopOver(t, c.reports, []string{better}, gate)
 

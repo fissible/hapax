@@ -387,12 +387,25 @@ func TestTheExecutionGatePreservesAgainstTheFirstArgument(t *testing.T) {
 // containers — are separated across fixtures, because a mutation dropping any one
 // of them passed an earlier draft where they were not.
 //
-// NOT fixtured, and said so rather than implied: whether the check counts
-// `Leaves()` or `IncludedLeaves()`. Separating those needs a spliced result whose
-// leaf is EXCLUDED at exactly the right span with the right containers, and the
-// shapes that exclude a leaf — block quotes, headings, non-sentential list items
-// — are all refused as `not-one-segment` before the gate runs. The word
-// "included" in this check is therefore unpinned here.
+// `Leaves()` versus `IncludedLeaves()` IS separated, by the short-rewrite pair.
+// An earlier draft claimed it could not be, on the grounds that every excluding
+// shape is refused as `not-one-segment` first. That reasoning was wrong twice:
+// these tests call the gate directly, so loop reachability is irrelevant to its
+// contract, and the case below is reachable anyway.
+//
+// Measured, `"A rewritten paragraph of prose"` — five words, no terminal
+// punctuation:
+//
+//	alone                 [paragraph inc=true  exc=""                      @0+30 [document]]
+//	into a plain place    [paragraph inc=true  exc=""                      @0+30 [document]]
+//	into a list place     [paragraph inc=FALSE exc="excluded-not-sentential" @2+30 [document list list-item]]
+//
+// In the list place the leaf exists at exactly the replaced span with exactly the
+// original's containers, and is EXCLUDED. So span identity and containers both
+// pass and only inclusion refuses it — `Leaves()` would accept. It is also the
+// same BYTES getting different verdicts in different documents, which no other
+// fixture here provides, and it defeats any string heuristic because the text
+// carries no marker, no blank line and no fence.
 
 const gateFirst = "A paragraph of ordinary prose that runs on past a single sentence so the " +
 	"structure pass reads it as prose rather than as a heading; it says a thing."
@@ -433,11 +446,10 @@ func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
 			want: true,
 		},
 		{
-			// TRAILING WHITESPACE. The re-parsed leaf excludes it, so its length is
-			// one byte short of the replacement text — measured, leaf 0+148 against
-			// 149 bytes of text. A literal span comparison refuses this, and it
-			// breaks a committed test in `internal/assemble` that splices exactly
-			// such a replacement.
+			// TRAILING WHITESPACE. The re-parsed leaf excludes it, so the leaf is
+			// exactly one byte shorter than the replacement text. A literal span
+			// comparison refuses this, and it breaks a committed test in
+			// `internal/assemble` that splices exactly such a replacement.
 			name: "a rewrite with a trailing space", body: plain, target: gateFirst,
 			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
 				"sentence so the structure pass still reads it as prose here. ",
@@ -471,6 +483,21 @@ func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
 			want: false,
 		},
 		{
+			// INCLUSION, isolated. The leaf lands at exactly the replaced span
+			// with exactly the original's containers, so span and containers both
+			// pass; only `Included` refuses it. Paired with the row below, the
+			// SAME bytes get opposite verdicts, so the verdict cannot be a
+			// function of the candidate text.
+			name: "a short rewrite in a plain place", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of prose",
+			want:      true,
+		},
+		{
+			name: "the same short rewrite in a list item", body: nested, target: gateFirst,
+			candidate: "A rewritten paragraph of prose",
+			want:      false,
+		},
+		{
 			// ZERO leaves, and NON-LOCAL damage: an unterminated fence swallows the
 			// rest of the document into one code block, so the second paragraph
 			// disappears too. It also defeats a string heuristic that only looks
@@ -497,10 +524,15 @@ func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
 //
 // Parsed in isolation a list-item rewrite reports `containers=[document]`, so an
 // implementation that checked the candidate on its own would refuse every
-// legitimate nested rewrite — the same defect as hardcoding `[document]`. This
-// pins it from the other side: the SAME candidate is admissible in a nested place
-// and refused in a plain one, so the verdict cannot be a function of the
-// candidate text.
+// legitimate nested rewrite — the same defect as hardcoding `[document]`.
+//
+// An earlier version of this comment claimed the same candidate is admissible
+// nested and refused plain. Its own assertions said the opposite, and no fixture
+// anywhere in the slice had one text getting two verdicts — which is why a
+// three-clause string heuristic survived. The short-rewrite pair in the table
+// above is that fixture. What THIS test adds is the marked-up direction: a
+// candidate carrying its own list marker is refused in both places, for two
+// different reasons.
 func TestTheSpliceVerdictDependsOnTheDocumentNotTheCandidateAlone(t *testing.T) {
 	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +
 		"sentence so the structure pass still reads it as prose here."
@@ -537,5 +569,41 @@ func TestTheSpliceVerdictDependsOnTheDocumentNotTheCandidateAlone(t *testing.T) 
 	}
 	if got.Intact {
 		t.Error("a candidate nesting a list inside a list item should be refused")
+	}
+}
+
+// The gate re-parses the whole document once per candidate, so the cost is
+// O(document) per attempt and the header's 89.6 ms figure needs an anchor.
+//
+// `Admit` is linear at roughly 62 MB/s; the cost is the goldmark tree build, and
+// that is SUPERLINEAR — measured, 3.9× the bytes cost 37× the time. Targets grow
+// linearly with document size while the parse grows faster, so at the default
+// three attempts a 196 KB draft spends around two minutes purely re-parsing,
+// against 45 ms for an 8 KB one.
+//
+// This benchmark exists so that figure is exercised rather than asserted, and so
+// a `Structure` regression shows up here rather than in a user's slow run.
+func BenchmarkSpliceGateOnARealisticDraft(b *testing.B) {
+	var body []byte
+	for len(body) < 200*1024 {
+		body = append(body, []byte(gateFirst+"\n\n"+gateSecond+"\n\n")...)
+	}
+	doc, err := text.Admit(body)
+	if err != nil {
+		b.Fatalf("Admit: %v", err)
+	}
+	leaves := doc.Structure(text.DefaultStructureOptions()).IncludedLeaves()
+	if len(leaves) < 100 {
+		b.Fatalf("the fixture admits %d leaves; it must be a realistic draft", len(leaves))
+	}
+	gate := executionGate{register: "essays", doc: doc, span: leaves[0].Span}
+	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +
+		"sentence so the structure pass still reads it as prose here."
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := gate.SpliceableIntoOriginal(candidate); err != nil {
+			b.Fatalf("SpliceableIntoOriginal: %v", err)
+		}
 	}
 }

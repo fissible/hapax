@@ -187,10 +187,12 @@ type gateVerdict struct {
 	introduced []string
 	// Empty means nothing grew out of proportion to the original.
 	overgrown []string
-	// spliceable is the DEFAULT-TRUE field in this struct, so a zero gateVerdict
-	// is not silently unspliceable. passingGate and every fixture that builds a
-	// verdict literal set it explicitly for that reason.
-	spliceable bool
+	// unspliceable is inverted, so the ZERO value is permissive. Go has no
+	// default-true bool, and 24 gateVerdict literals across four files predate
+	// this field — two of them in frozen suites. A `spliceable bool` would make
+	// every one of them silently refuse, which is why `introduced` and
+	// `overgrown` are slices: nil is permissive for free.
+	unspliceable bool
 }
 
 type fakeGate struct {
@@ -228,7 +230,7 @@ func (f *fakeGate) Language(original, current, candidate string) (rewrite.Langua
 }
 
 func (f *fakeGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
-	return rewrite.SpliceVerdict{Intact: f.verdict(candidate).spliceable}, nil
+	return rewrite.SpliceVerdict{Intact: !f.verdict(candidate).unspliceable}, nil
 }
 
 func (f *fakeGate) verdict(candidate string) gateVerdict {
@@ -239,9 +241,7 @@ func (f *fakeGate) verdict(candidate string) gateVerdict {
 }
 
 func passingGate() *fakeGate {
-	return &fakeGate{fallback: gateVerdict{
-		preserved: true, comparison: -1, comparable: true, spliceable: true,
-	}}
+	return &fakeGate{fallback: gateVerdict{preserved: true, comparison: -1, comparable: true}}
 }
 
 type request struct {

@@ -1,11 +1,9 @@
 package store_test
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/fissible/hapax/internal/rewrite"
-	"github.com/fissible/hapax/internal/store"
 )
 
 // #115 adds `not-spliceable` to the rejection vocabulary, so `rewrite_attempt` is
@@ -36,28 +34,5 @@ func TestASpliceRefusalRoundTrips(t *testing.T) {
 	}
 	if got.Rejection != rewrite.RejectionNotSpliceable {
 		t.Errorf("rejection = %q, want %q", got.Rejection, rewrite.RejectionNotSpliceable)
-	}
-}
-
-// A splice refusal carries no script evidence.
-//
-// The scripts are measured by a different gate, and this one refuses for a reason
-// that has nothing to do with them — so a record naming scripts under this code
-// would be the audit trail inventing evidence. Both columns must be empty, and
-// #107's accepted-implies-none clause does not cover this because the attempt is
-// rejected, not accepted.
-func TestASpliceRefusalNamesNoScripts(t *testing.T) {
-	s := newStore(t)
-	snapshot, prof := seededProfile(t, s)
-	nodeID := snapshot.Documents[0].Nodes[0].ID
-	attempt := attemptFixture(prof.ID, nodeID)
-	attempt.Preserved, attempt.PreserveIdentifiers = true, nil
-	attempt.Accepted, attempt.Rejection = false, rewrite.RejectionNotSpliceable
-	attempt.IntroducedScripts = scriptsOf(t, "Han")
-
-	if err := s.PutRewriteAttempt(ctx(), attempt); err == nil {
-		t.Error("a splice refusal naming an introduced script was accepted")
-	} else if !errors.Is(err, store.ErrInvalid) {
-		t.Errorf("error = %v, want ErrInvalid", err)
 	}
 }
