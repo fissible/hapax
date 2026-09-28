@@ -1163,12 +1163,6 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 	return code
 }
 
-// TellsInactiveNoValidatedRule is a STUB for phase-1 verification only.
-const TellsInactiveNoValidatedRule = ""
-
-// TellsInactiveReasons is a STUB for phase-1 verification only.
-func TellsInactiveReasons() []string { return nil }
-
 func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult {
 	return RewriteResult{Path: path, PlanState: report.PlanState, RewriteState: report.State,
 		Targets: report.Targets, Improved: report.Improved, NotImproved: report.Targets - report.Improved,

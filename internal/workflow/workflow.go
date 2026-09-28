@@ -310,6 +310,8 @@ type ExecuteResult struct {
 	Targets, Improved int
 	Refusal           string
 	Outcomes          []TargetOutcome
+	// TellsInactiveReason is a STUB for phase-1 verification only.
+	TellsInactiveReason string
 }
 
 // RewriteInput is the one request the composition root may use to rewrite a
@@ -333,6 +335,8 @@ type RewriteReport struct {
 	Targeting            Targeting
 	Claim                Claim
 	CalibrationAvailable bool
+	// TellsInactiveReason is a STUB for phase-1 verification only.
+	TellsInactiveReason string
 }
 
 // RewriteOutcome keeps assembled document bytes private to workflow. Content
@@ -1024,6 +1028,8 @@ type Runner struct {
 	Bootstrap       eval.BootstrapSpec
 	Providers       ProviderFactory
 	NewInvocationID func() (string, error)
+	// Tells is a STUB for phase-1 verification only.
+	Tells *tells.RuleSet
 }
 
 type ProviderChoice struct{ Provider, Model, Endpoint string }

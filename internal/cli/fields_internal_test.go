@@ -34,6 +34,8 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/fissible/hapax/internal/tells"
 )
 
 // ---------------------------------------------------------------------------
@@ -95,6 +97,32 @@ func TestAValueThatWouldBreakTheGrammarIsRefused(t *testing.T) {
 				t.Errorf("line is %q and spans more than one line", got)
 			}
 		})
+	}
+}
+
+// Every reason #117 can disclose survives Add, which is the one renderer that
+// cannot report its own failure.
+//
+// Add DROPS a value holding a space, a tab, a newline or an `=` — silently, and
+// without leaving a dangling key — so a prose reason would vanish from the line
+// most likely to be read with nothing anywhere saying so. The real function is
+// run here rather than its character set copied into `internal/tells`, which
+// could not learn that the set had widened.
+//
+// A fixture in renderingFixtures cannot do this job: nothing below asserts that
+// a member RENDERS, only that it never renders badly, so a payload carrying an
+// undroppable value and a humanResult with no line for it both pass.
+func TestEveryTellsInactiveReasonSurvivesTheLine(t *testing.T) {
+	reasons := tells.InactiveReasons()
+	if len(reasons) == 0 {
+		t.Fatal("tells declares no inactive reasons, so this proves nothing")
+	}
+	for _, reason := range reasons {
+		line := fields{}
+		line.Add("tells_inactive_reason", reason)
+		if got, want := line.String(), "tells_inactive_reason="+reason; got != want {
+			t.Errorf("the line is %q, want %q — Add dropped the reason", got, want)
+		}
 	}
 }
 

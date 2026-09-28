@@ -130,6 +130,12 @@ func TestTheTargetOutcomeSurfaceIsExactlyThis(t *testing.T) {
 
 // Bytes is the one member that carries prose, and it is the document the caller
 // asked for rather than anything a provider said about a paragraph.
+//
+// TellsInactiveReason is admitted under the same rule rather than as an
+// exception: it holds a member of `tells.InactiveReasons()`, a closed set of
+// kebab codes, so like Refusal it can say what happened without being able to
+// say what was written. It is #117's, and it is here rather than only on the
+// report because `Execute` is where the register that determines it is resolved.
 func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
 	t.Parallel()
 	assertShape(t, reflect.TypeOf(workflow.ExecuteResult{}), [][2]string{
@@ -140,6 +146,7 @@ func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
 		{"Improved", "int"},
 		{"Refusal", "string"},
 		{"Outcomes", "[]workflow.TargetOutcome"},
+		{"TellsInactiveReason", "string"},
 	})
 }
 

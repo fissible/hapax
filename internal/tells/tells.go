@@ -408,8 +408,18 @@ func contains(a []string, x string) bool {
 }
 func eligible(c Category) bool { return c == AuthorDeviation || c == SourceContamination }
 
-// Comparable is a STUB for phase-1 verification only.
-func (r *RuleSet) Comparable() bool { return false }
+// InactiveNoValidatedRule and InactiveNoRuleInScope are STUBS for phase-1
+// verification only.
+const (
+	InactiveNoValidatedRule = "stub-no-validated-rule"
+	InactiveNoRuleInScope   = "stub-no-rule-in-scope"
+)
+
+// InactiveReasons is a STUB for phase-1 verification only.
+func InactiveReasons() []string { return nil }
+
+// InactiveReason is a STUB for phase-1 verification only.
+func (r *RuleSet) InactiveReason(o Options) string { return "" }
 
 type scopedSuppression struct {
 	Suppression
