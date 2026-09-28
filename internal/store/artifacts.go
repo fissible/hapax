@@ -1356,12 +1356,50 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 	})
 }
 
-// LoadRewriteAttempt returns one stored rewrite decision record.
-// ProducedByRewrite is a STUB for phase-1 verification only.
+// ProducedByRewrite reports which of these content hashes this store recorded
+// as an accepted candidate, so a caller can refuse to anchor on text this tool
+// published. Only accepted candidates count: a refused one was never published
+// and so cannot be anybody's input, and a current_hash is the text a run
+// started from rather than anything this tool wrote.
+//
+// The answer holds an entry for every hash asked about. A caller that is about
+// to decide a paragraph's fate has to tell "no" from "I did not look", which a
+// map of the matches alone cannot say.
+//
+// One bind parameter per hash, and the caller passes one hash per scoreable
+// paragraph in a single draft. The ceiling is SQLITE_MAX_VARIABLE_NUMBER,
+// measured here at 32766: 32766 hashes answer and 32767 fails with "too many
+// SQL variables". No chunking, because that precondition is one draft document
+// with 32,767 paragraphs above the lexical floor.
 func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[string]bool, error) {
-	return nil, nil
+	answer := make(map[string]bool, len(hashes))
+	if len(hashes) == 0 {
+		return answer, nil
+	}
+	arguments := make([]any, len(hashes))
+	for i, hash := range hashes {
+		answer[hash] = false
+		arguments[i] = hash
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT candidate_hash FROM rewrite_attempt WHERE accepted=1 AND candidate_hash IN (?"+strings.Repeat(",?", len(hashes)-1)+")", arguments...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		if err = rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		answer[hash] = true
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return answer, nil
 }
 
+// LoadRewriteAttempt returns one stored rewrite decision record.
 func (s *Store) LoadRewriteAttempt(ctx context.Context, id, nodeID string, i int) (RewriteAttempt, error) {
 	return s.loadAttempt(s.db, ctx, id, nodeID, i)
 }

@@ -199,7 +199,7 @@ func (d Document) valid() error {
 }
 
 func validRewriteResult(status Status, reason Reason, r RewriteResult) error {
-	if r.Path == "" || r.Targets < 0 || r.Improved < 0 || r.NotImproved < 0 || r.Improved+r.NotImproved != r.Targets {
+	if r.Path == "" || r.Targets < 0 || r.Improved < 0 || r.NotImproved < 0 || r.ParagraphsAlreadyRewritten < 0 || r.Improved+r.NotImproved != r.Targets {
 		return errors.New("incoherent rewrite result")
 	}
 	if r.TellsInactiveReason != "" && !contains(tells.InactiveReasons(), r.TellsInactiveReason) {
@@ -859,7 +859,9 @@ type RewriteResult struct {
 	Claim                workflow.Claim           `json:"claim"`
 	CalibrationAvailable bool                     `json:"calibration_available"`
 	TellsInactiveReason  string                   `json:"tells_inactive_reason,omitempty"`
-	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	// ParagraphsAlreadyRewritten is never omitted: a zero says none of this
+	// draft is the tool's own output, which is what separates a finished draft
+	// from a second --in-place pass. #111.
 	ParagraphsAlreadyRewritten int `json:"paragraphs_already_rewritten"`
 }
 
@@ -1172,7 +1174,8 @@ func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult
 		Targets: report.Targets, Improved: report.Improved, NotImproved: report.Targets - report.Improved,
 		Refusal: report.Refusal, Outcomes: append([]workflow.TargetOutcome(nil), report.Outcomes...),
 		Targeting: report.Targeting, Claim: report.Claim, CalibrationAvailable: report.CalibrationAvailable,
-		TellsInactiveReason: report.TellsInactiveReason}
+		TellsInactiveReason:        report.TellsInactiveReason,
+		ParagraphsAlreadyRewritten: report.ParagraphsAlreadyRewritten}
 }
 
 // fields makes absence different from the zero value of a measurement.
@@ -1241,6 +1244,7 @@ func humanResult(result any) string {
 		f.AddInt("targets", x.Targets)
 		f.AddInt("improved", x.Improved)
 		f.AddInt("not-improved", x.NotImproved)
+		f.AddInt("already-rewritten", x.ParagraphsAlreadyRewritten)
 		f.Add("selection", string(x.Targeting))
 		f.Add("claim", string(x.Claim))
 		f.AddBool("calibration_available", x.CalibrationAvailable)

@@ -183,17 +183,19 @@ type RewriteRequest = PlanRequest
 type Disposition string
 
 const (
-	DispositionTarget            Disposition = "target"
-	DispositionInRange           Disposition = "in-range"
-	DispositionUnmeasurable      Disposition = "unmeasurable"
+	DispositionTarget       Disposition = "target"
+	DispositionInRange      Disposition = "in-range"
+	DispositionUnmeasurable Disposition = "unmeasurable"
+	// DispositionAlreadyRewritten is text this tool published. #111: --in-place
+	// overwrites the draft, so re-targeting it anchors every guard on the
+	// previous run's output.
+	DispositionAlreadyRewritten  Disposition = "already-rewritten"
 	DispositionContainsExcisions Disposition = "contains-excisions"
 	DispositionNotSelected       Disposition = "not-selected"
-	// DispositionAlreadyRewritten is a STUB for phase-1 verification only.
-	DispositionAlreadyRewritten Disposition = "stub-already-rewritten"
 )
 
 func Dispositions() []Disposition {
-	return []Disposition{DispositionTarget, DispositionInRange, DispositionUnmeasurable, DispositionContainsExcisions, DispositionNotSelected}
+	return []Disposition{DispositionTarget, DispositionInRange, DispositionUnmeasurable, DispositionAlreadyRewritten, DispositionContainsExcisions, DispositionNotSelected}
 }
 
 type Targeting string
@@ -238,7 +240,11 @@ type RewritePlan struct {
 	Refusal, ProfileID, ReferenceID, ReleaseID string
 	DraftSnapshotID                            string
 	ParagraphsBelowFloor                       int
-	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	// ParagraphsAlreadyRewritten counts the segments under consideration that
+	// this tool published itself. A count rather than a flag: a second pass over
+	// an edited draft is a mixture, and this is what separates "nothing to
+	// change because your draft reads as you" from "nothing to change because
+	// every paragraph here is my own output".
 	ParagraphsAlreadyRewritten int
 	Targeting                  Targeting
 	Claim                      Claim
@@ -342,7 +348,8 @@ type RewriteReport struct {
 	Claim                Claim
 	CalibrationAvailable bool
 	TellsInactiveReason  string
-	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	// ParagraphsAlreadyRewritten is the plan's count, carried here because the
+	// composition root has no other sight of it. #111.
 	ParagraphsAlreadyRewritten int
 }
 
@@ -790,6 +797,17 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 	if len(nodes) != len(report.Segments) || len(leaves) != len(report.Segments) {
 		return RewritePlan{}, errors.New("draft score and indexed paragraphs disagree")
 	}
+	// #111. Asked once, for every paragraph the loop below can consider: a
+	// paragraph this tool published is not a target, because --in-place makes
+	// its output the next run's anchor.
+	hashes := make([]string, len(leaves))
+	for i, leaf := range leaves {
+		hashes[i] = leaf.hash
+	}
+	published, err := s.ProducedByRewrite(ctx, hashes)
+	if err != nil {
+		return RewritePlan{}, err
+	}
 	named := make(map[int]bool, len(request.Paragraphs))
 	for _, index := range request.Paragraphs {
 		if index < 0 || index >= len(report.Segments) {
@@ -803,6 +821,9 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 			switch {
 			case !named[segment.Index]:
 				disposition = DispositionNotSelected
+			case published[leaves[i].hash]:
+				disposition = DispositionAlreadyRewritten
+				base.ParagraphsAlreadyRewritten++
 			case !segment.Distance.Defined:
 				disposition = DispositionUnmeasurable
 			case leaves[i].excisions:
@@ -813,6 +834,11 @@ func (r *Runner) Plan(ctx context.Context, request PlanRequest) (RewritePlan, er
 			}
 		} else {
 			switch {
+			// Above in-range deliberately: a paragraph this tool moved into range
+			// reported as in-range tells the author its own output reads as them.
+			case published[leaves[i].hash]:
+				disposition = DispositionAlreadyRewritten
+				base.ParagraphsAlreadyRewritten++
 			case !segment.Distance.Defined:
 				disposition = DispositionUnmeasurable
 			case segment.Band.Band == eval.BandInRange:
@@ -883,7 +909,13 @@ func refusedRewritePlan(plan RewritePlan, refusal string) RewritePlan {
 	return plan
 }
 
-type draftLeaf struct{ excisions bool }
+// hash is over the paragraph's ADMITTED bytes, which is where the plan's
+// offsets point and what rewrite.Loop records a candidate against. The file's
+// own bytes are three longer on a BOM'd draft and would match nothing.
+type draftLeaf struct {
+	excisions bool
+	hash      string
+}
 
 func draftWrite(path, register string, requirements profile.Requirements) (store.SnapshotWrite, []draftLeaf, error) {
 	root := filepath.Dir(path)
@@ -923,8 +955,11 @@ func draftWrite(path, register string, requirements profile.Requirements) (store
 		return store.SnapshotWrite{}, nil, err
 	}
 	leaves := make([]draftLeaf, len(paragraphs))
+	admitted := doc.Raw()
 	for i, paragraph := range paragraphs {
+		span := paragraph.Node.Span
 		leaves[i].excisions = len(paragraph.Node.Excisions) != 0
+		leaves[i].hash = identity.HashBytes(admitted[span.Offset : span.Offset+span.Length])
 	}
 	return write, leaves, nil
 }
@@ -1516,7 +1551,8 @@ func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutc
 		PlanState: plan.State, State: executed.State, Targets: executed.Targets,
 		Improved: executed.Improved, Refusal: executed.Refusal, Outcomes: executed.Outcomes,
 		Targeting: plan.Targeting, Claim: plan.Claim, CalibrationAvailable: plan.CalibrationAvailable,
-		TellsInactiveReason: executed.TellsInactiveReason,
+		TellsInactiveReason:        executed.TellsInactiveReason,
+		ParagraphsAlreadyRewritten: plan.ParagraphsAlreadyRewritten,
 	}, executed.Bytes), nil
 }
 
