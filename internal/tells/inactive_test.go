@@ -195,10 +195,19 @@ category = "author-deviation"
 
 // Category is necessary, and every eligible category counts.
 //
-// `eligible` admits author-deviation and source-contamination only. A
-// `Category != Formatting` implementation passes a fourth category that `Check`
-// would never count, and an `== AuthorDeviation` one passes because the shipped
-// set has no source-contamination rule — so both directions are pinned.
+// `eligible` admits author-deviation and source-contamination only, and both
+// rows are needed: an `== AuthorDeviation` implementation passes on the shipped
+// set, which has no source-contamination rule, so only a built fixture catches
+// it.
+//
+// What this does NOT pin, measured by mutation: a `Category != Formatting`
+// implementation. `categories` holds exactly three values and `validateRule`
+// refuses a fourth — "unknown category %q" — so over every category a rule set
+// can hold, the two predicates are the same function. The mutant is equivalent
+// rather than surviving, and no test can kill it. An earlier draft of this
+// comment named that implementation as a risk and then claimed both directions
+// were pinned; the risk does not exist while the vocabulary is closed, and if a
+// fourth category is ever declared, THIS is the test that needs a row for it.
 func TestOnlyEligibleCategoriesActivateTheGate(t *testing.T) {
 	for _, c := range []struct {
 		category string
