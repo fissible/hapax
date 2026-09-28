@@ -859,6 +859,8 @@ type RewriteResult struct {
 	Claim                workflow.Claim           `json:"claim"`
 	CalibrationAvailable bool                     `json:"calibration_available"`
 	TellsInactiveReason  string                   `json:"tells_inactive_reason,omitempty"`
+	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	ParagraphsAlreadyRewritten int `json:"paragraphs_already_rewritten"`
 }
 
 type EvalDiscrimination struct {

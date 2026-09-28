@@ -188,6 +188,8 @@ const (
 	DispositionUnmeasurable      Disposition = "unmeasurable"
 	DispositionContainsExcisions Disposition = "contains-excisions"
 	DispositionNotSelected       Disposition = "not-selected"
+	// DispositionAlreadyRewritten is a STUB for phase-1 verification only.
+	DispositionAlreadyRewritten Disposition = "stub-already-rewritten"
 )
 
 func Dispositions() []Disposition {
@@ -236,15 +238,17 @@ type RewritePlan struct {
 	Refusal, ProfileID, ReferenceID, ReleaseID string
 	DraftSnapshotID                            string
 	ParagraphsBelowFloor                       int
-	Targeting                                  Targeting
-	Claim                                      Claim
-	CalibrationAvailable                       bool
-	Segments                                   []PlannedSegment
-	Targets                                    int
-	State                                      PlanState
-	ExemplarSelectionID                        string
-	ExemplarCertificateID                      string
-	ExemplarNodes                              []string
+	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	ParagraphsAlreadyRewritten int
+	Targeting                  Targeting
+	Claim                      Claim
+	CalibrationAvailable       bool
+	Segments                   []PlannedSegment
+	Targets                    int
+	State                      PlanState
+	ExemplarSelectionID        string
+	ExemplarCertificateID      string
+	ExemplarNodes              []string
 }
 
 const (
@@ -338,6 +342,8 @@ type RewriteReport struct {
 	Claim                Claim
 	CalibrationAvailable bool
 	TellsInactiveReason  string
+	// ParagraphsAlreadyRewritten is a STUB for phase-1 verification only.
+	ParagraphsAlreadyRewritten int
 }
 
 // RewriteOutcome keeps assembled document bytes private to workflow. Content
