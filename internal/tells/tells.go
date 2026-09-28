@@ -408,6 +408,44 @@ func contains(a []string, x string) bool {
 }
 func eligible(c Category) bool { return c == AuthorDeviation || c == SourceContamination }
 
+// Two reasons rather than one boolean: they send the reader to different places,
+// and only the second one obliges an implementation to read Options at all.
+// Codes rather than prose, because the human line drops a value holding a space.
+// #117.
+const (
+	InactiveNoValidatedRule = "no-validated-rule"
+	InactiveNoRuleInScope   = "no-rule-in-scope"
+)
+
+var inactiveReasons = []string{InactiveNoValidatedRule, InactiveNoRuleInScope}
+
+// InactiveReasons returns the closed inactive-reason vocabulary.
+func InactiveReasons() []string { return append([]string(nil), inactiveReasons...) }
+
+// InactiveReason reports why the acceptance gate cannot reject anything at these
+// options, and is empty when it can. The predicate is Check's own — derived,
+// verdict-eligible, in scope — so the disclosure cannot claim a gate the
+// comparison does not count. The absences are told apart by what the set HOLDS
+// rather than by what applies, so a validated rule that misses this register is
+// not reported as no validated rule at all. Suppressions and truncation are
+// facts about a document, not about what the set can reject.
+func (rs *RuleSet) InactiveReason(o Options) string {
+	validated := false
+	for _, rule := range rs.Rules {
+		if rule.Provenance != Derived || !eligible(rule.Category) {
+			continue
+		}
+		validated = true
+		if inScope(rule, o) {
+			return ""
+		}
+	}
+	if !validated {
+		return InactiveNoValidatedRule
+	}
+	return InactiveNoRuleInScope
+}
+
 type scopedSuppression struct {
 	Suppression
 	start, end int

@@ -202,6 +202,9 @@ func validRewriteResult(status Status, reason Reason, r RewriteResult) error {
 	if r.Path == "" || r.Targets < 0 || r.Improved < 0 || r.NotImproved < 0 || r.Improved+r.NotImproved != r.Targets {
 		return errors.New("incoherent rewrite result")
 	}
+	if r.TellsInactiveReason != "" && !contains(tells.InactiveReasons(), r.TellsInactiveReason) {
+		return errors.New("incoherent rewrite result")
+	}
 	if status == StatusRefused {
 		return nil
 	}
@@ -855,6 +858,7 @@ type RewriteResult struct {
 	Targeting            workflow.Targeting       `json:"selection"`
 	Claim                workflow.Claim           `json:"claim"`
 	CalibrationAvailable bool                     `json:"calibration_available"`
+	TellsInactiveReason  string                   `json:"tells_inactive_reason,omitempty"`
 }
 
 type EvalDiscrimination struct {
@@ -1165,7 +1169,8 @@ func rewriteResultFrom(report workflow.RewriteReport, path string) RewriteResult
 	return RewriteResult{Path: path, PlanState: report.PlanState, RewriteState: report.State,
 		Targets: report.Targets, Improved: report.Improved, NotImproved: report.Targets - report.Improved,
 		Refusal: report.Refusal, Outcomes: append([]workflow.TargetOutcome(nil), report.Outcomes...),
-		Targeting: report.Targeting, Claim: report.Claim, CalibrationAvailable: report.CalibrationAvailable}
+		Targeting: report.Targeting, Claim: report.Claim, CalibrationAvailable: report.CalibrationAvailable,
+		TellsInactiveReason: report.TellsInactiveReason}
 }
 
 // fields makes absence different from the zero value of a measurement.
@@ -1237,6 +1242,7 @@ func humanResult(result any) string {
 		f.Add("selection", string(x.Targeting))
 		f.Add("claim", string(x.Claim))
 		f.AddBool("calibration_available", x.CalibrationAvailable)
+		f.Add("tells_inactive_reason", x.TellsInactiveReason)
 		return f.String()
 	default:
 		return ""

@@ -16,7 +16,10 @@ jobs:
   test:
     name: Test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    # `go test -race ./...` measures 9m24s on ubuntu, of which internal/workflow
+    # is 7m9s: nearly every test there builds a corpus, indexes it and crafts a
+    # release. At 10 the margin was 36 seconds and one slice's fixtures spent it.
+    timeout-minutes: 20
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
