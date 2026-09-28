@@ -310,7 +310,9 @@ type ExecuteResult struct {
 	Targets, Improved int
 	Refusal           string
 	Outcomes          []TargetOutcome
-	// TellsInactiveReason is a STUB for phase-1 verification only.
+	// TellsInactiveReason discloses that the tells gate could reject nothing on
+	// this run, and is empty when it could — or when the run refused before
+	// resolving the register the answer depends on. #117.
 	TellsInactiveReason string
 }
 
@@ -335,8 +337,7 @@ type RewriteReport struct {
 	Targeting            Targeting
 	Claim                Claim
 	CalibrationAvailable bool
-	// TellsInactiveReason is a STUB for phase-1 verification only.
-	TellsInactiveReason string
+	TellsInactiveReason  string
 }
 
 // RewriteOutcome keeps assembled document bytes private to workflow. Content
@@ -1028,7 +1029,9 @@ type Runner struct {
 	Bootstrap       eval.BootstrapSpec
 	Providers       ProviderFactory
 	NewInvocationID func() (string, error)
-	// Tells is a STUB for phase-1 verification only.
+	// Tells is a seam because no shipped rule is scoped: a disclosure that
+	// dropped the run's register would be invisible against Default(). Nil is
+	// Default(). #117.
 	Tells *tells.RuleSet
 }
 
@@ -1043,6 +1046,15 @@ var (
 	ErrUnknownProvider          = errors.New("unknown provider")
 	ErrNoProviderFactory        = errors.New("provider factory is not configured")
 )
+
+// tellsRuleSet is the one rule set a run uses, so its disclosure and its gate
+// cannot describe different gates.
+func (r *Runner) tellsRuleSet() *tells.RuleSet {
+	if r.Tells != nil {
+		return r.Tells
+	}
+	return tells.Default()
+}
 
 func (r *Runner) Provider(m mode.Mode, choice ProviderChoice) (rewrite.Provider, error) {
 	switch llm.ProviderID(choice.Provider) {
@@ -1113,6 +1125,7 @@ type executionGate struct {
 	register string
 	doc      *text.Document
 	span     text.Span
+	rules    *tells.RuleSet
 }
 
 // SpliceableIntoOriginal reports whether the candidate, spliced into the
@@ -1262,7 +1275,7 @@ func (g executionGate) Tells(current, candidate string) (rewrite.TellsVerdict, e
 	if e != nil {
 		return rewrite.TellsVerdict{}, e
 	}
-	rs := tells.Default()
+	rs := g.rules
 	comparison, e := rs.Check(b, tells.Options{Register: g.register}).Comparison().Compare(rs.Check(a, tells.Options{Register: g.register}).Comparison())
 	if errors.Is(e, tells.ErrIncomparable) {
 		return rewrite.TellsVerdict{Comparison: comparison, Comparable: false}, nil
@@ -1314,6 +1327,10 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 	if err != nil {
 		return ExecuteResult{}, err
 	}
+	// Answered once, here: every result returned below carries it, and the
+	// refusals taken above have no register to answer at.
+	rules := r.tellsRuleSet()
+	result.TellsInactiveReason = rules.InactiveReason(tells.Options{Register: prof.Register})
 	fitted, err := prof.Fitted()
 	if err != nil {
 		return ExecuteResult{}, err
@@ -1426,7 +1443,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 			return result, err
 		}
 		passage := string(doc.Raw()[target.Offset : target.Offset+target.Length])
-		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register, doc, text.Span{Offset: target.Offset, Length: target.Length}}, Provider: provider, Store: s.Recorder(ctx), Options: options}
+		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register, doc, text.Span{Offset: target.Offset, Length: target.Length}, rules}, Provider: provider, Store: s.Recorder(ctx), Options: options}
 		out, err := loop.Rewrite(ctx, rewrite.Segment{Text: passage, SpanRef: target.NodeID})
 		if err != nil {
 			return ExecuteResult{}, err
@@ -1493,6 +1510,7 @@ func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutc
 		PlanState: plan.State, State: executed.State, Targets: executed.Targets,
 		Improved: executed.Improved, Refusal: executed.Refusal, Outcomes: executed.Outcomes,
 		Targeting: plan.Targeting, Claim: plan.Claim, CalibrationAvailable: plan.CalibrationAvailable,
+		TellsInactiveReason: executed.TellsInactiveReason,
 	}, executed.Bytes), nil
 }
 
