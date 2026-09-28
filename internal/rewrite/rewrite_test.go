@@ -187,6 +187,12 @@ type gateVerdict struct {
 	introduced []string
 	// Empty means nothing grew out of proportion to the original.
 	overgrown []string
+	// unspliceable is inverted, so the ZERO value is permissive. Go has no
+	// default-true bool, and 24 gateVerdict literals across four files predate
+	// this field — two of them in frozen suites. A `spliceable bool` would make
+	// every one of them silently refuse, which is why `introduced` and
+	// `overgrown` are slices: nil is permissive for free.
+	unspliceable bool
 }
 
 type fakeGate struct {
@@ -221,6 +227,10 @@ func (f *fakeGate) Language(original, current, candidate string) (rewrite.Langua
 	f.languageArgs = append(f.languageArgs, [3]string{original, current, candidate})
 	v := f.verdict(candidate)
 	return rewrite.LanguageVerdict{Introduced: v.introduced, Overgrown: v.overgrown}, nil
+}
+
+func (f *fakeGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	return rewrite.SpliceVerdict{Intact: !f.verdict(candidate).unspliceable}, nil
 }
 
 func (f *fakeGate) verdict(candidate string) gateVerdict {
@@ -1253,7 +1263,12 @@ func TestAStructurallyInvalidCandidateSkipsTheGuards(t *testing.T) {
 
 type countingGate struct {
 	*fakeGate
-	preserveCalls, tellsCalls, languageCalls int
+	preserveCalls, tellsCalls, languageCalls, spliceCalls int
+}
+
+func (c *countingGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	c.spliceCalls++
+	return c.fakeGate.SpliceableIntoOriginal(candidate)
 }
 
 func (c *countingGate) Preserve(original, candidate string) (rewrite.Preservation, error) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/rewrite"
+	"github.com/fissible/hapax/internal/text"
 )
 
 // ---------------------------------------------------------------------------
@@ -371,5 +372,311 @@ func TestTheExecutionGatePreservesAgainstTheFirstArgument(t *testing.T) {
 	if len(got.Identifiers) != 1 || got.Identifiers[0] != want {
 		t.Errorf("Identifiers = %v, want [%s] — an argument-swapped gate records an "+
 			"invention instead", got.Identifiers, want)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// #115: would the candidate splice back as one leaf in the same place?
+// ---------------------------------------------------------------------------
+//
+// The gate holds the document and the target span, so it can answer what the
+// loop cannot: what this candidate BECOMES once put back where it came from.
+//
+// Every fixture below is measured against a real two-paragraph draft.
+//
+// Span identity and containers are each INDEPENDENTLY NECESSARY, and a fixture
+// isolates each. Exactly-one-leaf is not: leaves are disjoint, so if an included
+// leaf's span equals the region exactly no second leaf can intersect it, and if
+// none equals it span identity already refuses — including the zero case. The
+// count is written for readability, not for coverage, and a mutation relaxing it
+// passes by design.
+//
+// Containers is load-bearing BECAUSE of the whitespace tolerance, which is the
+// connection I had not seen. Leading whitespace is trimmed out of the span
+// comparison, and in CommonMark leading whitespace is also a container-
+// establishing prefix: two spaces is the content indent of `- `, so the same
+// indent that the span comparison forgives is what moves a paragraph into the
+// list above it. Measured, with the original at `[document]`:
+//
+//	"  " + prose, no list above   [paragraph @152+76 [document]]
+//	"  " + prose, below a list    [paragraph @154+76 [document list list-item]]
+//
+// Same candidate, same span after trimming, and only containers separates them.
+// An earlier draft of this header claimed all three conditions were separated
+// when none of them was.
+//
+// `Leaves()` versus `IncludedLeaves()` IS separated, by the short-rewrite pair.
+// An earlier draft claimed it could not be, on the grounds that every excluding
+// shape is refused as `not-one-segment` first. That reasoning was wrong twice:
+// these tests call the gate directly, so loop reachability is irrelevant to its
+// contract, and the case below is reachable anyway.
+//
+// Measured, `"A rewritten paragraph of prose"` — five words, no terminal
+// punctuation:
+//
+//	alone                 [paragraph inc=true  exc=""                      @0+30 [document]]
+//	into a plain place    [paragraph inc=true  exc=""                      @0+30 [document]]
+//	into a list place     [paragraph inc=FALSE exc="excluded-not-sentential" @2+30 [document list list-item]]
+//
+// In the list place the leaf exists at exactly the replaced span with exactly the
+// original's containers, and is EXCLUDED. So span identity and containers both
+// pass and only inclusion refuses it — `Leaves()` would accept. It is also the
+// same BYTES getting different verdicts in different documents, which no other
+// fixture here provides, and it defeats any string heuristic because the text
+// carries no marker, no blank line and no fence.
+
+const gateFirst = "A paragraph of ordinary prose that runs on past a single sentence so the " +
+	"structure pass reads it as prose rather than as a heading; it says a thing."
+const gateSecond = "A second paragraph doing likewise, at enough length to clear the floor and " +
+	"be measured on its own terms rather than skipped."
+
+// gateFor builds the gate a target would get: the document, and the span of the
+// leaf whose raw bytes are want.
+func gateFor(t *testing.T, body, want string) executionGate {
+	t.Helper()
+	doc, err := text.Admit([]byte(body))
+	if err != nil {
+		t.Fatalf("Admit: %v", err)
+	}
+	for _, leaf := range doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		if string(doc.Raw()[leaf.Span.Offset:leaf.Span.Offset+leaf.Span.Length]) == want {
+			return executionGate{register: "essays", doc: doc, span: leaf.Span}
+		}
+	}
+	t.Fatalf("no included leaf holds the wanted text")
+	return executionGate{}
+}
+
+func TestTheExecutionGateJudgesWhetherACandidateSplicesBack(t *testing.T) {
+	plain := gateFirst + "\n\n" + gateSecond + "\n\n"
+	// A document whose first paragraph is a LIST ITEM, so a legitimate rewrite of
+	// a nested paragraph can be shown to be admissible.
+	nested := "- " + gateFirst + "\n\n" + gateSecond + "\n\n"
+
+	for _, c := range []struct {
+		name, body, target, candidate string
+		want                          bool
+	}{
+		{
+			name: "a plain rewrite in a plain place", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: true,
+		},
+		{
+			// TRAILING WHITESPACE. The re-parsed leaf excludes it, so the leaf is
+			// exactly one byte shorter than the replacement text, and a literal
+			// span comparison refuses it.
+			//
+			// An earlier version of this comment said that refusal "breaks a
+			// committed test in `internal/assemble`". Measured: with no trimming
+			// at all, `./internal/assemble` stays green — it never consults this
+			// gate, so nothing there can break. The claim was true of an earlier
+			// design in which the check lived inside `Assemble`, and it survived
+			// the move without being re-derived.
+			//
+			// What IS true, and is the reason trailing whitespace must be
+			// tolerated: `internal/assemble`'s
+			// TestLaterSpansAreNotShiftedByEarlierReplacements splices
+			// `strings.Repeat("long ", 20)`, so a replacement ending in a space is
+			// a committed, legitimate shape.
+			name: "a rewrite with a trailing space", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here. ",
+			want: true,
+		},
+		{
+			// CONTAINERS, and the case an implementation hardcoding `[document]`
+			// would refuse. The original is `[document list list-item]` and the
+			// candidate keeps it there, because the span excludes the marker.
+			name: "a plain rewrite of a list item", body: nested, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: true,
+		},
+		{
+			// CONTAINERS again, the other way: the original is top-level and the
+			// candidate puts it inside a list. One included leaf, still
+			// `role=paragraph`, so neither a leaf count nor a role check sees it.
+			name: "a rewrite that becomes a list item", body: plain, target: gateFirst,
+			candidate: "- A rewritten paragraph of ordinary prose that runs on past a single " +
+				"sentence so the structure pass still reads it as prose here.",
+			want: false,
+		},
+		{
+			// LEAF COUNT. Measured: this scores as ONE segment, because only one
+			// half clears the lexical floor, so the loop hands it here — and
+			// spliced it is two leaves, the short one unscoreable forever.
+			name: "a rewrite that splits in two", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph here.\n\nAnd a second half that runs on past " +
+				"a single sentence so the structure pass reads it as prose in its own right.",
+			want: false,
+		},
+		{
+			// INCLUSION, isolated. The leaf lands at exactly the replaced span
+			// with exactly the original's containers, so span and containers both
+			// pass; only `Included` refuses it. Paired with the row below, the
+			// SAME bytes get opposite verdicts, so the verdict cannot be a
+			// function of the candidate text.
+			name: "a short rewrite in a plain place", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of prose",
+			want:      true,
+		},
+		{
+			name: "the same short rewrite in a list item", body: nested, target: gateFirst,
+			candidate: "A rewritten paragraph of prose",
+			want:      false,
+		},
+		{
+			// The whitespace rule, pinned. Without this row an implementer may
+			// trim only the trailing end, which passes everything else — and
+			// which of the two rules they pick decides whether the containers
+			// violation below is even reachable.
+			name: "an indented rewrite with no list above it", body: plain, target: gateSecond,
+			candidate: "  A rewritten paragraph of ordinary prose that runs on past a single sentence.",
+			want:      true,
+		},
+		{
+			// CONTAINERS, isolated. Same candidate as the row above, same span
+			// after trimming, one included leaf — and the two spaces absorb it
+			// into the list item above, so `[document]` becomes
+			// `[document list list-item]`.
+			name: "an indented rewrite directly below a list", body: nested, target: gateSecond,
+			candidate: "  A rewritten paragraph of ordinary prose that runs on past a single sentence.",
+			want:      false,
+		},
+		{
+			// SPAN identity, isolated. The image half is excluded by role, so
+			// there is exactly ONE included leaf, in exactly the original's
+			// containers — and it covers 53 bytes of a 110-byte region. The image
+			// is orphaned inside the replaced span, which is the harm.
+			name: "a rewrite trailing an image-only paragraph", body: plain, target: gateFirst,
+			candidate: "A rewritten paragraph of ordinary prose that runs on.\n\n" +
+				"![a photograph of the thing](https://example.com/p.png)",
+			want: false,
+		},
+		{
+			// ZERO leaves, and NON-LOCAL damage: an unterminated fence swallows the
+			// rest of the document into one code block, so the second paragraph
+			// disappears too. It also defeats a string heuristic that only looks
+			// for a list marker or a blank line — this candidate has neither.
+			name: "a rewrite opening an unterminated fence", body: plain, target: gateFirst,
+			candidate: "```\nA rewritten paragraph of ordinary prose that runs on past a " +
+				"single sentence so the structure pass reads it as code now.",
+			want: false,
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := gateFor(t, c.body, c.target).SpliceableIntoOriginal(c.candidate)
+			if err != nil {
+				t.Fatalf("SpliceableIntoOriginal: %v", err)
+			}
+			if got.Intact != c.want {
+				t.Errorf("Intact = %v, want %v", got.Intact, c.want)
+			}
+		})
+	}
+}
+
+// The check reads the document it was built with, not the candidate alone.
+//
+// Parsed in isolation a list-item rewrite reports `containers=[document]`, so an
+// implementation that checked the candidate on its own would refuse every
+// legitimate nested rewrite — the same defect as hardcoding `[document]`.
+//
+// An earlier version of this comment claimed the same candidate is admissible
+// nested and refused plain. Its own assertions said the opposite, and no fixture
+// anywhere in the slice had one text getting two verdicts — which is why a
+// three-clause string heuristic survived. The short-rewrite pair in the table
+// above is that fixture. What THIS test adds is the marked-up direction: a
+// candidate carrying its own list marker is refused in both places, for two
+// different reasons.
+func TestTheSpliceVerdictDependsOnTheDocumentNotTheCandidateAlone(t *testing.T) {
+	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +
+		"sentence so the structure pass still reads it as prose here."
+	const listed = "- " + candidate
+
+	plain := gateFirst + "\n\n" + gateSecond + "\n\n"
+	nested := "- " + gateFirst + "\n\n" + gateSecond + "\n\n"
+
+	// The bare candidate: admissible in both, because the span excludes any marker.
+	for _, c := range []struct{ name, body string }{{"plain", plain}, {"nested", nested}} {
+		got, err := gateFor(t, c.body, gateFirst).SpliceableIntoOriginal(candidate)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		if !got.Intact {
+			t.Errorf("%s: a bare candidate should splice cleanly", c.name)
+		}
+	}
+
+	// The marked-up candidate: refused in a plain place, because it ADDS a list.
+	got, err := gateFor(t, plain, gateFirst).SpliceableIntoOriginal(listed)
+	if err != nil {
+		t.Fatalf("plain: %v", err)
+	}
+	if got.Intact {
+		t.Error("a candidate adding a list marker to a top-level paragraph should be refused")
+	}
+
+	// And in a nested place it is refused too, because it adds a SECOND list.
+	// Same text, and the verdict turns on the document both times.
+	got, err = gateFor(t, nested, gateFirst).SpliceableIntoOriginal(listed)
+	if err != nil {
+		t.Fatalf("nested: %v", err)
+	}
+	if got.Intact {
+		t.Error("a candidate nesting a list inside a list item should be refused")
+	}
+}
+
+// The gate re-parses the document per candidate, so the cost is O(document) per
+// attempt and the figures in this file need an anchor rather than a citation.
+//
+// It measures MORE than one parse: a correct gate structures the input to find
+// the original leaf, `assemble.Assemble` structures it again to validate the
+// span, and then the spliced output is admitted and structured. Three passes, so
+// this reports well above the 89.6 ms that one `Admit`+`Structure` costs at this
+// size. Two of the three are removable — the original leaf and the input
+// structure are invariant across a target's attempts, and `executionGate` is
+// constructed per target — but that is an implementation choice, not a contract.
+//
+// The fixture is also the CHEAPEST possible document of its size: one paragraph
+// pair repeated, no headings, lists or fences. Real prose costs far more per
+// byte — measured, 19.7 ms for 72 KB of PROJECT.md against 3.5 ms for 50 KB of
+// this shape — so the number here understates the worst case while overshooting
+// the single-parse figure.
+//
+// `Admit` is linear at roughly 62 MB/s; the cost is the goldmark tree build, and
+// that is SUPERLINEAR — measured, 3.9× the bytes cost 37× the time. Targets grow
+// linearly with document size while the parse grows faster, so at the default
+// three attempts a 196 KB draft spends around two minutes purely re-parsing,
+// against 45 ms for an 8 KB one.
+//
+// This benchmark exists so that figure is exercised rather than asserted, and so
+// a `Structure` regression shows up here rather than in a user's slow run.
+func BenchmarkSpliceGateOnARealisticDraft(b *testing.B) {
+	var body []byte
+	for len(body) < 200*1024 {
+		body = append(body, []byte(gateFirst+"\n\n"+gateSecond+"\n\n")...)
+	}
+	doc, err := text.Admit(body)
+	if err != nil {
+		b.Fatalf("Admit: %v", err)
+	}
+	leaves := doc.Structure(text.DefaultStructureOptions()).IncludedLeaves()
+	if len(leaves) < 100 {
+		b.Fatalf("the fixture admits %d leaves; it must be large enough for the parse "+
+			"to dominate", len(leaves))
+	}
+	gate := executionGate{register: "essays", doc: doc, span: leaves[0].Span}
+	const candidate = "A rewritten paragraph of ordinary prose that runs on past a single " +
+		"sentence so the structure pass still reads it as prose here."
+
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		if _, err := gate.SpliceableIntoOriginal(candidate); err != nil {
+			b.Fatalf("SpliceableIntoOriginal: %v", err)
+		}
 	}
 }

@@ -10,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
+	"unicode"
 
 	"github.com/fissible/hapax/internal/assemble"
 	"github.com/fissible/hapax/internal/corpus"
@@ -1099,7 +1101,126 @@ func (s executionSelector) Exemplars(n int) ([]string, error) {
 	return append([]string(nil), s.texts...), nil
 }
 
-type executionGate struct{ register string }
+// executionGate is constructed per target, so it can hold the document and the
+// target span the splice check needs. #115.
+type executionGate struct {
+	register string
+	doc      *text.Document
+	span     text.Span
+}
+
+// SpliceableIntoOriginal reports whether the candidate, spliced into the
+// ORIGINAL document at the ORIGINAL span, is still exactly one INCLUDED leaf, at
+// exactly that span, in exactly the containers of the leaf it replaced. The
+// anchors are in the name because the gate holds them as construction state.
+//
+// It splices through `assemble.Assemble` rather than concatenating bytes here,
+// so the verdict covers the real splice — including Assemble's own refusals,
+// whose bare-error path is half of what #115 reports. The candidate is then
+// re-admitted and re-structured, which is what no caller did before: the loop
+// scores each candidate in isolation, so a candidate that reads as prose on its
+// own can still move its paragraph into a list or split it in two.
+//
+// Three properties, two of them independently necessary:
+//
+//   - SPAN identity. A candidate trailing an image-only paragraph leaves one
+//     included leaf covering 53 bytes of a 110-byte region, orphaning the image
+//     inside the replaced span.
+//   - CONTAINERS. A candidate carrying a `- ` marker is still one included
+//     `role=paragraph` leaf at the same span, in `[document list list-item]`
+//     where the original was `[document]`.
+//   - The leaf COUNT, which is redundant: leaves are disjoint, so nothing else
+//     can intersect a region one leaf covers exactly. Kept for readability.
+//
+// Leading AND trailing whitespace are trimmed out of the span comparison,
+// because the re-parsed leaf excludes both — a literal comparison refuses a
+// replacement ending in a space — which `internal/assemble`'s
+// TestLaterSpansAreNotShiftedByEarlierReplacements splices, so the shape is
+// already committed as legitimate. Trimming the leading end is what makes CONTAINERS load-bearing: in
+// CommonMark two leading spaces are also the content indent of `- `, so the same
+// indent the span comparison forgives is what absorbs a paragraph into the list
+// above it. Measured, with the original at `[document]`: `"  "` + prose scores
+// `@152+76 [document]` with no list above and `@154+76
+// [document list list-item]` below one.
+func (g executionGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	if g.doc == nil {
+		return rewrite.SpliceVerdict{}, errors.New("splice gate has no document")
+	}
+	replaced := g.includedLeafAt(g.span)
+	if replaced == nil {
+		return rewrite.SpliceVerdict{}, fmt.Errorf("splice gate span %d+%d is not an included leaf", g.span.Offset, g.span.Length)
+	}
+	spliced, err := assemble.Assemble(g.doc, []assemble.Replacement{{Span: g.span, Text: candidate}})
+	if err != nil {
+		// An empty or invalid-UTF-8 candidate is a property of the candidate, so
+		// it is refused rather than failing the run. Anything else is the gate's
+		// own construction being wrong.
+		if errors.Is(err, assemble.ErrInvalidText) {
+			return rewrite.SpliceVerdict{}, nil
+		}
+		return rewrite.SpliceVerdict{}, err
+	}
+	after, err := text.Admit(spliced)
+	if err != nil {
+		return rewrite.SpliceVerdict{}, err
+	}
+
+	want := text.Span{Offset: g.span.Offset + leadingSpace(candidate), Length: len(strings.TrimSpace(candidate))}
+	var found *text.Node
+	intersecting := 0
+	for _, leaf := range after.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		if leaf.Span.Offset < want.Offset+want.Length && want.Offset < leaf.Span.Offset+leaf.Span.Length {
+			intersecting++
+		}
+		if leaf.Span == want {
+			found = leaf
+		}
+	}
+	if intersecting != 1 || found == nil {
+		return rewrite.SpliceVerdict{}, nil
+	}
+	return rewrite.SpliceVerdict{Intact: sameContainers(replaced.Containers, found.Containers)}, nil
+}
+
+// includedLeafAt is the input-side half of the splice check, and finding the
+// replaced leaf is the reason the input is structured at all.
+//
+// NOT hoisted, deliberately. It is invariant across a target's attempts and
+// executionGate is constructed per target, so it could be resolved once — but
+// the method needs a VALUE receiver (the frozen tests call it on the unaddressable
+// result of a helper), so a cache cannot live in a field, and the gate is copied
+// on every call. Measured on the 200 KB benchmark fixture: three parses cost
+// 149 ms/op, and splicing by hand instead of through assemble.Assemble takes it
+// to 104 ms/op. That 30% is not taken, because routing through Assemble is what
+// makes the verdict cover Assemble's OWN refusals — and a candidate that passes
+// this gate and then fails the final assembly is the bare-error path #115 is
+// about.
+func (g executionGate) includedLeafAt(span text.Span) *text.Node {
+	for _, leaf := range g.doc.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		if leaf.Span == span {
+			return leaf
+		}
+	}
+	return nil
+}
+
+func sameContainers(a, b []text.ContainerKind) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// leadingSpace counts the bytes of leading whitespace the re-parsed leaf will
+// not cover.
+func leadingSpace(s string) int {
+	return len(s) - len(strings.TrimLeftFunc(s, unicode.IsSpace))
+}
 
 // Preserve compares the candidate against the ORIGINAL paragraph. preserve.Check
 // is not transitive — its entity watch set is built from both texts — so
@@ -1299,7 +1420,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 			return result, err
 		}
 		passage := string(doc.Raw()[target.Offset : target.Offset+target.Length])
-		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register}, Provider: provider, Store: s.Recorder(ctx), Options: options}
+		loop := rewrite.Loop{Scorer: scorer, Selector: executionSelector{texts}, Gate: executionGate{prof.Register, doc, text.Span{Offset: target.Offset, Length: target.Length}}, Provider: provider, Store: s.Recorder(ctx), Options: options}
 		out, err := loop.Rewrite(ctx, rewrite.Segment{Text: passage, SpanRef: target.NodeID})
 		if err != nil {
 			return ExecuteResult{}, err

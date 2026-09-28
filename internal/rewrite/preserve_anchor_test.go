@@ -269,3 +269,7 @@ func (realPreserveGate) Tells(current, candidate string) (rewrite.TellsVerdict, 
 func (realPreserveGate) Language(original, current, candidate string) (rewrite.LanguageVerdict, error) {
 	return rewrite.LanguageVerdict{}, nil
 }
+
+func (realPreserveGate) SpliceableIntoOriginal(candidate string) (rewrite.SpliceVerdict, error) {
+	return rewrite.SpliceVerdict{Intact: true}, nil
+}
