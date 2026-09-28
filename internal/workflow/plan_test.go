@@ -363,6 +363,15 @@ func TestTheDispositionVocabularyIsExactlyThis(t *testing.T) {
 		workflow.DispositionTarget,
 		workflow.DispositionInRange,
 		workflow.DispositionUnmeasurable,
+		// #111: a paragraph whose text this tool previously published, refused so
+		// a second --in-place run cannot anchor on its own output.
+		//
+		// Position here is DECLARATION order and says nothing about precedence —
+		// this list never has. `target` is first and is last in both switches;
+		// `in-range` precedes `unmeasurable` here and follows it in the automatic
+		// switch; `not-selected` is last here and first in the explicit one. The
+		// precedence is pinned by the tests in already_rewritten_test.go.
+		workflow.DispositionAlreadyRewritten,
 		workflow.DispositionContainsExcisions,
 		// #81: under explicit selection, a paragraph the user did not name.
 		// Selection is decided first, so this is the whole reason such a

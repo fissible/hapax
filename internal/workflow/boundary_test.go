@@ -222,6 +222,11 @@ func TestTheRewritePlanSurfaceIsExactlyThis(t *testing.T) {
 		{"ReleaseID", "string"},
 		{"DraftSnapshotID", "string"},
 		{"ParagraphsBelowFloor", "int"},
+		// #111. A count, not a flag, because it has to distinguish "nothing to
+		// change because your draft reads as you" from "nothing to change because
+		// every paragraph here is my own output" — and a run can be a mixture.
+		// It carries no prose: the check behind it is a content-hash lookup.
+		{"ParagraphsAlreadyRewritten", "int"},
 		// #81. Targeting says who chose the paragraphs and Claim says which
 		// question the run answered; they are separate because an explicit
 		// selection on a calibrated store answers the distance question while a
