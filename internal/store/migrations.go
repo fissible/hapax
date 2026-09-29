@@ -155,4 +155,20 @@ ALTER TABLE rewrite_attempt_new RENAME TO rewrite_attempt;
 ALTER TABLE rewrite_attempt_identifier_new RENAME TO rewrite_attempt_identifier;
 ALTER TABLE rewrite_attempt_script_new RENAME TO rewrite_attempt_script;
 ALTER TABLE rewrite_attempt_overgrown_script_new RENAME TO rewrite_attempt_overgrown_script;
+`, `
+-- #109. A document holding a paragraph this tool published is not corpus
+-- material, which puts rejected-tool-output in the admission vocabulary — and
+-- SQLite cannot add to a CHECK in place, so document is rebuilt for the second
+-- time.
+--
+-- Rebuilt with foreign keys OFF, the way migration 6 rebuilt it, rather than by
+-- retargeting children the way the rewrite_attempt migrations do. node
+-- references document ON DELETE CASCADE, and node's own children reference
+-- node, so retargeting would pull the whole tree into this statement for one
+-- widened CHECK. applyDocumentAdmissionMigration scopes the toggle and runs
+-- PRAGMA foreign_key_check before committing.
+CREATE TABLE document_new (document_id TEXT NOT NULL PRIMARY KEY CHECK(length(document_id)=64 AND document_id NOT GLOB '*[^0-9a-f]*'), snapshot_id TEXT NOT NULL CHECK(length(snapshot_id)=64 AND snapshot_id NOT GLOB '*[^0-9a-f]*') REFERENCES snapshot(id) ON DELETE CASCADE, path TEXT NOT NULL CHECK(path <> '' AND path NOT GLOB '/*' AND path NOT GLOB '*\*' AND path NOT GLOB '../*' AND path <> '..' AND path NOT GLOB '*//*'), content_hash TEXT NOT NULL CHECK(length(content_hash)=64 AND content_hash NOT GLOB '*[^0-9a-f]*'), register TEXT NOT NULL CHECK(register GLOB '[a-z0-9]*' AND register NOT GLOB '*[^a-z0-9-]*' AND length(register)<=32), split TEXT NOT NULL CHECK(split IN ('train','calibrate','test','draft','')), admission TEXT NOT NULL CHECK(admission IN ('eligible','rejected-too-short','rejected-not-utf8','rejected-duplicate','rejected-tool-output')), language TEXT NOT NULL DEFAULT 'not-performed' CHECK(language IN ('not-performed','passed','failed','skipped-by-policy')), unavailable_at TEXT CHECK(unavailable_at IS NULL OR (strftime('%Y-%m-%dT%H:%M:%SZ',unavailable_at) IS NOT NULL AND strftime('%Y-%m-%dT%H:%M:%SZ',unavailable_at)=unavailable_at)));
+INSERT INTO document_new SELECT document_id,snapshot_id,path,content_hash,register,split,admission,language,unavailable_at FROM document;
+DROP TABLE document;
+ALTER TABLE document_new RENAME TO document;
 `}

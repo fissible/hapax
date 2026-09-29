@@ -452,6 +452,18 @@ func (s *Store) applyMigrations(ctx context.Context, version int) error {
 		}
 		version = 7
 	}
+	if version < 11 && len(migrations) > 11 {
+		if err := s.applyMigrationBatch(ctx, version, migrations[version:11]); err != nil {
+			return err
+		}
+		version = 11
+	}
+	if version == 11 && len(migrations) > 11 {
+		if err := s.applyDocumentAdmissionMigration(ctx, 11); err != nil {
+			return err
+		}
+		version = 12
+	}
 	return s.applyMigrationBatch(ctx, version, migrations[version:])
 }
 
@@ -474,6 +486,14 @@ func (s *Store) applyNodeContainersMigration(ctx context.Context, version int) e
 // SQLite cannot relax a CHECK in place, and with foreign keys disabled because
 // node and profile reference it.
 func (s *Store) applyDocumentSplitMigration(ctx context.Context, version int) error {
+	return s.applyTableRebuildMigration(ctx, version)
+}
+
+// applyDocumentAdmissionMigration rebuilds document so a screened-out document
+// can record the admission that says why. Same toggle as the split rebuild and
+// for the same reason: SQLite cannot widen a CHECK in place, and node cascades
+// off document, so dropping it with foreign keys on would empty node.
+func (s *Store) applyDocumentAdmissionMigration(ctx context.Context, version int) error {
 	return s.applyTableRebuildMigration(ctx, version)
 }
 
@@ -1002,7 +1022,7 @@ func validSplit(x corpus.Split) bool {
 	return x == corpus.Train || x == corpus.Calibrate || x == corpus.Test || x == corpus.Draft
 }
 func validAdmission(x corpus.Admission) bool {
-	return x == corpus.Eligible || x == corpus.RejectedTooShort || x == corpus.RejectedNotUTF8 || x == corpus.RejectedDuplicate
+	return known(x, corpus.Admissions())
 }
 func validLanguage(x corpus.CheckState) bool {
 	return known(x, corpus.CheckStates())

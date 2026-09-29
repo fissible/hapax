@@ -31,7 +31,7 @@ func CheckStates() []CheckState {
 
 // Admissions returns the closed admission vocabulary.
 func Admissions() []Admission {
-	return []Admission{Eligible, RejectedTooShort, RejectedNotUTF8, RejectedDuplicate}
+	return []Admission{Eligible, RejectedTooShort, RejectedNotUTF8, RejectedDuplicate, RejectedToolOutput}
 }
 
 // OverlapAlgorithm identifies the exact-hash overlap screen and its version.
@@ -73,6 +73,10 @@ const (
 	RejectedTooShort  Admission = "rejected-too-short"
 	RejectedNotUTF8   Admission = "rejected-not-utf8"
 	RejectedDuplicate Admission = "rejected-duplicate"
+	// RejectedToolOutput holds a paragraph this tool published. Not corpus
+	// material: indexing it would make this tool's own prose the author's
+	// measured style on the next run.
+	RejectedToolOutput Admission = "rejected-tool-output"
 )
 
 // Split is a stable, content-derived dataset partition.
@@ -97,7 +101,17 @@ type Policy struct {
 	MinLexicalTokens int
 	SplitSeed        string
 	Splits           SplitWeights
+	// PublishedParagraphs are the hashes of paragraphs this tool published.
+	// NIL means no screen: the check stays not-performed, nothing new is
+	// rejected, and no document is parsed for it. Non-nil and EMPTY is still a
+	// screen — the state of every first index, where nothing has been published
+	// yet — and reports that it ran.
+	PublishedParagraphs map[string]bool
 }
+
+// ToolOutputCheckVersion identifies the tool-output screen and its version. It
+// is an input to the snapshot identity, so changing it re-indexes every corpus.
+const ToolOutputCheckVersion = "tool-output-exact-hash-v1"
 
 // DefaultPolicy returns the v1 corpus admission policy for register.
 func DefaultPolicy(register string) Policy {
@@ -124,7 +138,11 @@ type Snapshot struct {
 	Policy                                                                    Policy
 	Documents                                                                 []Document
 	Contamination, Language, Structure, GitProvenance, NearDuplicateDetection CheckStatus
-	overlaps                                                                  map[string]OverlapReport
+	// ToolOutput records the screen for paragraphs this tool published. Unlike
+	// its five siblings it is implemented, so not-performed here means no screen
+	// was supplied rather than no screen exists.
+	ToolOutput CheckStatus
+	overlaps   map[string]OverlapReport
 }
 
 // SharedDocument identifies an eligible document that appears in both sides
@@ -197,14 +215,20 @@ func Walk(root string, p Policy) (*Snapshot, error) {
 	})
 
 	documents := make([]Document, 0, len(paths))
+	// Carried beside the documents rather than on them: the verdict is decided
+	// while the admitted bytes are still in scope, but it may only be APPLIED
+	// after dedupe and the length gate have had their say.
+	holdsPublished := make([]bool, 0, len(paths))
 	for _, path := range paths {
-		doc, err := readDocument(root, path, p)
+		doc, published, err := readDocument(root, path, p)
 		if err != nil {
 			return nil, err
 		}
 		documents = append(documents, doc)
+		holdsPublished = append(holdsPublished, published)
 	}
 
+	screened := 0
 	seen := make(map[string]string, len(documents))
 	for i := range documents {
 		doc := &documents[i]
@@ -221,6 +245,12 @@ func Walk(root string, p Policy) (*Snapshot, error) {
 			doc.Admission = RejectedTooShort
 			continue
 		}
+		// Last, so an earlier rejection keeps the evidence membership() hashes.
+		if holdsPublished[i] {
+			doc.Admission = RejectedToolOutput
+			screened++
+			continue
+		}
 		doc.Admission = Eligible
 		doc.Split = splitFor(doc.ContentHash, p)
 	}
@@ -233,6 +263,7 @@ func Walk(root string, p Policy) (*Snapshot, error) {
 		Structure:              notPerformed,
 		GitProvenance:          notPerformed,
 		NearDuplicateDetection: notPerformed,
+		ToolOutput:             toolOutputStatus(p, screened),
 	}
 	s.ID = identity.HashInputs(s.IdentityInputs())
 	return s, nil
@@ -257,19 +288,23 @@ func validatePolicy(p Policy) error {
 	return nil
 }
 
-func readDocument(root, path string, p Policy) (Document, error) {
+// readDocument reads one file and reports whether any of its paragraphs is one
+// this tool published. The second value is false whenever no screen was
+// supplied, and for a file that could not be admitted at all — such a file has
+// no paragraphs to screen.
+func readDocument(root, path string, p Policy) (Document, bool, error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return Document{}, fmt.Errorf("open corpus file %q: %w", path, err)
+		return Document{}, false, fmt.Errorf("open corpus file %q: %w", path, err)
 	}
 	defer file.Close()
 	info, err := file.Stat()
 	if err != nil {
-		return Document{}, fmt.Errorf("stat open corpus file %q: %w", path, err)
+		return Document{}, false, fmt.Errorf("stat open corpus file %q: %w", path, err)
 	}
 	raw, err := io.ReadAll(file)
 	if err != nil {
-		return Document{}, fmt.Errorf("read corpus file %q: %w", path, err)
+		return Document{}, false, fmt.Errorf("read corpus file %q: %w", path, err)
 	}
 
 	doc := Document{
@@ -290,9 +325,9 @@ func readDocument(root, path string, p Policy) (Document, error) {
 			doc.Admission = RejectedNotUTF8
 			doc.RejectionOffset = admissionErr.Offset
 			doc.RejectionDetail = admissionErr.Error()
-			return doc, nil
+			return doc, false, nil
 		}
-		return Document{}, fmt.Errorf("admit corpus file %q: %w", path, err)
+		return Document{}, false, fmt.Errorf("admit corpus file %q: %w", path, err)
 	}
 	analysis := admitted.Raw()
 	doc.ContentHash = identity.HashBytes(analysis)
@@ -304,7 +339,43 @@ func readDocument(root, path string, p Policy) (Document, error) {
 			doc.LexicalTokens++
 		}
 	}
-	return doc, nil
+	return doc, holdsPublishedParagraph(admitted, p.PublishedParagraphs), nil
+}
+
+// holdsPublishedParagraph reports whether any paragraph of admitted is one the
+// store recorded as published.
+//
+// The hash is over the ADMITTED bytes, the same span rewrite.Loop records a
+// candidate against — a file whose only difference from a rewrite is a byte
+// order mark would otherwise pass. Every included leaf is screened, with no
+// length floor: the store's hashes come from ParagraphLeaves under the fitted
+// MinParagraphLexicalTokens, which this package cannot see, and Policy's own
+// floor counts a whole document rather than a paragraph.
+func holdsPublishedParagraph(admitted *text.Document, publishedParagraphs map[string]bool) bool {
+	if publishedParagraphs == nil {
+		return false
+	}
+	raw := admitted.Raw()
+	for _, leaf := range admitted.Structure(text.DefaultStructureOptions()).IncludedLeaves() {
+		if publishedParagraphs[identity.HashBytes(raw[leaf.Span.Offset:leaf.Span.Offset+leaf.Span.Length])] {
+			return true
+		}
+	}
+	return false
+}
+
+// toolOutputStatus reports the screen. A nil set is no screen at all, which is
+// not the same claim as a screen that found nothing — and the difference is the
+// whole point of the field: `not-performed` is what this said before the screen
+// existed.
+func toolOutputStatus(p Policy, screened int) CheckStatus {
+	if p.PublishedParagraphs == nil {
+		return CheckStatus{State: CheckNotPerformed, Reason: "no published-paragraph set was supplied"}
+	}
+	if screened == 0 {
+		return CheckStatus{State: CheckPassed, Reason: "no document holds a paragraph this tool published", Version: ToolOutputCheckVersion}
+	}
+	return CheckStatus{State: CheckFailed, Reason: fmt.Sprintf("%d document(s) hold a paragraph this tool published", screened), Version: ToolOutputCheckVersion}
 }
 
 func slashPath(root, path string) string {
@@ -355,19 +426,27 @@ func (s *Snapshot) RequiresChecksBeforeUse() bool {
 
 // IdentityInputs returns the complete, reviewable inputs to the snapshot ID.
 func (s *Snapshot) IdentityInputs() map[string]string {
+	// Always present, empty when no screen ran: a screened walk and an
+	// unscreened one admitting the same documents are still different corpora,
+	// and an enumeration whose members come and go is not reviewable.
+	toolOutputCheckVersion := ""
+	if s.Policy.PublishedParagraphs != nil {
+		toolOutputCheckVersion = ToolOutputCheckVersion
+	}
 	return map[string]string{
-		"admission-schema-version": admissionSchemaVersion,
-		"dedupe-algorithm-version": dedupeAlgorithmVersion,
-		"extensions":               ".md,.txt",
-		"hidden-file-policy":       "skip-dot-prefixed-files-and-directories-v1",
-		"membership":               membership(s.Documents),
-		"min-lexical-tokens":       strconv.Itoa(s.Policy.MinLexicalTokens),
-		"register":                 s.Policy.Register,
-		"role":                     string(s.Policy.Role),
-		"split-algorithm-version":  splitAlgorithmVersion,
-		"split-seed":               s.Policy.SplitSeed,
-		"split-weights":            fmt.Sprintf("%d,%d,%d", s.Policy.Splits.Train, s.Policy.Splits.Calibrate, s.Policy.Splits.Test),
-		"text-contract-version":    text.ContractVersion,
+		"admission-schema-version":  admissionSchemaVersion,
+		"dedupe-algorithm-version":  dedupeAlgorithmVersion,
+		"extensions":                ".md,.txt",
+		"hidden-file-policy":        "skip-dot-prefixed-files-and-directories-v1",
+		"membership":                membership(s.Documents),
+		"min-lexical-tokens":        strconv.Itoa(s.Policy.MinLexicalTokens),
+		"register":                  s.Policy.Register,
+		"role":                      string(s.Policy.Role),
+		"split-algorithm-version":   splitAlgorithmVersion,
+		"split-seed":                s.Policy.SplitSeed,
+		"split-weights":             fmt.Sprintf("%d,%d,%d", s.Policy.Splits.Train, s.Policy.Splits.Calibrate, s.Policy.Splits.Test),
+		"text-contract-version":     text.ContractVersion,
+		"tool-output-check-version": toolOutputCheckVersion,
 	}
 }
 

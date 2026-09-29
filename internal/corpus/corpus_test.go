@@ -103,6 +103,11 @@ func TestUnavailableChecksAreTypedNotBlank(t *testing.T) {
 		"language":      s.Language,
 		"structure":     s.Structure,
 		"git date":      s.GitProvenance,
+		// #109: unscreened, this one is not-performed like the rest, and it
+		// carries the same obligation — a blank reason "would read as clean to
+		// any caller that did not know better", which is precisely the caller
+		// this check exists to stop.
+		"tool output": s.ToolOutput,
 	} {
 		if got.State != corpus.CheckNotPerformed {
 			t.Errorf("snapshot %s check: State = %q, want %q", name, got.State, corpus.CheckNotPerformed)
@@ -576,6 +581,27 @@ func TestSnapshotIdentityInputsAreEnumerated(t *testing.T) {
 		"split-seed",
 		"split-weights",
 		"text-contract-version",
+		// #109. A new algorithm whose version can change which documents are
+		// admitted, so it belongs here for the reason the other four
+		// `*-version` keys do: change the screen, re-index an unchanged corpus,
+		// and without this the ID is identical and `index` silently reuses a
+		// profile fitted under the old screen.
+		//
+		// Always present, EMPTY when no screen was supplied, rather than a key
+		// that appears and disappears — an enumeration whose members vary is not
+		// the reviewable artifact this test exists to be.
+		//
+		// Last, because `keys` is sorted and "text-contract-version" <
+		// "tool-output-check-version" at index 1. An earlier draft put it beside
+		// the split keys, which left this test red after a CORRECT
+		// implementation, with a two-slice diff as the only clue.
+		//
+		// What it costs, stated rather than waved at: every existing snapshot ID
+		// changes, so every profile ID and `profile_head` changes with it, and
+		// `eval_result.profile_id` is ON DELETE CASCADE — so a shipped
+		// calibration is lost when the old profile is pruned. That is the price
+		// every other `*-version` key in this map already charges.
+		"tool-output-check-version",
 	}
 	var keys []string
 	for k := range got {

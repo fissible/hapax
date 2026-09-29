@@ -289,6 +289,9 @@ func validIndexResult(status Status, result IndexResult) error {
 	if (status == StatusAdverse) != (result.Adversity != "") {
 		return errors.New("incoherent index result adversity")
 	}
+	if result.ToolOutputDocuments < 0 {
+		return errors.New("incoherent index result count")
+	}
 	switch result.Mode {
 	case workflow.IndexSnapshotOnly:
 		if result.Adversity != workflow.AdversityCorpusTooSmall || result.ProfileID != nil || result.ReferenceID != nil {
@@ -767,11 +770,14 @@ type IndexResult struct {
 	Nodes             int                `json:"nodes"`
 	CalibrateSegments int                `json:"calibrate_segments"`
 	TrainParagraphs   int                `json:"train_paragraphs"`
-	ProfileID         *string            `json:"profile_id"`
-	ReferenceID       *string            `json:"reference_id"`
-	NotReadyReason    string             `json:"profile_not_ready_reason"`
-	Checks            []workflow.Check   `json:"checks"`
-	Pruned            workflow.Pruned    `json:"pruned"`
+	// ToolOutputDocuments carries unconditionally, beside the five other
+	// counts, so a consumer can tell zero from absent without parsing a line.
+	ToolOutputDocuments int              `json:"tool_output_documents"`
+	ProfileID           *string          `json:"profile_id"`
+	ReferenceID         *string          `json:"reference_id"`
+	NotReadyReason      string           `json:"profile_not_ready_reason"`
+	Checks              []workflow.Check `json:"checks"`
+	Pruned              workflow.Pruned  `json:"pruned"`
 }
 type ProfileResult struct {
 	Store       string             `json:"store"`
@@ -937,7 +943,7 @@ func ptr(s string) *string {
 	return &s
 }
 func indexResultFrom(r workflow.IndexResult) IndexResult {
-	return IndexResult{Store: r.StorePath, SnapshotID: r.SnapshotID, Mode: r.Mode, Adversity: r.Adversity, Documents: r.Documents, Eligible: r.Eligible, Nodes: r.Nodes, CalibrateSegments: r.CalibrateSegments, TrainParagraphs: r.TrainParagraphs, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), NotReadyReason: r.NotReadyReason, Checks: r.Checks, Pruned: r.Pruned}
+	return IndexResult{Store: r.StorePath, SnapshotID: r.SnapshotID, Mode: r.Mode, Adversity: r.Adversity, Documents: r.Documents, Eligible: r.Eligible, Nodes: r.Nodes, CalibrateSegments: r.CalibrateSegments, TrainParagraphs: r.TrainParagraphs, ToolOutputDocuments: r.ToolOutputDocuments, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), NotReadyReason: r.NotReadyReason, Checks: r.Checks, Pruned: r.Pruned}
 }
 func profileResultFrom(r workflow.ProfileResult) ProfileResult {
 	if r.Selection != workflow.SelectedSoleHead && r.Selection != workflow.SelectedExplicit {
@@ -1204,6 +1210,12 @@ func humanResult(result any) string {
 		f.Add("store", x.Store)
 		f.Add("mode", string(x.Mode))
 		f.Add("adversity", string(x.Adversity))
+		// #109. A finding, not a measurement among peers: this line carries no
+		// other count, so a zero here would be the only one on it and would say
+		// nothing on every ordinary run. The envelope keeps the zero.
+		if x.ToolOutputDocuments != 0 {
+			f.AddInt("tool-output", x.ToolOutputDocuments)
+		}
 		return f.String()
 	case ProfileResult:
 		if x.Store == "" {

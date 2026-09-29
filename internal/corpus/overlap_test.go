@@ -671,6 +671,12 @@ func TestPassingTheScreenDoesNotQualifyTheCorpus(t *testing.T) {
 		"structure":                distractor.Structure,
 		"git-provenance":           distractor.GitProvenance,
 		"near-duplicate-detection": distractor.NearDuplicateDetection,
+		// #109. Both maps or neither: a missing key here reads as the zero
+		// CheckStatus, so the loop below would assert that an unscreened
+		// ToolOutput is entirely blank — which
+		// `TestUnavailableChecksAreTypedNotBlank` forbids for this very field,
+		// on this very input.
+		"tool-output": distractor.ToolOutput,
 	}
 
 	screen(t, distractor, author)
@@ -696,6 +702,9 @@ func TestPassingTheScreenDoesNotQualifyTheCorpus(t *testing.T) {
 		"structure":                distractor.Structure,
 		"git-provenance":           distractor.GitProvenance,
 		"near-duplicate-detection": distractor.NearDuplicateDetection,
+		// #109's check is in this list for the same reason as the rest: an
+		// overlap screen has no business touching it.
+		"tool-output": distractor.ToolOutput,
 	} {
 		if got != before[name] {
 			t.Errorf("the overlap screen changed the %s check from %+v to %+v; it screens overlap and nothing else", name, before[name], got)

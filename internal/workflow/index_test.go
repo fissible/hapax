@@ -18,10 +18,10 @@ import (
 // ---------------------------------------------------------------------------
 
 // A corpus large enough for both a profile and a reference indexes completely.
-// Nothing about it is adverse — and every qualification check still reports
-// not-performed, because none is implemented. Those are two different claims and
-// the result has to make both.
-func TestAFullCorpusIndexesAndStillReportsEveryCheckNotPerformed(t *testing.T) {
+// Nothing about it is adverse — and every declared qualification check is
+// reported, with only #109's `tool-output` actually performing. Those are two
+// different claims and the result has to make both.
+func TestAFullCorpusReportsEveryDeclaredCheckAndOnlyToolOutputPerforms(t *testing.T) {
 	t.Parallel()
 	root := corpusOf(t, 60)
 	requireComposition(t, root, 51, 6, 3)
@@ -63,8 +63,19 @@ func TestAFullCorpusIndexesAndStillReportsEveryCheckNotPerformed(t *testing.T) {
 			t.Errorf("%s was not reported", name)
 			continue
 		}
+		// #109 implements one of them. `tool-output` screens the corpus for
+		// paragraphs this tool published, so on a clean corpus it reports
+		// `passed` — the one declared check that is no longer a placeholder.
+		// The others stay not-performed, and the claim below is theirs.
+		if name == "tool-output" {
+			if state != string(corpus.CheckPassed) {
+				t.Errorf("%s = %q on a clean corpus, want %q", name, state, corpus.CheckPassed)
+			}
+			continue
+		}
 		if state != string(corpus.CheckNotPerformed) {
-			t.Errorf("%s = %q; this slice implements no qualification", name, state)
+			t.Errorf("%s = %q; of the declared checks only tool-output performs, and "+
+				"the rest implement no qualification", name, state)
 		}
 	}
 	for name := range reported {
