@@ -797,6 +797,27 @@ no band can be issued at all. And `rewrite` exits 0 both when nothing needed cha
 when everything that did was improved; which of those happened is a named state in the output,
 not an exit code, since a caller wanting the difference wants the detail with it.
 
+### The human line, and when a zero is a measurement
+
+Beside the JSON envelope every command prints one line of `key=value` pairs. The builder
+that assembles it draws one distinction: **EMPTY is an absence and is omitted; ZERO is a
+measurement and is not.** `store=` for a store that does not exist says nothing and is
+dropped; `below-floor=0` is a real count and prints. Three shipped defects were each an
+optional member rendering as `key=` with nothing after it, which is why the rule is a
+builder rather than a convention.
+
+Two counts bend it in opposite directions, and the difference is the line they are on.
+`already-rewritten=0` prints on the `rewrite` line, beside `targets`, `improved` and
+`not-improved` — it is a count among peers, and a reader comparing them needs it present.
+`tool-output=0` does **not** print on the `index` line, because that line carries `store`,
+`mode` and `adversity` and no count at all: `documents`, `eligible`, `nodes`,
+`calibrate_segments` and `train_paragraphs` are JSON-only. A zero there would be the only
+count on the line, on every ordinary run, saying nothing — while a non-zero one is not a
+measurement among peers but a finding: some of what you indexed, this tool wrote.
+
+Both counts are unconditional in JSON, beside their siblings, so a consumer can tell zero
+from absent without parsing a line.
+
 A malformed `HAPAX_LOCAL_ONLY` is code 2 — an invalid invocation, not a refusal. *Failing
 closed* means it can never select cloud mode or construct a credential factory; it does not
 mean its classification becomes ambiguous.

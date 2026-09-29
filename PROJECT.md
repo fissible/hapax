@@ -154,6 +154,48 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-09-29 (v0.1.0, and closing the self-contamination loop)
+
+Merged #124, #127, #129, #131. Closed #109, #111, #117, #125. Filed #122, #123, #125,
+#126, #128, #130. Tagged v0.1.0.
+
+**Three slices, one story.** This tool's own prose was re-entering its measurement of the
+author by three separate paths, and all three are now closed.
+
+- **#117** — the tells gate counts only `derived` rules and none of the 22 shipped rules
+  is derived, so it accepted everything. Validation was attempted first, on instruction,
+  and the corpus cannot support it: `not-just-but` fires in 11.36% of distractors, 97 of
+  854 documents of other people's human writing. So the interim is disclosure —
+  `tells_inactive_reason` in every rewrite result, and `Runner.Tells` makes the rule set a
+  seam so the register bind is observable at all.
+- **#111** — every guard anchors on the paragraph the run started from, and `--in-place`
+  makes that the previous run's output. Refused by content hash at plan time. The measured
+  ladder was 4.55% Han to 24.00% in two runs, each step admissible.
+- **#109** — `index` screens the corpus for paragraphs this tool published. Of the five
+  files the issue named, one matched — and it held 63 of the corpus's 64 Han letters, all
+  in the one paragraph the screen catches.
+
+**#109's first design was wrong and review killed it.** It refused to publish into a
+corpus root; four shipped smoke tests assert the rewrite SHOULD land there, it was a no-op
+for `--store` users, and it repaired nothing already present. The exclusion route only
+became the cheaper fix once #111 shipped `ProducedByRewrite`.
+
+**What the release number means.** v0.1.0 says the shape has settled. It is below one
+because the five qualification checks are still `not-performed` and the tells gate is
+inert — both now stated in the README rather than implied.
+
+**Upgrade consequence, deliberately taken.** The tool-output check version is a snapshot
+identity input, so the first `index` after this re-IDs every snapshot, every profile and
+every `profile_head`; `eval_result.profile_id` cascades, so a calibration built on the old
+profile is lost when it is pruned. Every other `*-version` key in that map charges the
+same price.
+
+**Next.** #112, #113, #118 and #110 are the substantive bugs left; #122, #123, #126, #128
+and #130 are housekeeping these slices generated. #84 is the interesting one — "a corpus
+built from assistant transcripts is mostly the assistant's prose" is the same
+contamination a level up, and `ProducedByRewrite` plus the tool-output screen are the
+machinery to measure it.
+
 ### 2026-09-23 (the paragraph floor, and what twenty-five review rounds bought)
 
 Merged #85, #90, #96, #99, #103. Closed #64, #81, #83, #92, #93, #98. Filed #102.

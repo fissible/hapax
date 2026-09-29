@@ -8,14 +8,16 @@ moved *toward you* rather than merely away from the model.
 
 The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 
-> **Status: pre-release.** No version is tagged yet. All six commands below
-> run; fourteen of fifteen library components are built and tested, and the
-> CLI that was the last of them is now complete.
+> **Status: v0.1.0, the first tagged release.** All six commands run and the
+> library is complete. The version says the shape has settled, not that the
+> work has: the number is below one because the qualification checks a corpus
+> would need before anyone should trust a band are still unimplemented, and
+> `index` says so in every result it emits.
 >
-> What is still out of reach for most people is **calibration**. A band claim
-> needs roughly 600 documents of your own writing plus a distractor corpus, so
-> until you have that, `score` reports distances without a band and `rewrite`
-> needs you to name paragraphs yourself. See [PROJECT.md](PROJECT.md) for the
+> What is out of reach for most people is **calibration**. A band claim needs
+> roughly 600 documents of your own writing plus a distractor corpus, so until
+> you have that, `score` reports distances without a band and `rewrite` needs
+> you to name paragraphs yourself. See [PROJECT.md](PROJECT.md) for the
 > component-by-component state.
 
 ---
@@ -31,8 +33,17 @@ your corpus → measured profile → score the draft → rewrite what misses →
 ```
 
 Every rewrite is gated. A pass is kept only if it measurably moves closer to your profile,
-preserves the draft's meaning, and does not increase AI tells. **The output is never worse
-than the input** — that is a property of the acceptance rule, not an aspiration.
+preserves every name, number and quotation the draft carried, introduces no new writing
+system, and splices back as the paragraph it replaced. **On the distance, the output is
+never worse than the input** — that is a property of the acceptance rule, not an
+aspiration.
+
+One gate does not currently function, and the tool says so rather than letting you assume
+otherwise. The AI-tell comparison counts only rules validated against a corpus, and none of
+the twenty-two shipped rules is: validating them was attempted and the corpus cannot
+support it. So the gate accepts everything, and every rewrite result carries
+`tells_inactive_reason: no-validated-rule` until that changes. The other four gates are
+real.
 
 ## It tells you when it doesn't know
 
@@ -80,6 +91,30 @@ the draft passage and a handful of exemplar sentences — never the corpus. `--l
 outside loopback: no cloud provider is constructed, no credential is read, no telemetry is
 emitted. Loopback, because the default provider is Ollama on localhost — the guarantee is
 about where bytes go, not whether a socket opens. A cloud failure is an error, never a silent downgrade.
+
+## It will not learn from itself
+
+A tool that rewrites your prose and then measures you against its own output is measuring
+itself. `hapax` closes that loop in both directions.
+
+`index` screens your corpus for paragraphs it published and refuses them as
+`rejected-tool-output`, so a rewrite you saved into your writing directory stops counting
+as your style. In the corpus this was found in, one file contributed a paragraph that held
+63 of the 64 Han letters anywhere in the corpus — the tool's own output, from a rewrite
+that had gone wrong, about to be learned from as though it were the author's.
+
+`rewrite` refuses to re-target a paragraph it wrote. Every guard anchors on the paragraph
+the run started from, so rewriting in place and running again would have anchored the
+second run on the first run's output, and each step would have been individually
+admissible while the composition was not.
+
+Neither catches a paragraph you edited after the tool wrote it, and that is deliberate:
+anything you touched is yours.
+
+> Both are detected by content hash, so the first `index` after upgrading may report fewer
+> eligible documents than the last one. It also re-IDs every snapshot — the screen's
+> version is part of snapshot identity — which means new profile IDs and, once the old
+> profile is pruned, the loss of any calibration built on it.
 
 ## What this is not
 
