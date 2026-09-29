@@ -1395,6 +1395,22 @@ func TestAnInFlightRequestIsCancelled(t *testing.T) {
 					close(serverSaw)
 				case <-release:
 				}
+				// And then the handler must NOT return, which is #125.
+				//
+				// It writes nothing, so returning makes net/http send an empty
+				// 200 — and the client may read that before it observes its own
+				// cancellation, in which case `Do` succeeds, `parse` fails on the
+				// empty body, and Rewrite returns a bare ErrProvider. Measured:
+				// a handler that writes nothing and returns yields exactly
+				// "llm provider failed", which is the string CI reported.
+				//
+				// Blocking until release means no response can exist while the
+				// assertions below are pending, so cancellation is the only
+				// outcome they can see. The sibling test fifty lines up takes the
+				// same Done branch safely because it has already written and
+				// flushed a 500: its response is determined either way, and this
+				// one's was not.
+				<-release
 			}
 			t.Cleanup(func() { close(release) })
 
@@ -1420,6 +1436,15 @@ func TestAnInFlightRequestIsCancelled(t *testing.T) {
 			case err := <-done:
 				if !errors.Is(err, context.Canceled) {
 					t.Errorf("error = %v, want context.Canceled", err)
+				}
+				// Naming the wrong outcome, because it is a specific one rather
+				// than any error: a bare ErrProvider here means a response was
+				// received and FAILED to parse, which is exactly what the
+				// blocking handler above makes impossible.
+				if errors.Is(err, llm.ErrProvider) {
+					t.Errorf("error = %v; a response was received and failed to "+
+						"parse, so the server answered instead of the client "+
+						"observing its cancellation", err)
 				}
 			case <-time.After(5 * time.Second):
 				t.Fatal("Rewrite ignored cancellation of an in-flight request")
