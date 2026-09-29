@@ -1,0 +1,13 @@
+name: Release
+
+# Wiring for fissible/.github's reusable release workflow. hapax carried a
+# VERSION file from August and none of the tooling that reads it, so v0.1.0 was
+# tagged with no Release object and created by hand. This is so the next one is
+# not.
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  release:
+    uses: fissible/.github/.github/workflows/release.yml@main
