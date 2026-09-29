@@ -136,8 +136,11 @@ func TestEveryTellsInactiveReasonSurvivesTheLine(t *testing.T) {
 // the way a SUCCESSFUL run populates it cannot produce a dangling key, which is
 // exactly why running the binary on a refusal is what found all three defects.
 var renderingFixtures = map[string][]any{
-	"tells":   {TellsResult{}},
-	"index":   {IndexResult{}},
+	"tells": {TellsResult{}},
+	// #109's count renders only when it is not zero, so the zero payload above
+	// never reaches that branch. Both, or the completeness suite below sees only
+	// the half that prints nothing.
+	"index":   {IndexResult{}, IndexResult{ToolOutputDocuments: 3, Documents: 60, Eligible: 57}},
 	"profile": {ProfileResult{}},
 	"eval":    {EvalResult{}},
 	"score":   {ScoreResult{}},

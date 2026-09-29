@@ -73,6 +73,8 @@ const (
 	RejectedTooShort  Admission = "rejected-too-short"
 	RejectedNotUTF8   Admission = "rejected-not-utf8"
 	RejectedDuplicate Admission = "rejected-duplicate"
+	// RejectedToolOutput is a STUB for phase-1 verification only.
+	RejectedToolOutput Admission = "stub-tool-output"
 )
 
 // Split is a stable, content-derived dataset partition.
@@ -97,7 +99,12 @@ type Policy struct {
 	MinLexicalTokens int
 	SplitSeed        string
 	Splits           SplitWeights
+	// PublishedParagraphs is a STUB for phase-1 verification only.
+	PublishedParagraphs map[string]bool
 }
+
+// ToolOutputCheckVersion is a STUB for phase-1 verification only.
+const ToolOutputCheckVersion = "stub-version"
 
 // DefaultPolicy returns the v1 corpus admission policy for register.
 func DefaultPolicy(register string) Policy {
@@ -124,7 +131,9 @@ type Snapshot struct {
 	Policy                                                                    Policy
 	Documents                                                                 []Document
 	Contamination, Language, Structure, GitProvenance, NearDuplicateDetection CheckStatus
-	overlaps                                                                  map[string]OverlapReport
+	// ToolOutput is a STUB for phase-1 verification only.
+	ToolOutput CheckStatus
+	overlaps   map[string]OverlapReport
 }
 
 // SharedDocument identifies an eligible document that appears in both sides

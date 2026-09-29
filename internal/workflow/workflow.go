@@ -71,7 +71,8 @@ func Selections() []Selection {
 	return []Selection{SelectedSoleHead, SelectedExplicit, SelectionAmbiguous, SelectionUnknownRegister, SelectionNoProfile}
 }
 
-var checkNames = []string{"contamination", "language", "structure", "git-provenance", "near-duplicate-detection"}
+// "tool-output" is a STUB entry for phase-1 verification only.
+var checkNames = []string{"contamination", "language", "structure", "git-provenance", "near-duplicate-detection", "tool-output"}
 
 func CheckNames() []string { return append([]string(nil), checkNames...) }
 
@@ -101,9 +102,11 @@ type IndexResult struct {
 	Adverse                                                        bool
 	Adversity                                                      Adversity
 	Documents, Eligible, Nodes, CalibrateSegments, TrainParagraphs int
-	ProfileID, ReferenceID, NotReadyReason                         string
-	Checks                                                         []Check
-	Pruned                                                         Pruned
+	// ToolOutputDocuments is a STUB for phase-1 verification only.
+	ToolOutputDocuments                    int
+	ProfileID, ReferenceID, NotReadyReason string
+	Checks                                 []Check
+	Pruned                                 Pruned
 }
 
 type ProfileRequest struct{ StartDir, StorePath, Register string }

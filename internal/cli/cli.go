@@ -767,11 +767,13 @@ type IndexResult struct {
 	Nodes             int                `json:"nodes"`
 	CalibrateSegments int                `json:"calibrate_segments"`
 	TrainParagraphs   int                `json:"train_paragraphs"`
-	ProfileID         *string            `json:"profile_id"`
-	ReferenceID       *string            `json:"reference_id"`
-	NotReadyReason    string             `json:"profile_not_ready_reason"`
-	Checks            []workflow.Check   `json:"checks"`
-	Pruned            workflow.Pruned    `json:"pruned"`
+	// ToolOutputDocuments is a STUB for phase-1 verification only.
+	ToolOutputDocuments int              `json:"tool_output_documents"`
+	ProfileID           *string          `json:"profile_id"`
+	ReferenceID         *string          `json:"reference_id"`
+	NotReadyReason      string           `json:"profile_not_ready_reason"`
+	Checks              []workflow.Check `json:"checks"`
+	Pruned              workflow.Pruned  `json:"pruned"`
 }
 type ProfileResult struct {
 	Store       string             `json:"store"`

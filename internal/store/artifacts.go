@@ -1399,6 +1399,11 @@ func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[str
 	return answer, nil
 }
 
+// PublishedParagraphs is a STUB for phase-1 verification only.
+func (s *Store) PublishedParagraphs(ctx context.Context) (map[string]bool, error) {
+	return nil, nil
+}
+
 // LoadRewriteAttempt returns one stored rewrite decision record.
 func (s *Store) LoadRewriteAttempt(ctx context.Context, id, nodeID string, i int) (RewriteAttempt, error) {
 	return s.loadAttempt(s.db, ctx, id, nodeID, i)

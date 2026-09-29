@@ -696,6 +696,9 @@ func TestPassingTheScreenDoesNotQualifyTheCorpus(t *testing.T) {
 		"structure":                distractor.Structure,
 		"git-provenance":           distractor.GitProvenance,
 		"near-duplicate-detection": distractor.NearDuplicateDetection,
+		// #109's check is in this list for the same reason as the rest: an
+		// overlap screen has no business touching it.
+		"tool-output": distractor.ToolOutput,
 	} {
 		if got != before[name] {
 			t.Errorf("the overlap screen changed the %s check from %+v to %+v; it screens overlap and nothing else", name, before[name], got)

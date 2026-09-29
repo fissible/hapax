@@ -25,10 +25,15 @@ func walkable(t *testing.T) string {
 	return root
 }
 
-// hapax performs no qualification. Every check corpus declares comes back
-// not-performed, and index therefore cannot report a clean corpus — only an
-// indexed one. Pinned rather than assumed, because the whole claim that
-// `ok` does not mean `clean` rests on it.
+// Under `DefaultPolicy`, hapax performs no qualification: every check corpus
+// declares comes back not-performed, and index therefore cannot report a clean
+// corpus — only an indexed one. Pinned rather than assumed, because the whole
+// claim that `ok` does not mean `clean` rests on it.
+//
+// `DefaultPolicy` is load-bearing since #109. `tool-output` IS implemented, and
+// a policy carrying a screen makes it report `passed` — see
+// `tool_output_test.go`. It is not-performed here because nothing asked for
+// it, which is a different reason than the other five have.
 func TestEveryQualificationCheckIsNotPerformed(t *testing.T) {
 	snapshot, err := corpus.Walk(walkable(t), corpus.DefaultPolicy("essays"))
 	if err != nil {
@@ -41,6 +46,11 @@ func TestEveryQualificationCheckIsNotPerformed(t *testing.T) {
 		"structure":                snapshot.Structure,
 		"git provenance":           snapshot.GitProvenance,
 		"near-duplicate detection": snapshot.NearDuplicateDetection,
+		// #109 implements this one, but `DefaultPolicy` supplies no screen, so
+		// it is not-performed here for a different reason than the others: not
+		// unimplemented, not asked for. The claim that `ok` does not mean
+		// `clean` still rests on every one of them.
+		"tool output": snapshot.ToolOutput,
 	} {
 		if status.State != corpus.CheckNotPerformed {
 			t.Errorf("the %s check is %q; nothing performs it, so index must not imply it did",
