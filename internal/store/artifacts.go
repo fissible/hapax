@@ -1399,9 +1399,38 @@ func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[str
 	return answer, nil
 }
 
-// PublishedParagraphs is a STUB for phase-1 verification only.
+// PublishedParagraphs returns every paragraph text this store recorded as an
+// accepted candidate. A corpus screen has to test every paragraph of every
+// document, which ProducedByRewrite cannot answer: it binds one parameter per
+// hash against the variable ceiling its own doc comment records.
+//
+// Accepted only, for the reason given there — a refused candidate was never
+// published, so it cannot be in anybody's corpus because this tool put it there.
+//
+// Unscoped by register and by profile, deliberately. Text this tool published is
+// this tool's text whatever register the draft was in, and a byte-identical
+// paragraph is a real match.
+//
+// An empty store answers with an empty set rather than nil, because a first
+// index has to tell "nothing was published" from "nothing was screened".
 func (s *Store) PublishedParagraphs(ctx context.Context) (map[string]bool, error) {
-	return nil, nil
+	published := map[string]bool{}
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT candidate_hash FROM rewrite_attempt WHERE accepted=1")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var hash string
+		if err = rows.Scan(&hash); err != nil {
+			return nil, err
+		}
+		published[hash] = true
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return published, nil
 }
 
 // LoadRewriteAttempt returns one stored rewrite decision record.

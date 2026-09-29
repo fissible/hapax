@@ -2565,6 +2565,14 @@ language, structure, git provenance and near-duplicate detection at `not-perform
 strongest honest claim is "indexed, qualification not performed". The result document says
 which; the exit code does not pretend to.
 
+Since #109 a sixth check, `tool-output`, IS performed by `index`: it screens the corpus for
+paragraphs this tool itself published and rejects the documents holding them as
+`rejected-tool-output`. It does not weaken the claim above — the five are still
+`not-performed`, and what it screens for is narrower and exactly nameable, so the
+AI-contamination claim `contamination` reserves stays unmade. Given no published set it too
+reports `not-performed`, which there means "no screen was supplied" rather than "no screen
+exists".
+
 **Rehydration is given a root.** Snapshot identity is deliberately location-independent, so
 the reference cannot name a directory; the caller passes the corpus root it wants read. The
 outcome vocabulary maps to causes explicitly: a path that does not resolve is `missing`; an OS

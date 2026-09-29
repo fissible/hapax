@@ -71,7 +71,6 @@ func Selections() []Selection {
 	return []Selection{SelectedSoleHead, SelectedExplicit, SelectionAmbiguous, SelectionUnknownRegister, SelectionNoProfile}
 }
 
-// "tool-output" is a STUB entry for phase-1 verification only.
 var checkNames = []string{"contamination", "language", "structure", "git-provenance", "near-duplicate-detection", "tool-output"}
 
 func CheckNames() []string { return append([]string(nil), checkNames...) }
@@ -102,7 +101,9 @@ type IndexResult struct {
 	Adverse                                                        bool
 	Adversity                                                      Adversity
 	Documents, Eligible, Nodes, CalibrateSegments, TrainParagraphs int
-	// ToolOutputDocuments is a STUB for phase-1 verification only.
+	// ToolOutputDocuments counts documents screened out as this tool's own
+	// prose. Named for what it counts rather than after the CheckStatus it is
+	// read from a few lines away.
 	ToolOutputDocuments                    int
 	ProfileID, ReferenceID, NotReadyReason string
 	Checks                                 []Check
@@ -1653,7 +1654,17 @@ func (r *Runner) Index(ctx context.Context, request IndexRequest) (IndexResult, 
 	if request.Register == "" {
 		return IndexResult{}, errors.New("index register is required")
 	}
-	snapshot, err := corpus.Walk(request.CorpusRoot, corpus.DefaultPolicy(request.Register))
+	// #109. The screen is fed here and nowhere else. `DefaultPolicy` supplies
+	// none, so `draftWrite` and the distractor walk keep the nil path — and a
+	// screened draft would fail draftWrite's eligibility check instead of
+	// reporting #111's already-rewritten.
+	published, err := r.publishedParagraphs(ctx, request)
+	if err != nil {
+		return IndexResult{}, err
+	}
+	policy := corpus.DefaultPolicy(request.Register)
+	policy.PublishedParagraphs = published
+	snapshot, err := corpus.Walk(request.CorpusRoot, policy)
 	if err != nil {
 		return IndexResult{}, err
 	}
@@ -1694,10 +1705,40 @@ func (r *Runner) Index(ctx context.Context, request IndexRequest) (IndexResult, 
 	return r.commit(ctx, request, mode, write, built, reference, result)
 }
 
+// indexStorePath is the database an index reads its screen from and writes its
+// snapshot to. Shared, so the two cannot be different stores.
+func indexStorePath(request IndexRequest) string {
+	if request.StorePath != "" {
+		return request.StorePath
+	}
+	return filepath.Join(request.CorpusRoot, ".hapax", "hapax.sqlite3")
+}
+
+// publishedParagraphs reads the set #109's screen tests membership in.
+//
+// Index walks before commit opens, and commit is what CREATES the store when
+// the path is defaulted — so a first index has nothing to ask. That is an EMPTY
+// screen rather than no screen: nothing has been published yet, and the check
+// must be able to say so.
+func (r *Runner) publishedParagraphs(ctx context.Context, request IndexRequest) (map[string]bool, error) {
+	path := indexStorePath(request)
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return map[string]bool{}, nil
+		}
+		return nil, err
+	}
+	s, err := store.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer s.Close()
+	return s.PublishedParagraphs(ctx)
+}
+
 func (r *Runner) commit(ctx context.Context, request IndexRequest, mode IndexMode, snapshot store.SnapshotWrite, p *profile.Profile, reference *deviation.Reference, result IndexResult) (IndexResult, error) {
-	path := request.StorePath
-	if path == "" {
-		path = filepath.Join(request.CorpusRoot, ".hapax", "hapax.sqlite3")
+	path := indexStorePath(request)
+	if request.StorePath == "" {
 		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 			return IndexResult{}, err
 		}
@@ -1821,6 +1862,11 @@ func discover(startDir, storePath string) (string, bool, error) {
 func indexResult(snap *corpus.Snapshot, write store.SnapshotWrite, request IndexRequest) IndexResult {
 	r := IndexResult{SnapshotID: write.ID, Documents: len(snap.Documents), Checks: checks(snap)}
 	r.Eligible = len(snap.Eligible())
+	for _, d := range snap.Documents {
+		if d.Admission == corpus.RejectedToolOutput {
+			r.ToolOutputDocuments++
+		}
+	}
 	for _, d := range write.Documents {
 		r.Nodes += len(d.Nodes)
 		if d.Split == corpus.Train {
@@ -1843,6 +1889,7 @@ func checks(s *corpus.Snapshot) []Check {
 		check("structure", s.Structure),
 		check("git-provenance", s.GitProvenance),
 		check("near-duplicate-detection", s.NearDuplicateDetection),
+		check("tool-output", s.ToolOutput),
 	}
 }
 func storedProfile(p *profile.Profile) store.Profile {
