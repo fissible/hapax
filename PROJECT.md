@@ -39,6 +39,57 @@ Supporting: `fixtures` (vendored public-domain corpus), `ciconfig` + CI workflow
 
 ---
 
+## Sprint: what the codex review found in v0.1.0
+
+An independent codex review of everything merged after `157617c` — eight slices that
+Claude specified, Claude reviewed and Claude implemented — found three reproduced
+production defects, one unrepresentable claim, and one false one. All five are in released
+code.
+
+**The class, which is the finding that matters most:** *representation mismatch across
+components, hidden by calling several different byte sequences "the paragraph".* Every
+Claude review asked whether its slice hashed the right bytes and each answered correctly
+for itself. None asked whether the slices agreed on what a paragraph IS, because no review
+ever saw more than one slice. A slice review CAN reach an interaction — it can read the
+consumer's contract — and these reviews did not; that is what happened, and claiming the
+stronger thing, that reviewing in isolation cannot find an interaction, is the same kind of
+overclaim this sprint exists to strike.
+
+### Dependency order
+
+```
+A  the false claims          no deps          do first, it is free and it is shipped
+      |
+B  publication identity      needs nothing    restores two guards currently bypassed
+   (#132 + #134 + #135)                       establishes the canonical paragraph form
+      |
+C  the scoring invariant     needs B's form   publishes what it scored
+   (#133)
+```
+
+`#132` and `#134` are one question from two sides — *what bytes, from what evidence, count
+as a published paragraph* — so they are one slice. Deriving the evidence from the assembled
+bytes rather than the attempt table fixes the representation mismatch as a consequence,
+because the assembled leaf span IS the canonical form. `#135` joins them if the fix needs a
+`rewrite_attempt` column, so the table is rebuilt once rather than twice; if it does not, it
+splits back out.
+
+`#133` is independent of both but must adopt whatever canonical form B establishes, so it
+goes after rather than in parallel.
+
+| Slice | Issues | Effort | Deps | Status |
+|---|---|---|---|---|
+| A — strike the false claims | finding 5, no issue | XS | none | **done** |
+| B — publication identity and evidence | [#132](https://github.com/fissible/hapax/issues/132), [#134](https://github.com/fissible/hapax/issues/134), [#135](https://github.com/fissible/hapax/issues/135) | M–L | A | planned |
+| C — publish what was scored | [#133](https://github.com/fissible/hapax/issues/133) | M–L | B | planned |
+
+Reviewer for this sprint is **codex**. What the history establishes is that eight
+consecutive Claude reviews did not find these defects; it does not isolate model identity as
+the cause, and saying "the defects exist because the same model reviewed them" would be a
+causal claim the evidence does not carry. The decision to change reviewers follows from the
+observed miss, not from a demonstrated mechanism. A release should follow B and
+C, because v0.1.0's README advertises guards that #132 and #133 defeat.
+
 ## Open issues
 
 | # | Title | Blocked on |
@@ -153,6 +204,86 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 ---
 
 ## Session handoff notes
+
+### 2026-09-30 (codex sprint, slice A — the false claims)
+
+Slice A is committed. It changes no behavior: seven files of comments and prose, struck
+or scoped where they claimed more than the measurement.
+
+**What was wrong, by class.**
+
+- **The ceiling rationale's arithmetic was taken from the wrong fixture.** `rewrite.go`
+  said #91's incident was 18 Han letters of 86 (20.93%). The pair `scripts_test.go`
+  actually asserts is 52 Latin to 92 Latin + 21 Han — 18.5841%. The 20.93% belongs to an
+  incident-DERIVED paraphrase in `exceeding_test.go`, which adds a Han letter to the
+  original so #91's introduction guard is disarmed. Recomputed: 13.05x above the larger
+  observed corpus use (unchanged), 3.72x below the incident (was 4.19x), tenfold both ways
+  needs >= 3.831% and <= 1.858% at once (was <= 2.093%), symmetric at the geometric mean
+  2.668% giving 6.96x each way (was 2.832% / 7.39x). The decision is unchanged; the numbers
+  supporting it were not the ones claimed. Every fixture built on that paraphrase now says
+  incident-DERIVED and names the reported pair alongside.
+- **Predicate summaries that the predicate contradicts.** `Exceeding` has three
+  conditions and the prose kept collapsing them into one. Struck: growth "refuses a
+  crossing whether the script was present or not" (74L+4G crosses and is not named); "the
+  rule also requires the count to have grown" (the takeover arm names an unchanged count);
+  "the count arm keeps a SHORTENING rewrite admissible" (80L+20G -> 30L+15G names Greek on
+  a count that FELL); `Overgrown` names scripts "whose count grew".
+- **Claims true only at the shipped parameter ordering.** "A rewrite may never climb to
+  established" holds only while ceiling < established — at established = ceiling = 0.25,
+  80L+20G -> 60L+20G lands on 0.2500 and is admitted. Same shape in
+  `execution_gate_internal_test.go`: "anything over the ceiling is refused long before 25%"
+  is false on that test's own fixtures, which admit Han at 10% against the banked anchor.
+- **Fixture comments generalized past their fixture.** "A paragraph mixing scripts in the
+  band cannot grow either of them" (60L+20G+20H -> 960L+21G+21H grows both and names
+  neither); "a longer rewrite is admissible" (96L+4G -> 96+6 names Greek at 0.0588); "a
+  bilingual paragraph may be rewritten in either of its languages"; "no order statistic
+  sees magnitude" (an ordered count vector does); "two percent becomes the paragraph" (1 of
+  22 is 4.55%); "the low end sits a thousandth above the ceiling" (0.0455 is 0.0045 BELOW
+  0.05); and the monoscript row credited to "the two proportional designs", which is the
+  one case the paragraph-share bound admits.
+- **A coverage claim with no test behind it.** `growth_test.go` said "the tests below hold
+  both" for two non-containment examples; those tests drive fake verdicts. Added
+  `TestNeitherGuardContainsTheOtherWithProductionAnchors` in `internal/text`, which asserts
+  both directions against the real `ScriptSet` with production's anchors — including the
+  reverse witness that was missing entirely (growth refusing what introduction permits).
+- **The band floor's impossibility was a property of the chosen rule.** `3/c` inverted
+  gives 60 and 30 clusters; the exact one-sided binomial bound on independent observations
+  with zero errors, 1 - 0.05^(1/n), reaches 9.814% at n = 29 and 4.951% at n = 59 — one
+  cluster below each minimum. It is not available here (these are clusters of dependent
+  paragraphs, which is why the bootstrap exists), but "there is no sample size below this"
+  was false as stated.
+
+**The generator, not the instances.** Codex's diagnosis, now in `CLAUDE.local.md`: these
+headers are written as ARGUMENTS for why the chosen design had to win, and an argument
+wants a strong conclusion, so "this alternative failed this example" becomes "this class
+cannot work". Corrections then APPEND an exception rather than replacing the block, so a
+block accumulates a slogan, a predicate, a history and review qualifications — and the
+predicate can be correct while the slogan is false. The remedy is to write the block as a
+record: Contract / Evidence / Consequence / Decision / Unresolved, used where they earn
+their place, writing from evidence toward a bounded claim, one authoritative home per
+claim.
+
+**Nine review rounds, and the last one says why.** Findings fell 7 -> 3 -> 3 -> 2 -> 1 but
+never reached zero, and codex's answer to the direct question was that the process had
+become churn and the contradictions should have been consolidated earlier. Worth knowing
+before the next prose slice: re-reading the same paragraphs finds one more thing every
+time, and that is not convergence.
+
+**Scope grew from four files to seven, deliberately.** Grepping for other homes of the
+incident numbers found the same false labels in `execution_gate_internal_test.go`. Fixing
+them pulled that file into review, which produced three more rounds. Left alone: the ~60
+"an earlier version..." notes across 32 other files — codex's position is that the note
+itself is not the problem, only a false opening claim with its correction appended.
+
+### Next: slice B — #132 + #134 + #135
+
+Publication identity and evidence. `#132` and `#134` are one question from two sides — what
+bytes, from what evidence, count as a published paragraph — so they are one slice, and
+deriving the evidence from the ASSEMBLED bytes rather than the attempt table fixes the
+representation mismatch as a consequence. `#135` joins them if the fix needs a
+`rewrite_attempt` column. Then slice C (#133) adopts whatever canonical form B establishes.
+A v0.1.1 release should follow B and C, because v0.1.0's README advertises guards that #132
+and #133 defeat.
 
 ### 2026-09-29 (v0.1.0, and closing the self-contamination loop)
 

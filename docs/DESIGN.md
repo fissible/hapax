@@ -2120,8 +2120,16 @@ avoid it.
 demanding one.** Since the bound is at least 3/*c*, a band whose target is *p* cannot clear
 it below *c* = ⌈3/*p*⌉ **clusters**: **60 held-out author documents for `not you` at
 `p_author` = 0.05, and 30 distractor clusters for `in range` at `p_distractor` = 0.10.**
-That is a real cost and it is stated rather than softened — a band is a claim about an error
-rate, and there is no sample size below this at which such a claim can be made. The figure
+That is a real cost and it is stated rather than softened — a band is a claim about an
+error rate, and under this procedure there is no smaller sample at which it can be made.
+
+Under this procedure. An exact one-sided binomial bound on independent observations with
+zero errors, 1 − 0.05^(1/*n*), reaches 9.814% at *n* = 29 and 4.951% at *n* = 59 — one
+cluster below each minimum — so the floor is a property of the adopted `3/c` rule and not of
+sample size as such. That bound is not available here: these are clusters of dependent
+paragraphs, which is why the bootstrap exists. Whether `3/c` is the only defensible rule for
+clustered prose is unsettled; what the dependence argument settles is only that the
+independent-Bernoulli bound cannot replace it. The figure
 is reported so a user knows what a band needs, and not tested separately, because one rule
 that implies the other is better than two that could disagree.
 

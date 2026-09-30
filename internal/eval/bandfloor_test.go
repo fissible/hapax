@@ -60,7 +60,15 @@ package eval_test
 // ceil(3/p) CLUSTERS — 60 held-out author documents for `not you` and 30
 // distractor clusters for `in range` at the v1 targets. That is a real cost and
 // it is stated rather than softened: a band is a claim about an error rate, and
-// there is no sample size below this at which such a claim can be made.
+// under THIS procedure there is no smaller sample at which it can be made.
+//
+// Under this procedure, not under every procedure. For independent Bernoulli
+// observations with zero errors the exact one-sided 95% upper bound is
+// 1 - 0.05^(1/n): 9.814% at n = 29 and 4.951% at n = 59, one cluster below each
+// minimum. That bound is not available here — these are CLUSTERS of dependent
+// paragraphs, which is why the bootstrap exists and why 3/c is the bound being
+// inverted — but the floor is a property of the chosen rule rather than of
+// sample size.
 //
 // # The calibration classifies; the thresholds only measure
 //

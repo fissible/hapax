@@ -62,61 +62,66 @@ const (
 	// here, it cannot be reproduced from a `rewrite_attempt` row alone.
 	RejectionNotSpliceable RejectionCode = "not-spliceable"
 	RejectionLanguage      RejectionCode = "language"
-	// RejectionLanguageGrowth refuses a candidate that grew a script the ORIGINAL
-	// paragraph does not count as one of its own past ScriptCeiling. #91's sibling
-	// and not its replacement: that one refuses any INTRODUCTION however small,
-	// this one refuses a crossing whether the script was present or not.
+	// RejectionLanguageGrowth refuses a candidate that text.ScriptSet.Exceeding
+	// names against the ORIGINAL paragraph; the predicate is stated there and not
+	// restated here. #91's sibling and not its replacement: that one refuses any
+	// INTRODUCTION however small, and this one can name a script the original
+	// already carried.
 	RejectionLanguageGrowth RejectionCode = "language-growth"
 )
 
-// ScriptCeiling is the share of a candidate's letters a script may reach, when
-// the script is not established in the original and the candidate uses MORE of
-// it than the original did.
+// ScriptCeiling and ScriptEstablished are the two thresholds
+// text.ScriptSet.Exceeding is called with. The predicate they parameterize is
+// stated there and is not restated here.
 //
-// The value is DECLARED, not derived: see ScriptCeilingDerived. It is
-// evidence-informed — of 1959 admitted paragraphs in the maintainer's corpus,
-// two carry any non-Latin script at all, at 0.16% and 0.38%, while #91's
-// incident is 20.9% — so any ceiling between roughly 1% and 15% separates every
-// observed legitimate use from the incident by more than an order of magnitude
-// in both directions.
+// # Decision
+//
+// Both values are DECLARED. ScriptCeilingDerived says so, the way #92 says it
+// about the paragraph floor.
+//
+// The ceiling is evidence-INFORMED. Of 1959 admitted paragraphs in the
+// maintainer's corpus, measured through the real admission path with the tool's
+// own output excluded (#109), two carry any non-Latin script at all — at
+// 0.1608% and 0.3831%. #91's REPORTED incident is 21 Han letters of 113, or
+// 18.5841%, measured from the pair asserted in internal/text/scripts_test.go —
+// not from the incident-DERIVED fixtures in internal/text/exceeding_test.go,
+// which add a Han letter to the original so that #91's own guard is disarmed. At
+// 0.05 that is 13.05x above the larger observed use and 3.72x below the
+// incident. Tenfold separation in both directions is unavailable at any value:
+// it needs a ceiling at or above 3.831% and at or below 1.858% at once.
+// Symmetry is available — the geometric mean, 2.668%, gives 6.96x each way —
+// and 0.05 is asymmetric by choice.
+//
+// The establishment threshold has no evidence behind it at all. It is a second
+// number because it answers a different question: the corpus supplies shares
+// OBSERVED in the author's paragraphs, which can inform a ceiling, and says
+// nothing about how much a paragraph must already hold before a script is
+// exempt. Sharing one number put the line one quotation wide — at 5%, sixteen
+// CJK letters would exempt Han in half the corpus's paragraphs.
+//
+// # Consequence
+//
+// At 0.25 no more than four scripts in one paragraph can be exempt from the
+// growth guard. That is not a cap on how many scripts a paragraph may contain,
+// and it is not an exemption from the separate introduction guard.
+//
+// # Unresolved
+//
+// The values, the rejection rate on legitimate rewrites, the escape rate on
+// incidents, and whether proportional growth should be exempt: #136. The band
+// between the two thresholds is unoccupied in the maintainer's corpus.
 const ScriptCeiling = 0.05
 
-// ScriptEstablished is the share of the ORIGINAL paragraph at which a script
-// counts as one of the languages that paragraph is written in, and is no longer
-// constrained by the ceiling.
-//
-// It is a separate number from the ceiling because it answers a different
-// question, and only the ceiling has evidence behind it. The corpus says how
-// much of a script a candidate may contain; it says nothing about how much a
-// paragraph must already hold before that script is its own. Sharing one number
-// put the line one quotation wide: at 5%, sixteen CJK letters establish Han in
-// half the corpus's paragraphs, after which the guard is off at any share.
-//
-// Two consequences, neither of them evidenced, both recorded rather than left to
-// be discovered:
-//
-// As an absolute share it is an implicit cap on how many languages a paragraph
-// may have — at 0.25, four. And a paragraph carrying two scripts BETWEEN the
-// ceiling and this threshold cannot grow either of them: measured, 60% Latin
-// with Greek and Han at 20% each refuses a rewrite that adds one letter of
-// either, and refuses both when a real rewrite grows both.
-//
-// The band is empty in the maintainer's corpus ONLY once hapax's own output
-// files are excluded (#109). Stated without that caveat the claim is false: at
-// the shipped floor the corpus contains a paragraph at 40.65% Han, 155 letters
-// with 63 Han — which is #91's own published incident, re-ingested as authorial
-// evidence. So the cost of this band falls on writers who genuinely mix scripts
-// in it, and both numbers here should be re-measured against a corpus that does
-// not contain the tool's output. See #109.
+// ScriptEstablished is the share of the ORIGINAL at which a script is exempt
+// from the growth guard, and the share of the CANDIDATE that constitutes a
+// takeover. See ScriptCeiling for the decision and text.ScriptSet.Exceeding for
+// the predicate.
 const ScriptEstablished = 0.25
 
-// ScriptCeilingDerived records that the numbers above are NOT derived from a
-// measurement, the way #92 records the same about the paragraph floor. Three
-// constant-free designs were measured and discarded: an order statistic cannot
-// see magnitude, and every share- or proportion-comparing rule refuses ordinary
-// lengthening. The value is evidence-INFORMED — in the maintainer's corpus two
-// of 1959 admitted paragraphs carry any non-Latin script, at 0.16% and 0.38%,
-// while #91's incident is 20.9% — but the cut between them is a choice.
+// ScriptCeilingDerived records that neither number above is derived from a
+// measurement. Three constant-free designs were refuted first, which is not a
+// demonstration that none can exist; internal/text/exceeding_test.go holds the
+// cases they died on and #136 holds the alternatives nobody tried.
 const ScriptCeilingDerived = false
 
 // Terminal explains how a loop ended. It is deliberately separate from
@@ -180,9 +185,10 @@ type Gate interface {
 
 // LanguageVerdict reports two script facts about one candidate, against two
 // different anchors. Introduced names the scripts absent from the CURRENT text,
-// which is #91's rule. Overgrown names the scripts whose count grew out of
-// proportion to the ORIGINAL paragraph, which is #107's — a fixed anchor,
-// because a moving one ratchets. Neither is a language identification: what is
+// which is #91's rule. Overgrown names the scripts text.ScriptSet.Exceeding
+// names against the ORIGINAL paragraph, which is #107's — a fixed anchor,
+// because a moving one ratchets. Growth in COUNT is not necessary for that; the
+// predicate is stated there. Neither is a language identification: what is
 // measured is scripts.
 type LanguageVerdict struct {
 	Introduced []string
