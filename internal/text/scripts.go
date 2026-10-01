@@ -68,18 +68,56 @@ func (s ScriptSet) Names() []string {
 func (s ScriptSet) Count(name string) int { return s.counts[name] }
 
 // Exceeding returns the sorted scripts of s that grew out of proportion to
-// original: not established there, over ceiling of s, and either using more
-// letters than original did or taking at least established of s.
+// original. This doc comment is the authoritative statement of the predicate;
+// callers and tests link here rather than restating it.
 //
-// A script at or above established in original is one of the languages that
-// paragraph is written in and is not constrained — a bilingual paragraph may be
-// rewritten in either of its languages. The count arm keeps a SHORTENING rewrite
-// admissible; the share arm stops a candidate spending a banked count by
-// deleting everything else. Both comparisons against established are inclusive,
-// so a rewrite may keep a script at the threshold and may never climb to it.
+// # Contract
 //
-// The ceiling is a parameter because the measurement owns no policy. Neither set
-// is disturbed by asking.
+// A script is named when ALL THREE hold:
+//
+//	original.Share(name) < established    OR original.Count(name) == 0
+//	s.Share(name) > ceiling
+//	s.Count(name) > original.Count(name)  OR s.Share(name) >= established
+//
+// Three consequences that follow from that and are easy to get wrong. Every
+// number below is measured at the declared parameters, established=0.25 and
+// ceiling=0.05:
+//
+//   - Crossing the ceiling is NOT sufficient. The third line must also hold, so
+//     a script whose count is unchanged and whose share stays under established
+//     may cross the ceiling freely: 96 Latin + 4 Greek rewritten to 74 + 4
+//     takes Greek from 0.0400 to 0.0513 and is not named.
+//   - Refusal does NOT require growth. The second arm of the third line is a
+//     takeover: 80 Latin + 20 Greek rewritten to 60 + 20 names Greek on an
+//     unchanged count, because the paragraph shrank around it.
+//   - The ceiling is a threshold on a ratio and moves with either term. 96 + 4
+//     to 114 + 6 is exactly 0.0500 and is not named; to 113 + 6 is 0.0504 and
+//     is.
+//
+// Both comparisons against established are inclusive, and they point opposite
+// ways: a script already AT the threshold in the original is exempt, and a
+// candidate arriving exactly AT it is named. The second half holds only while
+// ceiling < established — with the two equal the ceiling line admits the
+// candidate first, so at established = ceiling = 0.25, 80 Latin + 20 Greek to
+// 60 + 20 lands on 0.2500 and is not named.
+//
+// The count arm admits a SHORTENING rewrite that removes letters of the script
+// too, so long as the candidate's share stays under established: 80 Latin + 20
+// Greek to 60 + 15 is 0.2000 and is not named. It is not a general exemption for
+// shortening — the same original to 30 + 15 is 0.3333 and Greek is named on a
+// count that fell. The share arm is what stops a candidate spending a banked
+// count by deleting everything else.
+//
+// # Scripts, not languages
+//
+// A script at or above established in original is EXEMPT FROM THIS GUARD. It is
+// not thereby identified as a language the paragraph is written in — this counts
+// scripts and cannot tell Japanese from Chinese — and it is not exempt from the
+// separate introduction guard, which has its own anchor.
+//
+// The two thresholds are parameters because the measurement owns no policy; the
+// declared values and the argument for them live with the rejection codes in
+// internal/rewrite. Neither set is disturbed by asking.
 func (s ScriptSet) Exceeding(original ScriptSet, established, ceiling float64) []string {
 	var names []string
 	for name, count := range s.counts {

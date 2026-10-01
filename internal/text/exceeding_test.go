@@ -4,19 +4,36 @@ package text_test
 // disarms it: a paragraph carrying a single Han letter can come back largely
 // Han while introducing nothing.
 //
-// # Three constant-free designs died first, and the last two died the same way
+// # Contract
 //
-// **An order statistic** — "the set of scripts holding the most letters must not
-// grow." Measured against #91's own incident: the candidate is Latin=68 Han=18,
-// so Latin still holds the plurality and it is accepted. Both failure cases
-// preserve rank order, and no order statistic sees magnitude.
+// Stated once, on `ScriptSet.Exceeding`. Everything below reproduces it; none of
+// it restates it. The declared thresholds and the argument for them are on
+// `rewrite.ScriptCeiling`.
+//
+// # Evidence: three constant-free designs, each REFUTED on a case below
+//
+// Each is a refuted candidate and not a proof that no corpus-derived bound
+// exists. #136 carries what nobody tried.
+//
+// **The plurality script set** — "the set of scripts holding the most letters
+// must not grow." Measured against the incident-DERIVED fixture the table below
+// uses, 52 Latin + 1 Han to 68 + 18: Latin still holds the plurality, so the
+// candidate is accepted while Han goes from 0.0189 to 0.2093. DERIVED, not the
+// incident: #91's reported pair is 52 Latin to 92 Latin + 21 Han, or 0.1858,
+// asserted with exact counts in scripts_test.go. The fixtures here add one Han
+// letter to the original, which is what disarms #91's introduction guard and is
+// the whole of #107. That refutes THIS rule on THIS witness. It says
+// nothing about order statistics in general — an ordered count vector does see
+// magnitude — and it does not generalize across the fixtures either: the other
+// incident-shaped case below, 21 Latin + 1 Han to 24 Han, moves the plurality
+// from Latin to Han instead of preserving rank order, and no rule over that
+// statistic was measured.
 //
 // **A corpus reference** — "no script may exceed what the author's corpus
 // predicts for a text of this length." A monoscript candidate has count equal to
 // its length, and the corpus ratio is below one whenever the corpus holds a
-// single letter of anything else, so the bound falls below the length and every
-// LENGTHENING rewrite is refused. Measured: 52 to 53 Latin letters refused at
-// bound 52.999910.
+// single letter of anything else, so the bound falls below the length. Measured:
+// 52 to 53 Latin letters refused at bound 52.999910.
 //
 // **The paragraph's own share** — the same bound with `share(original)` in place
 // of the corpus ratio. It dies identically, and the algebra says why: holding
@@ -32,82 +49,30 @@ package text_test
 // MONOSCRIPT original, where the share is exactly 1.0 and the bound equals the
 // length — one incidental value shared across the whole fixture set.
 //
-// # Why a constant is now declared rather than avoided
+// A share comparison with a TOLERANCE was not refuted, only measured to keep a
+// boundary: refusing any increase above two percentage points against 96 Latin
+// and 4 Greek, a candidate of 94 and 6 sits at exactly 0.020000 and passes while
+// 93 and 6 sits at 0.020606 and fails.
 //
-// Order statistics cannot see magnitude. Any rule comparing a script's share
-// before and after has knife-edge jitter, because holding one script constant
-// while another grows moves both shares. Any rule comparing counts against a
-// proportional bound reduces to the share rule. So this takes a CEILING, which
-// is not a comparison and therefore does not jitter, and the number is declared
-// undeliverable the way #92 declared the paragraph floor.
+// # Decision
 //
-// The ceiling is a PARAMETER here rather than a constant, because the
-// measurement should not own the policy. The declared value lives beside the
-// rejection code it produces.
+// A FIXED ceiling, in place of the two PROPORTIONAL bounds above — the corpus
+// reference and the paragraph's own share — which scale with the text and were
+// refuted on lengthening. It also sees magnitude, which the plurality rule did
+// not. It is still a threshold on a ratio, and `ScriptSet.Exceeding` records what
+// that costs.
 //
-// # Evidence for the value chosen by the caller
+// # Unresolved
 //
-// Measured over the maintainer's corpus through the real admission path, with
-// hapax's own output files excluded (#109): of 1959 admitted paragraphs, TWO
-// contain any non-Latin script at all, at 0.1608% and 0.3831%. #91's incident
-// is 18 Han letters of 86, or 20.9%. Any ceiling between about 1% and 15%
-// separates every observed legitimate use from the incident by more than an
-// order of magnitude in both directions.
-//
-// # The rule
-//
-// A script at or above `established` in the ORIGINAL is one of the languages
-// that paragraph is written in, and is not constrained — a bilingual paragraph
-// may be rewritten in either of its languages. Every other script, present or
-// absent, may not exceed `ceiling` of the candidate WHILE USING MORE LETTERS OF
-// IT than the original did.
-//
-// The two thresholds are separate parameters because they answer two questions
-// and only one has evidence. The corpus says how much of a script a candidate
-// may contain; it says nothing about how much a paragraph must already hold for
-// that script to be its own. One number for both put the line one quotation
-// wide — at 5%, sixteen CJK letters establish Han in half the corpus's
-// paragraphs, after which the guard is off at any share.
-//
-// The count condition is what keeps a SHORTENING rewrite admissible. A ceiling
-// alone reintroduces the failure that ruled out shares in the first place:
-// measured, a 200-letter paragraph with 6 Greek letters cut to 70 letters with
-// FOUR is 5.71%, over the ceiling, and refused for a script it shrank.
-//
-// On its own, though, that condition is a carryover term, and a carryover term
-// is what let a candidate spend a banked count at any share. Measured: a
-// paragraph at Han 21 of 107, which is 19.6% and the shape #91's incident LEFT
-// IN THE FILE, becomes Han 21 of 21 by deleting every Latin letter, and the
-// count never grew. So the condition is disjunctive — a script may keep its
-// letters, but may not take over the paragraph:
-//
-//	refuse  iff  not established
-//	        and  share(candidate) > ceiling
-//	        and  ( count grew  or  share(candidate) >= established )
-//
-// The share arm is INCLUSIVE, and it has to be, because `established` itself is
-// inclusive. Written exclusive the two comparisons point opposite ways: a
-// candidate landing exactly on the threshold is admitted, and is then
-// established as the next invocation's anchor, which is one rung of #111 created
-// by a choice of operator. Measured — Han 15 of 90 shortened to 15 of 60 is
-// exactly 25.0000% on an unchanged count, and the next invocation may take it to
-// 100%. So a rewrite may KEEP a script at the threshold and may never CLIMB to
-// it.
-//
-// The relation to #91 is CONTAINMENT, not equality. An introduced script has an
-// original count of zero, so it is never established and its count always grew:
-// everything #91 refuses, this refuses too at a ceiling of zero. The converse is
-// false, and deliberately so — growth without introduction is the whole subject
-// of #107, so at any ceiling this names scripts #91 does not.
-//
-// An earlier draft claimed the two coincide exactly at a ceiling of zero. That
-// was true of the rule before the count condition and false after it, and the
-// claim outlived the change. Third time in this issue that a rule change left a
-// claim behind, so: the header is re-derived with the fixtures, not after them.
+// The declared values, the rejection rate on legitimate rewrites, and whether
+// proportional growth should be exempt: #136. What the three refutations do NOT
+// rule out: per-paragraph maxima, conditional distributions, and the tolerance
+// measured above.
 
 import (
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/fissible/hapax/internal/text"
@@ -249,9 +214,11 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			want:      nil,
 		},
 		{
-			// The case that killed the previous design. A longer rewrite is
-			// admissible whether or not the original is multi-script, because a
-			// ceiling does not move with length.
+			// The case that killed the previous design, which refused a
+			// lengthening rewrite for its length alone. Latin is the only script
+			// in either text, so the original's own share exempts it. Nothing
+			// here says a longer rewrite is admissible in general: 96 Latin + 4
+			// Greek to 96 + 6 puts Greek at 0.0588 and names it.
 			name:      "lengthening a monoscript paragraph",
 			original:  "The author never draws it.",
 			candidate: "The author never draws it, and the reader never thinks to ask him why.",
@@ -274,24 +241,29 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			want:      nil,
 		},
 		{
-			// #91's incident: Han 1 of 53 becomes 18 of 86, or 20.9%.
-			name:      "the reported incident",
+			// INCIDENT-DERIVED, not the incident: one Han letter is added to the
+			// original so #91's guard is disarmed, and Han 1 of 53 at 0.0189
+			// becomes 18 of 86 at 0.2093. The reported pair itself, 52 Latin to
+			// 92 Latin + 21 Han, is asserted in scripts_test.go.
+			name:      "an incident-derived rewrite",
 			original:  "So I asked an AI to attack it. Not to review it politely. To break it 著.",
 			candidate: "And hence I posed a challenge to the AI may it not just offer a courteous assessment 質疑它能否不僅以禮貌的態度來審視我們",
 			want:      []string{"Han"},
 		},
 		{
-			// #107's own example: 1 of 22 becomes the whole paragraph.
-			name:      "two percent becomes the paragraph",
+			// #107's own example: 1 Han letter of 22, or 4.55%, becomes the
+			// whole paragraph.
+			name:      "one Han letter becomes the paragraph",
 			original:  "The author 著 never draws it.",
 			candidate: "作者從不畫它，著者亦然，他從未真正描繪過它，也不曾提起。",
 			want:      []string{"Han"},
 		},
 		{
-			// ESTABLISHED. Han is half the original, so it is above the ceiling
-			// and unconstrained: a bilingual paragraph may be rewritten in
-			// either of its languages.
-			name:      "a script already above the ceiling is unconstrained",
+			// ESTABLISHED. Han is 3 letters of 6 in the original, at 0.5000, so
+			// the predicate's first line exempts it from THIS guard however far
+			// it grows. #91's introduction guard is separate, has its own anchor,
+			// and this row asserts nothing about it.
+			name:      "a script established in the original is exempt",
 			original:  "abc 漢字漢",
 			candidate: "作者從不畫它，著者亦然。",
 			want:      nil,
@@ -310,9 +282,11 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			// SHORTENING, with the script's own letters REMOVED. Greek is 2 of
 			// 49 in the original and 1 of 18 in the candidate: 5.56%, over the
 			// ceiling, on one fewer Greek letter. A ceiling alone refuses this
-			// for a script it shrank, which is the failure that ruled out
-			// shares in the first place, so the rule also requires the count to
-			// have grown.
+			// for a script it shrank, which is the failure that ruled out shares
+			// in the first place. Here the count arm is silent because the count
+			// fell and the share arm is silent because 5.56% is under
+			// establishment; both arms are needed, and the takeover row below is
+			// named on a count that did not grow.
 			name:      "shortening past the ceiling while removing the script",
 			original:  "The author never draws it at all and the reader never asks αβ",
 			candidate: "The author draws α now",
@@ -343,8 +317,10 @@ func TestExceedingNamesTheScriptsThatCrossTheCeiling(t *testing.T) {
 			// at 25%, both are far over the 5% ceiling, and a real rewrite grows
 			// both — so both are refused. This is the cost of an absolute
 			// establishment share, recorded here rather than discovered later:
-			// a paragraph mixing scripts in the band between the two thresholds
-			// cannot grow either of them.
+			// growing a script in the band needs the rest of the paragraph to
+			// grow with it. Measured, the escape: 60 Latin + 20 Greek + 20 Han to
+			// 960 + 21 + 21 grows both counts and names neither, both shares
+			// having fallen to 0.0210.
 			name: "a rewrite of a paragraph with two scripts in the band",
 			// Greek 15 of 66 is 22.7% and Han 11 of 66 is 16.7% — both over the
 			// ceiling, both under establishment — and the candidate grows each
@@ -484,7 +460,15 @@ func TestAScriptExactlyOnTheCeilingHasNotCrossedIt(t *testing.T) {
 // asserted: growth without introduction is what #107 exists for.
 //
 // At a ceiling of one nothing crosses, because no share exceeds one.
-func TestEverythingTheShippedGuardRefusesThisRefusesToo(t *testing.T) {
+//
+// SCOPE, because the name used to claim more than this reaches: one anchor is
+// passed to both functions and establishment is held above one, so what is
+// established is containment at a ceiling of zero WITH EQUAL ANCHORS and
+// nothing established. Production passes different anchors — introduction reads
+// `current`, growth reads `original` — and there containment fails in both
+// directions; `TestNeitherGuardContainsTheOtherWithProductionAnchors` below
+// holds that case.
+func TestAtCeilingZeroAndOneAnchorGrowthRefusesEveryIntroduction(t *testing.T) {
 	// Establishment is held ABOVE one so nothing is ever established here; the
 	// boundary being probed is the ceiling's.
 	const established = 1.1
@@ -517,6 +501,78 @@ func TestEverythingTheShippedGuardRefusesThisRefusesToo(t *testing.T) {
 					original, candidate, got)
 			}
 		}
+	}
+}
+
+// Neither guard contains the other once production's anchors are used.
+//
+// The containment above holds only WITH EQUAL ANCHORS at a ceiling of zero.
+// Production passes `original` to growth and the advancing `current` to
+// introduction, and then each guard refuses something the other permits. Three
+// measured cases, in both directions: two where introduction refuses and growth
+// does not, and #107's own incident, where growth refuses and introduction does
+// not.
+//
+// Every text is built from repeated letters so the counts are exactly the ones
+// the comments name.
+func TestNeitherGuardContainsTheOtherWithProductionAnchors(t *testing.T) {
+	const established, ceiling = 0.25, 0.05
+	build := func(latin, greek, han int) text.ScriptSet {
+		return text.Scripts(strings.Repeat("a", latin) + " " +
+			strings.Repeat("α", greek) + " " + strings.Repeat("著", han))
+	}
+	for _, c := range []struct {
+		name                          string
+		original, current, candidate  text.ScriptSet
+		ceiling                       float64
+		wantExceeding, wantIntroduced []string
+	}{
+		{
+			// The ceiling. One Han letter in a 70-letter paragraph is 0.0143,
+			// under the ceiling, and introduced.
+			name:           "introduction refuses under the ceiling",
+			original:       build(69, 0, 0),
+			current:        build(69, 0, 0),
+			candidate:      build(69, 0, 1),
+			ceiling:        ceiling,
+			wantIntroduced: []string{"Han"},
+		},
+		{
+			// The anchor, which no ceiling fixes: at a ceiling of ZERO growth
+			// still exempts Greek, because Greek is established in the original
+			// at 0.3000 — and it is absent from current.
+			name:           "introduction refuses what the original established",
+			original:       build(70, 30, 0),
+			current:        build(100, 0, 0),
+			candidate:      build(70, 30, 0),
+			ceiling:        0,
+			wantIntroduced: []string{"Greek"},
+		},
+		{
+			// #107 itself, at the incident-DERIVED counts: Han is 1 of 53 in the
+			// original and in current, so nothing is introduced, and the
+			// candidate takes it to 0.2093.
+			name:          "growth refuses what introduction permits",
+			original:      build(52, 0, 1),
+			current:       build(52, 0, 1),
+			candidate:     build(68, 0, 18),
+			ceiling:       ceiling,
+			wantExceeding: []string{"Han"},
+		},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := c.candidate.Exceeding(c.original, established, c.ceiling)
+			if len(got) != 0 || len(c.wantExceeding) != 0 {
+				if !reflect.DeepEqual(got, c.wantExceeding) {
+					t.Errorf("Exceeding(original) = %v, want %v", got, c.wantExceeding)
+				}
+			}
+			if got := c.candidate.Introduced(c.current); len(got) != 0 || len(c.wantIntroduced) != 0 {
+				if !reflect.DeepEqual(got, c.wantIntroduced) {
+					t.Errorf("Introduced(current) = %v, want %v", got, c.wantIntroduced)
+				}
+			}
+		})
 	}
 }
 

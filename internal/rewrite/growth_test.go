@@ -1,49 +1,46 @@
 package rewrite_test
 
 // #107. #91's gate refuses a script the CURRENT text does not use, so one
-// pre-existing character disarms it: a paragraph containing a single Han
-// letter can come back largely Han, introducing nothing.
+// pre-existing character disarms it: a paragraph containing a single Han letter
+// can come back largely Han, introducing nothing.
 //
-// The rule, measured in `internal/text`: a script already at or above
-// `ScriptCeiling` in the ORIGINAL is established and unconstrained; every other
-// script, present or absent, may not exceed that share of the candidate.
+// # Contract
 //
-// The number is declared rather than derived, and `ScriptCeilingDerived` says
-// so. Three constant-free designs were measured and discarded first — the last
-// two died on the same inequality, refusing every lengthening rewrite of a
-// multi-script paragraph.
+// The predicate is stated on text.ScriptSet.Exceeding; the declared values and
+// the argument for them are on rewrite.ScriptCeiling. Neither is restated here.
 //
-// The half that belongs HERE, rather than in the measurement, is the ANCHOR.
-// Both thresholds are judged against the paragraph the loop started from, not
-// the advancing `current`. The route the anchor closes is the COUNT condition,
-// and it is worth being exact about which mechanism does the work, because
-// raising the establishment threshold above the ceiling already closed a
-// different one: a candidate can never reach 25% while anything over 5% is
-// refused, so no rewrite can make a script established.
+// What belongs HERE is the ANCHOR, because it is this package's choice and not
+// the measurement's: growth is judged against the ORIGINAL paragraph while #91's
+// introduction is judged against the ADVANCING current text. `current` moves on
+// acceptance under ADR 0006, so a growth bound that moved with it would ratchet
+// — the distinction #116 settled, an INVARIANT anchoring on the original and a
+// MONOTONE comparison ratcheting against current.
 //
-// What remains is banking a count at exactly the ceiling and then shrinking:
+// # Consequence
 //
-//	original            Han 0 of 20             0%
-//	attempt 1           Han 1 of 20           5.0%   admissible, the bound is strict
-//	attempt 2           Han 1 of 10          10.0%   admissible against attempt 1,
-//	                                                  because the COUNT did not grow
+// Neither guard contains the other at the declared thresholds, in both
+// directions. The tests in THIS file drive fake verdicts and assert the loop's
+// plumbing, not the predicate; the three cases below are reproduced against the
+// real `text.ScriptSet`, with these anchors, by
+// `TestNeitherGuardContainsTheOtherWithProductionAnchors` in
+// internal/text/exceeding_test.go.
 //
-// Against the original, attempt 2 grew from 0 to 1 and sits at twice the
-// ceiling, so a fixed anchor refuses it. Measured, all three rungs. The live
-// store shows 2 of 7 recorded invocations accepted twice, including #91's own,
-// so this is a reachable sequence rather than a hypothetical one.
+// Introduction refuses what growth permits, for two independent reasons:
 //
-// That makes `Language`'s signature `(original, current, candidate)`: two
-// anchors, one call, because both facts are measured from the same candidate
-// and a second gate method would need its own "consulted once" invariant.
+//   - The ceiling. At 0.05 a 69-letter Latin paragraph gaining one Han letter is
+//     refused by #91 and not by this rule, because 1/70 is 0.0143.
+//   - The anchor, which no ceiling fixes. With an original of 70 Latin and 30
+//     Greek and a current of 100 Latin, a candidate of 70 and 30 is refused by
+//     #91 — Greek is absent from current — and exempt here, because Greek is
+//     established in the original. That holds at a ceiling of zero.
 //
-// The two guards are COMPLEMENTARY at a non-zero ceiling, not nested. #91
-// refuses any introduction however small; this refuses any crossing of the
-// ceiling whether the script was present or not. Measured: one Han character
-// added to a 69-letter paragraph is 1.4% and this rule does not see it, while
-// #91 does. They coincide only at a ceiling of zero, which `internal/text`
-// asserts. When both fire, `language` is reported — a script that was never
-// there is the more specific claim — and both records are populated either way.
+// Growth refuses what introduction permits, which is #107 itself: against an
+// original and a current of 52 Latin + 1 Han — incident-DERIVED counts, the
+// reported pair being 52 Latin to 92 Latin + 21 Han — a candidate of 68 Latin +
+// 18 Han introduces nothing and takes Han from 0.0189 to 0.2093.
+//
+// When both fire, `language` is reported: a script that was never there is the
+// more specific claim. Both records are populated either way.
 
 import (
 	"context"
@@ -120,8 +117,10 @@ func TestACandidateThatOvergrowsAScriptIsRefused(t *testing.T) {
 // A candidate that grows nothing is not refused for growth.
 //
 // The other half: a policy refusing everything satisfies the test above. Both
-// shapes of "nothing", because `Overgrown` returns an empty non-nil slice on
-// the ordinary path and `!= nil` would refuse every real candidate.
+// shapes of "nothing", because the gate has to accept either representation:
+// `text.ScriptSet.Exceeding` declares its slice and appends, so it returns NIL
+// when nothing qualifies, and a caller building the list eagerly would hand over
+// an empty non-nil one.
 func TestACandidateThatOvergrowsNothingIsNotRefusedForGrowth(t *testing.T) {
 	for _, overgrown := range [][]string{nil, {}} {
 		gate := passingGate()

@@ -30,8 +30,10 @@ func TestTheExecutionGateReportsTheScriptsACandidateIntroduces(t *testing.T) {
 		want               []string
 	}{
 		{
-			// The incident: English prose returned in Han.
-			name:      "the reported incident",
+			// Incident-SHAPED: English prose returned in another script. #91's
+			// reported pair is Han only (52 Latin to 92 Latin + 21 Han); this
+			// candidate is Japanese, so it introduces Hiragana as well.
+			name:      "english prose returned in another script",
 			current:   "The argument turns on a distinction the author never draws.",
 			candidate: "論点は著者が引かない区別にかかっている。",
 			want:      []string{"Han", "Hiragana"},
@@ -138,15 +140,17 @@ func TestTheExecutionGateReportsScriptsCrossingTheCeiling(t *testing.T) {
 		want                      []string
 	}{
 		{
-			// #107 itself: Han was already present, so nothing is introduced.
-			name:      "two percent becomes the paragraph",
+			// #107 itself: Han was already present, so nothing is introduced,
+			// and 1 Han letter of 22 — 4.55% — becomes the whole paragraph.
+			name:      "one Han letter becomes the paragraph",
 			original:  "The author 著 never draws it.",
 			candidate: "作者從不畫它，著者亦然，他從未真正描繪過它，也不曾提起。",
 			want:      []string{"Han"},
 		},
 		{
-			// The case the two discarded designs refused. A ceiling does not
-			// move with length, so lengthening is free.
+			// Latin is the only script in either text, so the original's
+			// own share exempts it. Not a licence for lengthening in general:
+			// 96 Latin + 4 Greek to 96 + 6 lengthens and names Greek at 0.0588.
 			name:      "lengthening a monoscript paragraph",
 			original:  "The author never draws it.",
 			candidate: "The author never draws it, and the reader never thinks to ask him why.",
@@ -168,9 +172,11 @@ func TestTheExecutionGateReportsScriptsCrossingTheCeiling(t *testing.T) {
 			want:      nil,
 		},
 		{
-			// Established: Han is half the original, so a bilingual paragraph
-			// may be rewritten in either of its languages.
-			name:      "a script already above the ceiling is unconstrained",
+			// ESTABLISHED. Han is 3 letters of 6 in the original, at 0.5000, so
+			// the predicate's first line exempts it from THIS guard however far
+			// it grows. #91's introduction guard is separate, has its own anchor,
+			// and this row asserts nothing about it.
+			name:      "a script established in the original is exempt",
 			original:  "abc 漢字漢",
 			candidate: "作者從不畫它，著者亦然。",
 			want:      nil,
@@ -234,7 +240,7 @@ func TestTheExecutionGateUsesTheDeclaredCeiling(t *testing.T) {
 //
 // Its sibling got a boundary pair and this did not, so substituting the gate's
 // threshold directly, the package accepted anything in (0.0455, 0.50] — a
-// ten-fold range whose low end sits a thousandth above the ceiling. A policy
+// ten-fold range whose low end sits 0.0045 BELOW the ceiling. A policy
 // change to the constant could also ship with the binary unchanged, because the
 // call site could carry a literal.
 //
@@ -271,10 +277,14 @@ func TestTheExecutionGateUsesTheDeclaredEstablishmentThreshold(t *testing.T) {
 // Both thresholds are judged against the FIRST argument, not the second.
 //
 // The route the anchor closes is the COUNT condition. Raising establishment
-// above the ceiling already closed the other one — a rewrite cannot make a
-// script established, because anything over the ceiling is refused long before
-// 25%. What remains is banking a count at exactly the ceiling and then
-// shrinking, which doubles the share while the count stays flat.
+// above the ceiling already closed the other one: a script the ORIGINAL does not
+// establish cannot become established by acceptance, because arriving at
+// establishment is itself over the ceiling, and the takeover arm names it there
+// with or without count growth. That is NOT a claim that everything over the
+// ceiling is refused — this very test admits Han at 10% against the banked
+// anchor, on an unchanged count. What remains is banking a count at exactly the
+// ceiling and then shrinking, which doubles the share while the count stays
+// flat.
 func TestTheExecutionGateJudgesBothThresholdsFromTheOriginal(t *testing.T) {
 	const origin = "abcdefghijklmnopqrst" // 20 Latin, Han 0
 	const banked = "abcdefghijklmnopqrs著" // 20 letters, Han 1 = 5.00%
