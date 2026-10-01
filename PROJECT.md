@@ -154,6 +154,70 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (slice B1: publication identity and evidence)
+
+PR [#139](https://github.com/fissible/hapax/pull/139), CI green on both runners. Branch
+`feat/publication-identity` off main. PR [#138](https://github.com/fissible/hapax/pull/138),
+slice A of the same sprint, is open and independent — it carries the sprint plan, and both touch
+this section, so whichever merges second needs a one-hunk conflict resolved.
+
+**What shipped.** A published paragraph's identity is now
+`H(admit(assembled).Raw()[leaf.Span])` — the leaf span of the RE-ADMITTED FINAL document, which
+is what the plan (#111) and the corpus screen (#109) already computed, so three components agree
+by adopting the two that already agreed. `candidate_hash` stays the raw provider string, because
+the audit record answers what was RETURNED. Both screens read
+`published_paragraph(invocation_id, node_id, paragraph_hash)`, which `cli` writes AFTER
+`Publisher` succeeds; no foreign keys, because the next `index` re-derives every node id and a
+reference would cascade the evidence away when the screen first needs it. Migration 12 creates it
+empty and records a one-row marker when the store already held accepted attempts — no publication
+history can be derived from `accepted=1` without importing the equation #134 refutes.
+
+**Both defects reproduced before any design work.** A trailing newline took the round trip from
+`already-rewritten` to `target`. A provider that answered once and then errored returned
+`provider down` and zero bytes while `PublishedParagraphs` held one entry, and an AUTHOR document
+carrying that paragraph planned as `already-rewritten=1` — the screen removing the author's own
+writing from their own corpus.
+
+**The freeze is 152c5b8**, seventeen files, `.duet/b1-publication.{ref,sha256}`. Seven review
+rounds before it. The implementer then found four defects IN the frozen tests and stopped rather
+than editing them; three were declarations I had not extended, and the fourth was a fixture that
+copied a SQLite file with WAL connections open, losing the release so `Execute` failed with
+`invalid rewrite plan`. Amended by consensus, committed on its own, re-frozen.
+
+**Two things to carry forward.**
+
+- `internal/workflow` is the expensive package: nearly every test builds a corpus, indexes it and
+  installs a release, measured at **993 ms** each, and B1 added about twenty-five. Under `-race`
+  on one machine the package went 300.9s on main to 362.8s, +20.6%, which crossed Go's DEFAULT
+  10m per-package timeout on CI — the job timeout had been raised before and `go test`'s own
+  never had been. `-timeout 20m` is now explicit in `ci.yml`, job 30m. Both runners now measure
+  11m44s and 12m42s, so this was never a macOS-only problem. That buys room; it does not change
+  the trajectory.
+- Sharing one corpus across a table's rows is NOT the obvious fix it looks like:
+  `executingRunner` injects a constant invocation id, so a second run against the same store
+  fails on `rewrite_attempt`'s primary key with `store: conflict`. Per-row invocation ids inside
+  frozen tests is a real change and belongs in its own slice.
+
+### Next: slice B2 — #135, the splice verdict
+
+The gate is consulted on every candidate and recorded on none, so an unspliceable non-improving
+candidate and a spliceable one leave indistinguishable records — and the check costs up to 89.6 ms
+against 26 µs to score a paragraph. One column, one field, one migration; `rewrite_attempt` has
+been rebuilt four times and the pattern is established. Tri-state, because the four gates run only
+when scoring produced no rejection: `''` means NO VERDICT RECORDED, which for a migrated row may
+mean the gate ran and its result was discarded — calling those "not evaluated" would invent a
+historical fact.
+
+B2 also carries a strike. #115's header justifies LAST precedence partly on "a stored
+`rewrite_attempt` row can be replayed and its `rejection` recomputed", which is false: the row
+holds hashes, not prose, which is the privacy invariant. Three locations —
+`internal/rewrite/splice_test.go`'s header, `RejectionNotSpliceable`'s comment, and the inline
+precedence comment in `rewrite.go`. The precedence CHOICE survives on the document-dependence
+argument; the replay argument does not and should be replaced rather than repaired.
+
+Then slice C, #133, which adopts the canonical form B1 established. A v0.1.1 should follow both,
+because v0.1.0's README advertises guards #132 and #133 defeat.
+
 ### 2026-09-29 (v0.1.0, and closing the self-contamination loop)
 
 Merged #124, #127, #129, #131. Closed #109, #111, #117, #125. Filed #122, #123, #125,
