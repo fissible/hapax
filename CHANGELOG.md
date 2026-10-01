@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+## [Unreleased]
+
+### Fixed
+- Rewrite publication identity now hashes each changed target's included leaf in the re-admitted final document, accounting for whitespace, BOMs and earlier replacements' offset shifts (#132).
+- Both tool-output screens now use atomic publication evidence recorded after successful file publication, rather than accepted attempt hashes. Only the last accepted candidate per changed target is recorded; attempt hashes still describe the exact provider response (#134).
+- A recording failure after publication exits 3 with a diagnostic and no stdout result, in human and JSON modes.
+
+### Changed
+- Migration 12 creates publication evidence without backfilling history. Paragraphs published before this upgrade stop being screened; stores with earlier accepted attempts disclose a persistent `publication-evidence-gap` on index. This deliberately fails to exclude unrecorded output rather than risk excluding the author's own prose based on an attempt that was never published.
+
 ## [0.1.0] - 2026-09-29
 
 ### Added

@@ -772,12 +772,13 @@ type IndexResult struct {
 	TrainParagraphs   int                `json:"train_paragraphs"`
 	// ToolOutputDocuments carries unconditionally, beside the five other
 	// counts, so a consumer can tell zero from absent without parsing a line.
-	ToolOutputDocuments int              `json:"tool_output_documents"`
-	ProfileID           *string          `json:"profile_id"`
-	ReferenceID         *string          `json:"reference_id"`
-	NotReadyReason      string           `json:"profile_not_ready_reason"`
-	Checks              []workflow.Check `json:"checks"`
-	Pruned              workflow.Pruned  `json:"pruned"`
+	ToolOutputDocuments    int              `json:"tool_output_documents"`
+	PublicationEvidenceGap bool             `json:"publication_evidence_gap"`
+	ProfileID              *string          `json:"profile_id"`
+	ReferenceID            *string          `json:"reference_id"`
+	NotReadyReason         string           `json:"profile_not_ready_reason"`
+	Checks                 []workflow.Check `json:"checks"`
+	Pruned                 workflow.Pruned  `json:"pruned"`
 }
 type ProfileResult struct {
 	Store       string             `json:"store"`
@@ -943,7 +944,7 @@ func ptr(s string) *string {
 	return &s
 }
 func indexResultFrom(r workflow.IndexResult) IndexResult {
-	return IndexResult{Store: r.StorePath, SnapshotID: r.SnapshotID, Mode: r.Mode, Adversity: r.Adversity, Documents: r.Documents, Eligible: r.Eligible, Nodes: r.Nodes, CalibrateSegments: r.CalibrateSegments, TrainParagraphs: r.TrainParagraphs, ToolOutputDocuments: r.ToolOutputDocuments, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), NotReadyReason: r.NotReadyReason, Checks: r.Checks, Pruned: r.Pruned}
+	return IndexResult{Store: r.StorePath, SnapshotID: r.SnapshotID, Mode: r.Mode, Adversity: r.Adversity, Documents: r.Documents, Eligible: r.Eligible, Nodes: r.Nodes, CalibrateSegments: r.CalibrateSegments, TrainParagraphs: r.TrainParagraphs, ToolOutputDocuments: r.ToolOutputDocuments, PublicationEvidenceGap: r.PublicationEvidenceGap, ProfileID: ptr(r.ProfileID), ReferenceID: ptr(r.ReferenceID), NotReadyReason: r.NotReadyReason, Checks: r.Checks, Pruned: r.Pruned}
 }
 func profileResultFrom(r workflow.ProfileResult) ProfileResult {
 	if r.Selection != workflow.SelectedSoleHead && r.Selection != workflow.SelectedExplicit {
@@ -1163,6 +1164,12 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 		}
 		return 3
 	}
+	if evidence := outcome.Publication(); action != noPublication && len(evidence.Paragraphs) != 0 {
+		if err := deps.Service.RecordPublication(ctx, evidence); err != nil {
+			diagnostic(deps.Stderr, fmt.Sprintf("published %s but could not record publication evidence: %v", destination, err))
+			return 3
+		}
+	}
 	result := rewriteResultFrom(report, destination)
 	status, code := StatusOK, 0
 	if report.State == workflow.RewriteNoneImproved {
@@ -1215,6 +1222,9 @@ func humanResult(result any) string {
 		// nothing on every ordinary run. The envelope keeps the zero.
 		if x.ToolOutputDocuments != 0 {
 			f.AddInt("tool-output", x.ToolOutputDocuments)
+		}
+		if x.PublicationEvidenceGap {
+			f.AddBool("publication-evidence-gap", true)
 		}
 		return f.String()
 	case ProfileResult:
