@@ -47,8 +47,14 @@ func TestTheRefusalVocabularyIsTheDeclaredSet(t *testing.T) {
 		// #81 added no-such-paragraph: a named paragraph outside the draft's
 		// range. It is a refusal rather than a usage error because the
 		// paragraph count is not known until the draft has been scored.
+		// #133 added publication-measurement-mismatch: a run can accept
+		// candidates and still be unable to publish, when scoring the ASSEMBLED
+		// document does not reproduce what the loop measured. It is a refusal
+		// rather than an error because the loop did its work and the decision is
+		// about the output, not the invocation.
 		"ambiguous-reference", "insufficient-evidence", "local-only-forbids-provider",
-		"no-profile", "no-reference", "no-such-paragraph", "stale-draft",
+		"no-profile", "no-reference", "no-such-paragraph",
+		"publication-measurement-mismatch", "stale-draft",
 		"stale-exemplars", "uncalibrated",
 	}
 	if !reflect.DeepEqual(got, want) {

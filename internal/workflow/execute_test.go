@@ -152,6 +152,11 @@ func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
 		// either: a store path, an invocation id, and one node id and hash per
 		// changed target.
 		{"Publication", "workflow.Publication"},
+		// #133. The targets whose published interpretation did not reproduce what
+		// the loop measured, by the node the plan named. No prose: a node id is a
+		// hash. Empty on every run that publishes, and the refusal is what says a
+		// non-empty one stopped the publication.
+		{"MeasurementMismatches", "[]string"},
 	})
 }
 

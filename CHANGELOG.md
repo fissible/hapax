@@ -9,6 +9,7 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 ## [Unreleased]
 
 ### Fixed
+- Refuse publication when the assembled document does not reproduce the last accepted candidates' interpretation and measurements or changes an untouched included leaf (#133). Check shifted and BOM-adjusted spans, retain local attempt acceptance, and report all mismatched node IDs without publishable bytes or publication evidence. No migration is added.
 - Rewrite publication identity now hashes each changed target's included leaf in the re-admitted final document, accounting for whitespace, BOMs and earlier replacements' offset shifts (#132).
 - Both tool-output screens now use atomic publication evidence recorded after successful file publication, rather than accepted attempt hashes. Only the last accepted candidate per changed target is recorded; attempt hashes still describe the exact provider response (#134).
 - A recording failure after publication exits 3 with a diagnostic and no stdout result, in human and JSON modes.
