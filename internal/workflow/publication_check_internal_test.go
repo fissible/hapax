@@ -31,6 +31,7 @@ package workflow
 // constructible. It is, and the token stream is what separates them.
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/fissible/hapax/internal/deviation"
@@ -173,6 +174,11 @@ func TestCheckPublicationNamesTheNodesThatDoNotReproduce(t *testing.T) {
 		expected = append(expected, publicationExpectation{
 			NodeID: "node-" + string(rune('a'+i)), Span: leaf.Span,
 			Tokens: tokens, Measured: segment,
+			// EXPLICIT, so the two cases below perturb a value that was set
+			// rather than one the implementation defaulted. The documented
+			// default is still exercised, by the uncalibrated and below-floor
+			// tests further down, which leave both fields zero.
+			Role: leaf.Role, Containers: slices.Clone(leaf.Containers),
 		})
 	}
 
@@ -201,6 +207,28 @@ func TestCheckPublicationNamesTheNodesThatDoNotReproduce(t *testing.T) {
 				e[1].Tokens[0].Text = "Another"
 			},
 			want: "node-b",
+		},
+		{
+			// The ROLE alone. The splice gate checks this per candidate against
+			// the ORIGINAL document; it cannot establish it for the combined one,
+			// which is what this checker owns.
+			name: "the leaf's role changed",
+			mutate: func(e []publicationExpectation, _ *score.Report) {
+				e[0].Role = text.RoleHeading
+			},
+			want: "node-a",
+		},
+		{
+			// The container PATH's identity at the same LENGTH, so a comparison
+			// on length alone cannot pass: one container either way.
+			name: "the leaf's container path changed at the same length",
+			mutate: func(e []publicationExpectation, _ *score.Report) {
+				e[0].Containers = []text.ContainerKind{text.ContainerList}
+				if len(e[0].Containers) != 1 {
+					panic("this case needs a one-element path to keep the length equal")
+				}
+			},
+			want: "node-a",
 		},
 		{
 			name: "a leaf disappeared",
