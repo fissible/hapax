@@ -67,6 +67,11 @@ C  the scoring invariant     needs B's form   publishes what it scored
    (#133)
 ```
 
+**B split into B1 and B2 after the design pass.** The grouping was "one `rewrite_attempt`
+rebuild rather than two", and that stopped applying: B1's fix is a NEW table and rebuilds
+nothing, while `#135` needs its own column regardless. The replay-argument strike `#135` calls
+for went with it into B2.
+
 `#132` and `#134` are one question from two sides — *what bytes, from what evidence, count
 as a published paragraph* — so they are one slice. Deriving the evidence from the assembled
 bytes rather than the attempt table fixes the representation mismatch as a consequence,
@@ -79,9 +84,10 @@ goes after rather than in parallel.
 
 | Slice | Issues | Effort | Deps | Status |
 |---|---|---|---|---|
-| A — strike the false claims | finding 5, no issue | XS | none | **done** |
-| B — publication identity and evidence | [#132](https://github.com/fissible/hapax/issues/132), [#134](https://github.com/fissible/hapax/issues/134), [#135](https://github.com/fissible/hapax/issues/135) | M–L | A | planned |
-| C — publish what was scored | [#133](https://github.com/fissible/hapax/issues/133) | M–L | B | planned |
+| A — strike the false claims | finding 5, no issue | XS | none | **merged** ([#138](https://github.com/fissible/hapax/pull/138)) |
+| B1 — publication identity and evidence | [#132](https://github.com/fissible/hapax/issues/132), [#134](https://github.com/fissible/hapax/issues/134) | M–L | A | **merged** ([#139](https://github.com/fissible/hapax/pull/139)) |
+| B2 — the splice verdict | [#135](https://github.com/fissible/hapax/issues/135) | S | none | **PR [#140](https://github.com/fissible/hapax/pull/140)** |
+| C — publish what was scored | [#133](https://github.com/fissible/hapax/issues/133) | M–L | B1 | **next** |
 
 Reviewer for this sprint is **codex**. What the history establishes is that eight
 consecutive Claude reviews did not find these defects; it does not isolate model identity as
@@ -205,6 +211,58 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (slices B1 and B2)
+
+**B1 (#132 + #134) is merged** as PR #139. **B2 (#135) is PR #140**, CI green on ubuntu with
+macOS running at the time of writing. Slice A is merged as #138.
+
+B1's own handoff note was LOST in #139's merge: it conflicted with slice A's edit to this
+section and the resolution took A's side. What follows restores the parts a later session needs,
+because the roadmap is supposed to be readable with no prior context.
+
+**What B1 shipped.** A published paragraph's identity is `H(admit(assembled).Raw()[leaf.Span])` —
+the leaf span of the RE-ADMITTED FINAL document, which is what the plan (#111) and the corpus
+screen (#109) already computed. `candidate_hash` stays the raw provider string, because the audit
+record answers what was RETURNED. Both screens read
+`published_paragraph(invocation_id, node_id, paragraph_hash)`, written by `cli` AFTER `Publisher`
+succeeds; no foreign keys, because the next `index` re-derives every node id. Migration 12
+creates it empty and records a one-row marker when the store already held accepted attempts.
+
+**What B2 ships.** `rewrite_attempt.splice` — `''`, `intact`, `not-intact` — assigned after the
+splice gate returns and before the precedence switch, so the verdict survives whichever rejection
+wins. Migration 13, an ADD COLUMN rather than a sixth rebuild, measured against the driver first.
+Three contradictions refused at three layers from one shared validator.
+
+### Three things a later session will otherwise rediscover
+
+**Two slices can claim the same migration index and neither suite can see it.** B1 and B2 both
+wrote migration 12. Each was correct alone; the collision only existed once one merged, and it
+surfaced on REBASE rather than in any test run. Read main's migration count at the start of a
+slice rather than assuming the next index — and expect a rebase, not a test failure, to be what
+tells you.
+
+**`internal/workflow` is the expensive package and it is near a limit again.** Nearly every test
+builds a corpus, indexes it and installs a release, measured at **993 ms** each, and B1 added
+about twenty-five. Under `-race` on one machine the package went 300.9s to 362.8s, +20.6%, which
+crossed Go's DEFAULT 10m per-package timeout on CI — the job timeout had been raised before and
+`go test`'s own never had been. `ci.yml` now passes `-timeout 20m` with the job at 30m. Both
+runners measure about 12m40s. That buys room; it does not change the trajectory.
+
+**Sharing one corpus across a table's rows does not work**, which is the obvious way to cut that
+cost. `executingRunner` injects a constant invocation id, so a second run against the same store
+fails on `rewrite_attempt`'s primary key with `store: conflict`. Per-row invocation ids inside
+frozen tests is a real change and belongs in its own slice.
+
+### Next: slice C — #133
+
+Publish what was scored. The splice gate publishes a paragraph it never scored: the loop scores
+each candidate in isolation, and `assemble` splices the accepted text back, so what reaches the
+file can differ from what the distance was measured on. C adopts the canonical paragraph form B1
+established — the re-admitted assembled leaf — which is why it was sequenced after B1 rather
+than in parallel.
+
+A v0.1.1 should follow C, because v0.1.0's README advertises guards that #132 and #133 defeat.
+
 ### 2026-09-30 (codex sprint, slice A — the false claims)
 
 Slice A is committed. It changes no behavior: seven files of comments and prose, struck
@@ -275,15 +333,10 @@ them pulled that file into review, which produced three more rounds. Left alone:
 "an earlier version..." notes across 32 other files — codex's position is that the note
 itself is not the problem, only a false opening claim with its correction appended.
 
-### Next: slice B — #132 + #134 + #135
+### Next, as slice A left it: slice B
 
-Publication identity and evidence. `#132` and `#134` are one question from two sides — what
-bytes, from what evidence, count as a published paragraph — so they are one slice, and
-deriving the evidence from the ASSEMBLED bytes rather than the attempt table fixes the
-representation mismatch as a consequence. `#135` joins them if the fix needs a
-`rewrite_attempt` column. Then slice C (#133) adopts whatever canonical form B establishes.
-A v0.1.1 release should follow B and C, because v0.1.0's README advertises guards that #132
-and #133 defeat.
+Superseded by the 2026-10-01 note above, which records what B actually became. Kept only so
+this section is not read as current.
 
 ### 2026-09-29 (v0.1.0, and closing the self-contamination loop)
 
