@@ -41,14 +41,19 @@ package rewrite_test
 // # Precedence: LAST
 //
 // Not because it is the most expensive, though it is — up to 89.6 ms against
-// 26 µs to score a paragraph. Because it is **the only gate whose verdict is not
-// a function of the recorded texts.** Preserve, tells, language and the distance
-// are all functions of (original, current, candidate), so a stored
-// `rewrite_attempt` row can be replayed and its `rejection` recomputed.
-// Spliceability depends on the document and the span, and the row carries only
-// `node_id`. Ranking a document-dependent verdict above text-dependent ones
-// would stop the `rejection` field being reproducible from the evidence beside
-// it.
+// 26 µs to score a paragraph. Because every other gate decides from the texts
+// alone, each against its own anchors: preserve compares the candidate with the
+// ORIGINAL, tells with the advancing CURRENT, language reads all three, and the
+// distance compares two scores. Spliceability needs something none of them do —
+// the surrounding DOCUMENT and the span the paragraph occupies in it — so ranking
+// it last means the code reported is the most text-local one that is true.
+//
+// An earlier version of this section argued instead that the other four are
+// reproducible from a stored `rewrite_attempt` row while this one is not. That is
+// false and #135 says so: the row records HASHES, not prose — the privacy
+// invariant — so nothing in it can be recomputed. A decision can be re-read, not
+// reproduced. The precedence choice survives on the argument above; the replay
+// argument does not, and is replaced here rather than qualified.
 //
 // # The anchor is in the method's name
 //

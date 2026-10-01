@@ -523,6 +523,11 @@ func TestEveryRewriteAttemptFieldIsDecidedOnPurpose(t *testing.T) {
 		// derived from the paragraph.
 		"OvergrownScripts": true,
 		"TellsComparison":  true, "TellsComparable": true,
+		// #135. Persisted on the same argument as the two above: the gate runs on
+		// every candidate and its answer is evidence whichever refusal wins, and
+		// the value is one of three closed-vocabulary strings rather than anything
+		// derived from the paragraph.
+		"Splice":   true,
 		"Accepted": true, "Rejection": true,
 		"ProfileID": true, "ProviderID": true, "InvocationID": true,
 	}
@@ -1055,6 +1060,11 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 			"CurrentBand", "CandidateBand", "Preserved", "PreserveIdentifiers",
 			"IntroducedScripts", "OvergrownScripts",
 			"TellsComparison", "TellsComparable", "Accepted", "Rejection",
+			// #135. Listed last because that is where the struct declares it;
+			// an earlier version of this note claimed the position mattered for
+			// migration safety, which is false — persistence names its columns
+			// explicitly. What this test pins is exact MEMBERSHIP.
+			"Splice",
 		}},
 	}
 	for _, c := range declared {
@@ -1087,7 +1097,8 @@ func TestEveryTypeAPersistenceStructReachesIsPermitted(t *testing.T) {
 		"eval.Clustering": true, "eval.ThresholdVerdict": true, "eval.ReleaseReason": true,
 		"features.Tier":  true,
 		"llm.ProviderID": true, "rewrite.RejectionCode": true,
-		"store.Profile": true, "store.ProfileStat": true, "store.Reference": true,
+		"rewrite.SpliceOutcome": true,
+		"store.Profile":         true, "store.ProfileStat": true, "store.Reference": true,
 		"store.Threshold": true, "store.EvalResult": true, "store.ExemplarSelection": true,
 		"store.RewriteAttempt": true, "store.SnapshotWrite": true,
 		"store.Document": true, "store.Node": true,

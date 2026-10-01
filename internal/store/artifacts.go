@@ -253,6 +253,7 @@ type RewriteAttempt struct {
 	TellsComparison           int
 	TellsComparable, Accepted bool
 	Rejection                 rewrite.RejectionCode
+	Splice                    rewrite.SpliceOutcome
 }
 
 // HeadPolicy controls whether a profile write advances its register head.
@@ -1257,6 +1258,14 @@ func invalidAttemptField(stored RewriteAttempt) string {
 	if !known(stored.ProviderID, llm.Providers()) || !known(stored.CurrentBand, eval.Bands()) || !known(stored.CandidateBand, eval.Bands()) || !known(stored.Rejection, rewrite.RejectionCodes()) || !finiteAll(stored.CurrentDistance, stored.CandidateDistance) {
 		return "decision metadata"
 	}
+	if !known(stored.Splice, rewrite.SpliceOutcomes()) ||
+		(stored.Accepted && stored.Splice == rewrite.SpliceNotIntact) ||
+		(stored.Rejection == rewrite.RejectionNotSpliceable && stored.Splice == rewrite.SpliceIntact) ||
+		(stored.Splice != rewrite.SpliceNotRecorded && (stored.Rejection == rewrite.RejectionNotOneSegment ||
+			stored.Rejection == rewrite.RejectionCandidateUnscoreable || stored.Rejection == rewrite.RejectionUncalibrated ||
+			stored.Rejection == rewrite.RejectionDifferentFeatures)) {
+		return "splice"
+	}
 	// An accepted attempt introduced nothing and grew nothing: either refuses, so
 	// a record in that shape means the gate was bypassed. Both clauses live HERE,
 	// in the shared validator, so the rule runs on read as well as on write.
@@ -1333,7 +1342,7 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 		if !exists {
 			return invalidArtifact("rewrite attempt", "profile id")
 		}
-		_, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", x.InvocationID, x.Index, x.ProfileID, x.ProviderID, x.NodeID, x.CurrentHash, x.CandidateHash, x.CurrentDistance, x.CandidateDistance, x.CurrentBand, x.CandidateBand, boolInt(x.Preserved), x.TellsComparison, boolInt(x.TellsComparable), boolInt(x.Accepted), x.Rejection)
+		_, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", x.InvocationID, x.Index, x.ProfileID, x.ProviderID, x.NodeID, x.CurrentHash, x.CandidateHash, x.CurrentDistance, x.CandidateDistance, x.CurrentBand, x.CandidateBand, boolInt(x.Preserved), x.TellsComparison, boolInt(x.TellsComparable), boolInt(x.Accepted), x.Rejection, x.Splice)
 		if err != nil {
 			return err
 		}
@@ -1435,7 +1444,7 @@ func (s *Store) LoadRewriteAttempt(ctx context.Context, id, nodeID string, i int
 func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID string, index int) (RewriteAttempt, error) {
 	var x RewriteAttempt
 	var preserved, tellsComparable, accepted int
-	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection FROM rewrite_attempt WHERE invocation_id=? AND node_id=? AND attempt_index=?", id, nodeID, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection)
+	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice FROM rewrite_attempt WHERE invocation_id=? AND node_id=? AND attempt_index=?", id, nodeID, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection, &x.Splice)
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
@@ -1511,7 +1520,7 @@ func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID strin
 	return x, nil
 }
 func sameAttempt(a, b RewriteAttempt) bool {
-	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts) && sameSet(a.OvergrownScripts, b.OvergrownScripts)
+	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && a.Splice == b.Splice && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts) && sameSet(a.OvergrownScripts, b.OvergrownScripts)
 }
 
 type recorder struct {
@@ -1543,5 +1552,6 @@ func (r recorder) RecordAttempt(attempt rewrite.Attempt) error {
 		TellsComparable:     attempt.TellsComparable,
 		Accepted:            attempt.Accepted,
 		Rejection:           attempt.Rejection,
+		Splice:              attempt.Splice,
 	})
 }

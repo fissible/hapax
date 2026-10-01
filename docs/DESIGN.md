@@ -245,13 +245,17 @@ scalar, lower meaning closer to the author. Bands are labels derived from `d` vi
 calibrated thresholds; `d` itself, not the band, is what the loop compares. Comparing
 bands would make sub-threshold improvement invisible and let the loop stall.
 
-`current` begins as the input text. A candidate — mechanical or LLM-produced — is accepted
-if and only if, against `current`:
+`current` begins as the input text. A candidate — mechanical or LLM-produced — must be
+one scoreable segment with comparable features, and is accepted only when:
 
 1. `d(candidate) ≤ d(current) − ε`, and
-2. `preserve(current → candidate)` passes, and
+2. `preserve(original → candidate)` passes, and
 3. `tells(candidate) ⊑ tells(current)`, a **severity-lexicographic vector**
-   comparison over derived, verdict-eligible findings only — see ADR 0006.
+   comparison over derived, verdict-eligible findings only — see ADR 0006, and
+4. language introduces no script absent from `current` and grows no script beyond the
+   permitted share anchored on `original`, and
+5. the candidate splices into the original document at the original span as exactly one
+   included leaf in the same place and containers.
 
 Improvement is required on `d` alone. Conditions 2 and 3 are non-regression guards, not
 improvement requirements: a rewrite that moves the prose toward the author while leaving
@@ -263,6 +267,19 @@ severity-lexicographic ordering, derived and verdict-eligible findings only, bot
 from the same rule-set digest and options with suppression off, and no comparison at all
 when either report was truncated. **While every shipped rule is unvalidated this condition
 is inert** — it blocks nothing, which is the honest state.
+
+**Splice evidence survives whichever refusal wins (#135).** Once scoring admits a
+candidate to the gates, each gate runs before precedence chooses the rejection. The loop
+records `SpliceIntact` (`intact`) or `SpliceNotIntact` (`not-intact`) immediately after the
+splice gate succeeds, on that attempt. A candidate refused before the gates records
+`SpliceNotRecorded` (`""`). A splice gate error remains a wrapped error with a zero outcome:
+the failing attempt is not recorded, and earlier stored attempts remain.
+
+Spliceability is reported last so the most text-local reason wins. Preserve anchors on
+the original, tells on the advancing current, language reads all three texts, and distance
+compares scores. Spliceability additionally needs the surrounding document and span.
+The audit row holds hashes, not prose, so it cannot supply the inputs to rerun these gates;
+the recorded decisions can be read back.
 
 **Refusal.** If `d` is unavailable for either side — insufficient evidence at both tiers,
 or an `uncalibrated` profile — no acceptance is possible. The segment is reported as
@@ -2684,6 +2701,22 @@ digest is hex or a declared identifier form, a path is corpus-root-relative, an 
 a closed set, and there is no free-text column anywhere. `rewrite_attempt` is the one to read
 twice, since it is the record that already held prose once.
 
+**The splice verdict is recorded evidence, including its absence.** Migration index 12
+adds `rewrite_attempt.splice` in place with `NOT NULL DEFAULT ''` and the vocabulary
+`''`, `intact`, `not-intact`. Every historical row keeps the empty value, including accepted
+and `not-spliceable` rows: no verdict is backfilled or inferred from a rejection. Empty
+means only that no verdict was recorded, not that the gate never ran.
+
+The database CHECKs and the shared write/read validator forbid accepted plus `not-intact`,
+`not-spliceable` plus `intact`, and any non-empty verdict beside a gate-skipping rejection:
+`not-one-segment`, `candidate-unscoreable`, `uncalibrated`, or `different-features`.
+Empty evidence remains valid for all four, including historical rows. `unscoreable` is
+excluded: it rejects the current text with `TerminalNotEntered` before any attempt exists.
+Invalid writes return `ErrInvalid`; an unknown or contradictory stored verdict returns
+`ErrCorrupt`.
+The recorder carries the value unchanged. Immutable-attempt equality compares it strictly:
+changing only `splice`, including transitions to or from empty, returns `ErrConflict`.
+
 **`Prune` has a declared graph, and it is directed away from its roots.** An earlier draft
 rooted it at the current snapshot while pointing the edge `profile → snapshot`, so nothing
 reachable from a root included the profile, its reference, its thresholds or its exemplar
@@ -2746,7 +2779,7 @@ in this schema, which is the property the allowlist test asserts.
 | `exemplar_selection` | `id` hex | `profile_id` hex, `n` int, `certificate_id` hex, and ordered member `node_id`s |
 | `threshold` | `id` hex | `profile_id` hex, `reference_id` hex, `population_id` hex, `t_low` num, `t_high` num, achieved rates num, interval bounds num, `verdict` enum |
 | `eval_result` | `id` hex | `profile_id` hex, `reference_id` hex, `auc` num, `lower_bound` num, `cap` num, cluster and segment counts int, `discriminates` bool, `calibrated` bool, `shippable` bool, `reason` enum |
-| `rewrite_attempt` | `invocation_id` hex + `node_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
+| `rewrite_attempt` | `invocation_id` hex + `node_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum, `splice` enum |
 | `published_paragraph` | `invocation_id` hex + `node_id` hex | `paragraph_hash` hex |
 | `publication_evidence_gap` | Historical marker | `noticed_at` UTC timestamp |
 

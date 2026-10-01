@@ -98,6 +98,11 @@ var declaredSchema = map[string][]string{
 		"current_hash", "candidate_hash", "current_distance", "candidate_distance",
 		"current_band", "candidate_band", "preserved", "tells_comparison",
 		"tells_comparable", "accepted", "rejection",
+		// #135. What the splice gate answered, recorded whichever rejection won,
+		// the way the two script columns already are. Empty means no verdict is
+		// recorded — for a row written before the column existed, nothing can know
+		// what the gate said.
+		"splice",
 	},
 	"rewrite_attempt_identifier": {"invocation_id", "node_id", "attempt_index", "ordinal", "identifier"},
 	// #91. The scripts a refused candidate introduced, mirroring the sibling
