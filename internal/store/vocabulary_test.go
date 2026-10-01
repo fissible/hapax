@@ -298,6 +298,12 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt_overgrown_script.node_id":       "hex",
 	"rewrite_attempt_overgrown_script.script":        "script",
 	"migration.checksum":                             "hex", "migration.applied_at": "time",
+	// #134. Hashes and a timestamp: there is deliberately nowhere in publication
+	// evidence to put prose, a path, or a register.
+	"published_paragraph.invocation_id":   "hex",
+	"published_paragraph.node_id":         "hex",
+	"published_paragraph.paragraph_hash":  "hex",
+	"publication_evidence_gap.noticed_at": "time",
 }
 
 // Values each grammar must refuse. "enum" is deliberately absent: it is covered

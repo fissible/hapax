@@ -113,7 +113,14 @@ var declaredSchema = map[string][]string{
 	"published_paragraph": {"invocation_id", "node_id", "paragraph_hash"},
 	// One row, written by the migration, when a store already held accepted
 	// attempts and so cannot account for what those runs published.
-	"publication_evidence_gap": {"noticed_at"},
+	//
+	// `id` is a surrogate key with `CHECK(id=1)`, so the one-row property is the
+	// schema's rather than the migration's care. It also gives the table a
+	// non-timestamp column to identify a row by, which `index_test.go`'s
+	// `survivingKeys` requires: with `noticed_at` alone it fails with "has no
+	// column to identify a row by", and making the timestamp the key would compare
+	// two stores written a moment apart.
+	"publication_evidence_gap": {"id", "noticed_at"},
 	"migration":                {"version", "checksum", "applied_at"},
 }
 
@@ -284,11 +291,17 @@ func TestTheSchemaShapeIsConstrained(t *testing.T) {
 			OnDelete string
 		}
 		want := map[string][]fk{
-			"snapshot":       nil,
-			"migration":      nil,
-			"document":       {{Parent: "snapshot", Columns: []column{{"snapshot_id", "id"}}, OnDelete: "CASCADE"}},
-			"node":           {{Parent: "document", Columns: []column{{"document_id", "document_id"}}, OnDelete: "CASCADE"}},
-			"feature_vector": {{Parent: "node", Columns: []column{{"node_id", "node_id"}}, OnDelete: "CASCADE"}},
+			"snapshot":  nil,
+			"migration": nil,
+			// #134. Declared explicitly as having NONE, which is the property the
+			// evidence depends on: the next `index` re-derives every node id, so a
+			// reference would cascade the evidence away at the moment the screen
+			// needs it.
+			"published_paragraph":      nil,
+			"publication_evidence_gap": nil,
+			"document":                 {{Parent: "snapshot", Columns: []column{{"snapshot_id", "id"}}, OnDelete: "CASCADE"}},
+			"node":                     {{Parent: "document", Columns: []column{{"document_id", "document_id"}}, OnDelete: "CASCADE"}},
+			"feature_vector":           {{Parent: "node", Columns: []column{{"node_id", "node_id"}}, OnDelete: "CASCADE"}},
 			"feature_value": {{
 				Parent:  "feature_vector",
 				Columns: []column{{"node_id", "node_id"}, {"manifest_digest", "manifest_digest"}}, OnDelete: "CASCADE",

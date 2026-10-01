@@ -574,7 +574,7 @@ func TestRecordingReachesTheStoreTheRequestNamed(t *testing.T) {
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
 	elsewhere := filepath.Join(t.TempDir(), "elsewhere.db")
-	copyFile(t, defaultStorePath(root), elsewhere)
+	copyStore(t, defaultStorePath(root), elsewhere)
 	request := planRequest(root, draft)
 	request.StorePath = elsewhere
 	plan := planned(t, request)
@@ -857,15 +857,22 @@ func storedPublicationRows(t *testing.T, path string) map[string]string {
 	return out
 }
 
-// copyFile duplicates a store so a run can be pointed at one that is not the
+// copyStore duplicates a store so a run can be pointed at one that is not the
 // default and still has a release to work against.
-func copyFile(t *testing.T, from, to string) {
+//
+// `VACUUM INTO` rather than copying the file: the store runs in WAL mode, so
+// committed pages can still be in `-wal` when the main file is read. Copying only
+// the main file produced a database missing the release, and `Execute` then failed
+// with `invalid rewrite plan` — which reads as a bug in the thing under test
+// rather than as a broken fixture.
+func copyStore(t *testing.T, from, to string) {
 	t.Helper()
-	body, err := os.ReadFile(from)
+	db, err := sql.Open("sqlite", from)
 	if err != nil {
-		t.Fatalf("read %s: %v", from, err)
+		t.Fatalf("open %s: %v", from, err)
 	}
-	if err := os.WriteFile(to, body, 0o644); err != nil {
-		t.Fatalf("write %s: %v", to, err)
+	defer db.Close()
+	if _, err := db.ExecContext(ctx(), "VACUUM INTO ?", to); err != nil {
+		t.Fatalf("VACUUM INTO %s: %v", to, err)
 	}
 }
