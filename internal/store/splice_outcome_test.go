@@ -19,6 +19,12 @@ package store_test
 //
 //	accepted=1   with  not-intact      an accepted candidate spliced
 //	not-spliceable with intact         that rejection IS the gate saying no
+//	a gate-SKIPPING rejection with either verdict   the gate never ran
+//
+// The third was found reviewing the implementation, after the first freeze, and
+// amended in by consensus rather than left to a follow-up: the other two are about
+// acceptance and about the splice rejection, and refusing two of three derivable
+// contradictions while admitting the third is arbitrary rather than principled.
 //
 // Refused on read as well because the write path is not the only way a row
 // arrives: a migration, a restore, or another process could put one there, and a
@@ -139,6 +145,125 @@ func TestTheRecorderCarriesTheSpliceVerdict(t *testing.T) {
 					c.splice, got.Splice)
 			}
 		})
+	}
+}
+
+// gateSkippingRejections are the codes that reach an attempt WITHOUT the gate
+// block running, so a verdict beside one of them is unreachable by any legitimate
+// path: the loop assigns them before the gates, and a row written before this
+// slice has no verdict at all.
+//
+// Four, not five. `unscoreable` is the current text's own and returns
+// `TerminalNotEntered` before any attempt exists, so no row can carry it and a
+// rule about its verdict would constrain nothing. Stated because its absence from
+// this list is a decision rather than an oversight.
+var gateSkippingRejections = []rewrite.RejectionCode{
+	rewrite.RejectionNotOneSegment,
+	rewrite.RejectionCandidateUnscoreable,
+	rewrite.RejectionUncalibrated,
+	rewrite.RejectionDifferentFeatures,
+}
+
+// A rejection that skipped the gates cannot carry a verdict.
+//
+// The third derivable contradiction, found in review after the first freeze and
+// amended in by consensus. The other two are about acceptance and about the
+// splice rejection; this one is about the rejections that mean the gate never
+// ran. Validating two of three while leaving the third silent would be arbitrary.
+//
+// Every rejection crossed with both non-empty verdicts, and the empty verdict as a
+// passing control on each — because a rule that refused `”` here would refuse
+// every row the loop writes on these paths, which is the opposite of the intent.
+func TestAGateSkippingRejectionCannotCarryAVerdict(t *testing.T) {
+	for _, rejection := range gateSkippingRejections {
+		for _, c := range []struct {
+			splice rewrite.SpliceOutcome
+			admit  bool
+		}{
+			{rewrite.SpliceIntact, false},
+			{rewrite.SpliceNotIntact, false},
+			// The control: this is what the loop actually writes on these paths.
+			{rewrite.SpliceNotRecorded, true},
+		} {
+			t.Run(string(rejection)+" with "+string(c.splice)+"|", func(t *testing.T) {
+				s := newStore(t)
+				snapshot, prof := seededProfile(t, s)
+				attempt := attemptFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+				attempt.Accepted, attempt.Rejection, attempt.Splice = false, rejection, c.splice
+
+				err := s.PutRewriteAttempt(ctx(), attempt)
+
+				if c.admit && err != nil {
+					t.Errorf("the row the loop writes on this path was refused: %v", err)
+				}
+				if !c.admit && !errors.Is(err, store.ErrInvalid) {
+					t.Errorf("a %q attempt carrying splice %q returned %v, want ErrInvalid — "+
+						"the gates never ran, so there is no verdict to have",
+						rejection, c.splice, err)
+				}
+			})
+		}
+	}
+}
+
+// The schema refuses it too.
+func TestTheDatabaseRefusesAVerdictBesideAGateSkippingRejection(t *testing.T) {
+	for _, rejection := range gateSkippingRejections {
+		for _, c := range []struct {
+			splice string
+			admit  bool
+		}{
+			{"intact", false}, {"not-intact", false}, {"", true},
+		} {
+			t.Run(string(rejection)+" with "+c.splice+"|", func(t *testing.T) {
+				s := newStore(t)
+				snapshot, prof := seededProfile(t, s)
+				attempt := attemptFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+
+				err := insertAttemptRaw(t, openRaw(t, s), attempt, prof.ID,
+					snapshot.Documents[0].Nodes[0].ID, 0, string(rejection), c.splice)
+
+				if c.admit && err != nil {
+					t.Errorf("the schema refused an admissible row: %v", err)
+				}
+				if !c.admit && err == nil {
+					t.Errorf("the schema accepted a %q attempt carrying splice %q",
+						rejection, c.splice)
+				}
+			})
+		}
+	}
+}
+
+// And the loader calls it corruption, with the CHECK stood down to get it in.
+func TestTheLoaderRefusesAVerdictBesideAGateSkippingRejection(t *testing.T) {
+	for _, rejection := range gateSkippingRejections {
+		for _, c := range []struct {
+			splice  string
+			corrupt bool
+		}{
+			{"intact", true}, {"not-intact", true}, {"", false},
+		} {
+			t.Run(string(rejection)+" with "+c.splice+"|", func(t *testing.T) {
+				s := newStore(t)
+				snapshot, prof := seededProfile(t, s)
+				attempt := attemptFixture(prof.ID, snapshot.Documents[0].Nodes[0].ID)
+				node := snapshot.Documents[0].Nodes[0].ID
+
+				insertAttemptPastTheChecks(t, s, attempt, prof.ID, node,
+					0, string(rejection), c.splice)
+
+				_, err := s.LoadRewriteAttempt(ctx(), attempt.InvocationID, node, 0)
+
+				if c.corrupt && !errors.Is(err, store.ErrCorrupt) {
+					t.Errorf("a %q attempt carrying splice %q loaded with %v, want ErrCorrupt",
+						rejection, c.splice, err)
+				}
+				if !c.corrupt && err != nil {
+					t.Errorf("the row the loop writes on this path failed to load: %v", err)
+				}
+			})
+		}
 	}
 }
 
