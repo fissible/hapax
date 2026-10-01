@@ -2636,6 +2636,34 @@ leading whitespace; its length is the candidate's trimmed byte length. Admission
 coordinates independent of a restored BOM. Only the final accepted candidate of each changed
 target contributes an entry.
 
+**Publication must reproduce the measurement (#133, slice C).** Before returning
+publishable bytes or publication evidence, `Execute` scores the assembled document
+with the same profile, reference and release used by the loop. The splice gate's
+per-candidate check against the original document does not establish this combined
+invariant. Expectations cover every originally included leaf: changed leaves use
+the last accepted candidate's isolated tokens and score, while untouched leaves
+use the original document's contextual tokens and score. This includes leaves
+already below the paragraph floor, whose interpretation is checked without
+requiring a measurement.
+
+The final leaf must exist at its translated admitted span with the original role
+and container path. Its ordered tokens must agree in text, class, contraction,
+possessive and lexical flags; token offsets are deliberately ignored. Scored leaves
+must also reproduce distance definedness and value, the contributing feature set,
+each feature delta's identity, deviation, definedness and direction, and the band's
+label, definedness and reason. An uncalibrated distance with no band is legitimate.
+Score offsets include a file BOM, so the check subtracts its byte length before
+matching admitted spans; ordinary replacement shifts and trimmed whitespace are
+handled separately.
+
+Any mismatch refuses the invocation with `publication-measurement-mismatch`, no
+publishable bytes and no publication evidence. `ExecuteResult.MeasurementMismatches`
+names every affected planned node in plan order; affected below-floor leaves follow
+in source order using their original snapshot node IDs. Recorded attempts remain
+intact, including their local acceptance decisions. The verdict belongs to the
+invocation and is not written onto attempts. This slice adds no migration; migration
+index 14 remains unused. The CLI's existing workflow-refusal path prevents publication.
+
 `ExecuteResult.Publication` carries the resolved store path, invocation ID and paragraph
 identities. `RewriteOutcome.Publication()` returns a copy. Neither execution method records
 publication. The CLI first calls `Publisher.Create` or `Publisher.Replace`, then forwards the

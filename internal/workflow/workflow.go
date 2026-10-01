@@ -263,19 +263,20 @@ type RewritePlan struct {
 }
 
 const (
-	RefusalNoProfile                = "no-profile"
-	RefusalNoReference              = "no-reference"
-	RefusalAmbiguousReference       = "ambiguous-reference"
-	RefusalUncalibrated             = "uncalibrated"
-	RefusalInsufficientEvidence     = "insufficient-evidence"
-	RefusalStaleDraft               = "stale-draft"
-	RefusalStaleExemplars           = "stale-exemplars"
-	RefusalLocalOnlyForbidsProvider = "local-only-forbids-provider"
-	RefusalNoSuchParagraph          = "no-such-paragraph"
+	RefusalNoProfile                      = "no-profile"
+	RefusalNoReference                    = "no-reference"
+	RefusalAmbiguousReference             = "ambiguous-reference"
+	RefusalUncalibrated                   = "uncalibrated"
+	RefusalInsufficientEvidence           = "insufficient-evidence"
+	RefusalStaleDraft                     = "stale-draft"
+	RefusalStaleExemplars                 = "stale-exemplars"
+	RefusalLocalOnlyForbidsProvider       = "local-only-forbids-provider"
+	RefusalNoSuchParagraph                = "no-such-paragraph"
+	RefusalPublicationMeasurementMismatch = "publication-measurement-mismatch"
 )
 
 func Refusals() []string {
-	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence, RefusalStaleDraft, RefusalStaleExemplars, RefusalLocalOnlyForbidsProvider, RefusalNoSuchParagraph}
+	return []string{RefusalNoProfile, RefusalNoReference, RefusalAmbiguousReference, RefusalUncalibrated, RefusalInsufficientEvidence, RefusalStaleDraft, RefusalStaleExemplars, RefusalLocalOnlyForbidsProvider, RefusalNoSuchParagraph, RefusalPublicationMeasurementMismatch}
 }
 
 func Terminals() []string {
@@ -330,6 +331,9 @@ type ExecuteResult struct {
 	// resolving the register the answer depends on. #117.
 	TellsInactiveReason string
 	Publication         Publication
+	// MeasurementMismatches names every leaf whose assembled interpretation or
+	// measurement changed, using original node IDs and plan order.
+	MeasurementMismatches []string
 }
 
 // RewriteInput is the one request the composition root may use to rewrite a
@@ -1455,6 +1459,10 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 	}
 	result.InvocationID = id
 	scorer := executionScorer{fitted: fitted, reference: ref, release: release, calibrated: p.CalibrationAvailable}
+	expected, err := originalPublicationExpectations(doc, scorer, p.Segments, draftSnapshot.Documents[0].Nodes)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
 	for _, target := range p.Segments {
 		if target.Disposition != DispositionTarget {
 			continue
@@ -1507,6 +1515,11 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		}
 		result.Outcomes = append(result.Outcomes, x)
 		if out.Changed {
+			// Outcome.Text is the last ACCEPTED candidate, even when later
+			// attempts were rejected. Reproduce its deterministic local score.
+			if err := expectAcceptedPublication(expected, target.NodeID, out.Text, scorer); err != nil {
+				return ExecuteResult{}, err
+			}
 			result.Improved++
 			changedNodes = append(changedNodes, target.NodeID)
 			replacements = append(replacements, assemble.Replacement{Span: text.Span{Offset: target.Offset, Length: target.Length}, Text: out.Text})
@@ -1529,6 +1542,19 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 	assembled, err := text.Admit(bytes)
 	if err != nil {
 		return ExecuteResult{}, err
+	}
+	translatePublicationExpectations(expected, doc, replacements)
+	report, err := scorer.Score(bytes)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	result.MeasurementMismatches, err = checkPublication(assembled, report, expected)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	if len(result.MeasurementMismatches) != 0 {
+		result.Refusal = RefusalPublicationMeasurementMismatch
+		return result, nil
 	}
 	publication := Publication{StorePath: p.StorePath, InvocationID: id}
 	leaves := assembled.Structure(text.DefaultStructureOptions()).IncludedLeaves()
