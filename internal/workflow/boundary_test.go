@@ -40,6 +40,8 @@ func (planless) Eval(context.Context, workflow.EvalRequest) (workflow.EvalResult
 
 // Rewrite exists because B2b-2b widened Service to carry the command. What this
 // fake is for is the boundary below, not the rewrite path.
+func (planless) RecordPublication(context.Context, workflow.Publication) error { return nil }
+
 func (planless) Rewrite(context.Context, workflow.RewriteInput) (workflow.RewriteOutcome, error) {
 	return workflow.RewriteOutcome{}, nil
 }

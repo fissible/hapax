@@ -344,6 +344,26 @@ func seedEveryArtifact(t *testing.T, s *store.Store) seededIDs {
 	if err := s.PutRewriteAttempt(ctx(), attempt); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}
+	// #134. Publication evidence, so the grammar probes against its columns are
+	// not vacuous — `TestEveryDeclaredGrammarIsEnforcedByTheDatabase` FAILS a table
+	// it finds empty rather than skipping it. Recorded against the same node the
+	// attempt names, which is what a real run does.
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: attempt.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: attempt.NodeID, ParagraphHash: identity.HashBytes([]byte("a published paragraph"))},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
+	}
+	// And the gap marker, with raw SQL because the MIGRATION writes it and there
+	// is deliberately no Go writer for it — a store that has always accounted for
+	// what it published must not be able to claim otherwise. Seeded only so the
+	// grammar probe against `noticed_at` has a row to damage.
+	if _, err := openRaw(t, s).ExecContext(ctx(),
+		"INSERT INTO publication_evidence_gap (id,noticed_at) VALUES (1,'2026-09-30T00:00:00Z')"); err != nil {
+		t.Fatalf("seeding the publication evidence gap: %v", err)
+	}
 	return seededIDs{
 		Snapshot: snapshot.ID, Profile: prof.ID, Reference: ref.ID,
 		Threshold: threshold.ID, EvalResult: result.ID, Selection: selection.ID,

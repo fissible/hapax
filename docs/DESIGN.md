@@ -748,8 +748,9 @@ the counts as returned rather than translating them into a stronger one.
 
 **Cancellation leaves a valid prefix, and the audit record has a stated gap.** `ctx` is checked
 before each costly phase and each target; each persisted attempt is individually atomic, so a
-cancelled run leaves some attempts and no bytes. But `rewrite_attempt` is the *only* durable
-evidence a rewrite leaves, and it is per-attempt: a `nothing-to-change` plan, a `stale-draft`
+cancelled run leaves some attempts and no bytes. `rewrite_attempt` records decisions,
+and `published_paragraph` records successful publications after the file becomes visible.
+Neither is an invocation-level audit: a `nothing-to-change` plan, a `stale-draft`
 refused before the loop, an empty first response, and cancellation before the first attempt
 completes all leave no record at all — and a run that does record attempts does not name the
 reference, release, exemplar selection or draft snapshot it was bound to. Issue #76 owns the
@@ -2400,8 +2401,10 @@ stays as files the user owns — **hapax is never the system of record for anyon
 | `threshold` | Profile plus distractor-pool plus calibration-protocol identity | `t_low`, `t_high`, achieved rates, intervals, or the pair-incompatible verdict |
 | `eval_result` | All of the above, hashed | Discrimination and band figures with provenance |
 | `rewrite_attempt` | Invocation, node and attempt index | The audit whitelist `rewrite.Attempt` declares: hashes, span reference, distances, bands, verdicts and a rejection code. **No prose** |
+| `published_paragraph` | Invocation and target node | Hash of the included leaf in the re-admitted assembled document; no foreign keys and no prose |
+| `publication_evidence_gap` | One historical marker when needed | UTC `noticed_at` timestamp recording unrecoverable publication history |
 
-That last row was missing. `rewrite.Store.RecordAttempt` has existed since the rewrite slice
+The `rewrite_attempt` row was originally missing. `rewrite.Store.RecordAttempt` has existed since the rewrite slice
 and the artifact table never named what it writes, which is exactly how an audit record ends
 up holding whatever seemed useful at the time.
 
@@ -2602,6 +2605,48 @@ AI-contamination claim `contamination` reserves stays unmade. Given no published
 reports `not-performed`, which there means "no screen was supplied" rather than "no screen
 exists".
 
+**Publication identity and evidence (#132, #134, slice B1).** Both the corpus screen
+(`PublishedParagraphs`) and the rewrite-target screen (`ProducedByRewrite`) read distinct
+`paragraph_hash` values from `published_paragraph`. An accepted attempt alone supplies no
+publication evidence. `rewrite_attempt.candidate_hash` continues to hash the provider's exact
+string, including whitespace: it answers what the provider returned.
+
+A published paragraph instead has identity `H(admit(assembled).Raw()[leaf.Span])`. `Execute`
+re-admits the final document carrying every replacement, finds each changed target's exact
+included leaf, and fails without publishable content if any leaf cannot be located. Its span
+starts at the original offset plus every earlier replacement's byte-length delta plus its own
+leading whitespace; its length is the candidate's trimmed byte length. Admission keeps the
+coordinates independent of a restored BOM. Only the final accepted candidate of each changed
+target contributes an entry.
+
+`ExecuteResult.Publication` carries the resolved store path, invocation ID and paragraph
+identities. `RewriteOutcome.Publication()` returns a copy. Neither execution method records
+publication. The CLI first calls `Publisher.Create` or `Publisher.Replace`, then forwards the
+whole evidence batch through `Service.RecordPublication`, then renders the result. Failed
+publication records nothing. If the file is published but recording fails, the CLI exits 3,
+names the publication-evidence failure and its underlying error on stderr, and emits nothing
+on stdout in either human or JSON mode. File publication and database recording are separate
+operations: a failure or crash between them can leave an unrecorded publication.
+
+`RecordPublication` uses one transaction for the batch. Identical retries succeed; conflicting
+hashes under `(invocation_id, node_id)` fail, and any row failure rolls back the entire batch.
+The table stores hashes only and has no foreign keys: re-indexing derives new node identities,
+and must not delete the evidence the screens need. Evidence is retained without pruning;
+retention policy remains unresolved.
+
+**Migration 12 recovers no publication history.** It creates the evidence table empty and
+backfills nothing. If accepted attempts already exist, it writes exactly one timestamp to
+`publication_evidence_gap`. Index reads this persistent marker rather than inferring a gap
+from current attempts or an empty evidence table. Later publications and deletion of old
+attempts do not clear it. The JSON index result always includes `publication_evidence_gap`;
+the human line includes `publication-evidence-gap` only when true.
+
+Paragraphs published before this upgrade stop being screened unless subsequently recorded
+as a new publication. That loss is deliberate: an unrecorded publication makes the screen
+fail to **exclude**, while backfilling accepted attempts could exclude the author's own prose
+from their own corpus even though no file was ever published. A hash match still establishes
+byte identity, not authorship; this slice makes no stronger provenance claim.
+
 **Rehydration is given a root.** Snapshot identity is deliberately location-independent, so
 the reference cannot name a directory; the caller passes the corpus root it wants read. The
 outcome vocabulary maps to causes explicitly: a path that does not resolve is `missing`; an OS
@@ -2702,6 +2747,8 @@ in this schema, which is the property the allowlist test asserts.
 | `threshold` | `id` hex | `profile_id` hex, `reference_id` hex, `population_id` hex, `t_low` num, `t_high` num, achieved rates num, interval bounds num, `verdict` enum |
 | `eval_result` | `id` hex | `profile_id` hex, `reference_id` hex, `auc` num, `lower_bound` num, `cap` num, cluster and segment counts int, `discriminates` bool, `calibrated` bool, `shippable` bool, `reason` enum |
 | `rewrite_attempt` | `invocation_id` hex + `node_id` hex + `index` int | `profile_id` hex, `provider_id` enum, `current_hash` hex, `candidate_hash` hex, `current_distance` num, `candidate_distance` num, `current_band` enum, `candidate_band` enum, `preserved` bool, `preserve_identifiers` identifier list, `tells_comparison` int, `tells_comparable` bool, `accepted` bool, `rejection` enum |
+| `published_paragraph` | `invocation_id` hex + `node_id` hex | `paragraph_hash` hex |
+| `publication_evidence_gap` | Historical marker | `noticed_at` UTC timestamp |
 
 The `snapshot` identity is **verified, not trusted**. `corpus` computes it, but `store` has to
 be able to recompute it or the read-integrity rule is unenforceable for the one artifact

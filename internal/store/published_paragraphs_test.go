@@ -9,9 +9,12 @@ package store_test
 // parameter per hash against the SQLite variable ceiling recorded in its own doc
 // comment, so it cannot be the one that answers here.
 //
-// What this returns is the same fact under the same rule: only ACCEPTED
-// candidates. A refused one was never published and cannot be in anyone's
-// corpus because this tool put it there.
+// What this returns is the same fact under the same rule, and the rule changed:
+// only PUBLISHED paragraphs, recorded by `Store.RecordPublication` after bytes
+// became visible. It used to be "only accepted candidates", which #134 refuted —
+// a run that accepted and then failed published nothing, and an acceptance a
+// later one superseded never left the process. The contract is stated once, in
+// `publication_test.go`.
 //
 // Unscoped by register and by profile, deliberately. Text this tool published is
 // this tool's text whatever register the draft was in, and a byte-identical
@@ -23,14 +26,15 @@ import (
 
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/rewrite"
+	"github.com/fissible/hapax/internal/store"
 )
 
-// The set is the accepted candidates and nothing else.
+// The set is the published paragraphs and nothing else.
 //
-// Two attempts, and a hash the store never held, because each way of being wrong
-// is different: a refused candidate, the text a run started from, and something
-// this store has never seen at all.
-func TestThePublishedSetHoldsOnlyAcceptedCandidates(t *testing.T) {
+// Four ways of being wrong, each different: a refused candidate, the text a run
+// started from, a candidate accepted and never published, and something this
+// store has never seen at all.
+func TestThePublishedSetHoldsOnlyPublishedParagraphs(t *testing.T) {
 	s := newStore(t)
 	snapshot, prof := seededProfile(t, s)
 	nodes := snapshot.Documents[0].Nodes
@@ -52,6 +56,22 @@ func TestThePublishedSetHoldsOnlyAcceptedCandidates(t *testing.T) {
 	if err := s.PutRewriteAttempt(ctx(), refused); err != nil {
 		t.Fatalf("PutRewriteAttempt(refused): %v", err)
 	}
+	stranded := identity.HashBytes([]byte("what a failed run accepted"))
+	unpublished := attemptFixture(prof.ID, nodes[1].ID)
+	unpublished.Index = 1
+	unpublished.CandidateHash = stranded
+	unpublished.Accepted, unpublished.Rejection = true, ""
+	if err := s.PutRewriteAttempt(ctx(), unpublished); err != nil {
+		t.Fatalf("PutRewriteAttempt(unpublished): %v", err)
+	}
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: accepted.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: nodes[0].ID, ParagraphHash: accepted.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
+	}
 
 	got, err := s.PublishedParagraphs(ctx())
 	if err != nil {
@@ -62,9 +82,10 @@ func TestThePublishedSetHoldsOnlyAcceptedCandidates(t *testing.T) {
 		name, hash string
 		want       bool
 	}{
-		{"the accepted candidate", accepted.CandidateHash, true},
+		{"a published paragraph", accepted.CandidateHash, true},
 		{"a candidate that was refused", refused.CandidateHash, false},
 		{"the text a run started from", accepted.CurrentHash, false},
+		{"a candidate accepted and never published", stranded, false},
 		{"a hash the store never saw", identity.HashBytes([]byte("never seen")), false},
 	} {
 		if got[c.hash] != c.want {
@@ -100,13 +121,15 @@ func TestAnEmptyStoreHasAnEmptyPublishedSet(t *testing.T) {
 
 // One text published twice is one member.
 //
-// The loop records an attempt per invocation per paragraph, so the same accepted
-// text appears in as many rows as it was accepted. The screen tests membership,
-// so a set that counted rows would be answering a different question — and would
-// grow without bound on a store that is rewritten often.
+// Two invocations publishing the same paragraph leave two rows, because the key
+// is the invocation and the target. The screen tests membership, so a set that
+// counted rows would be answering a different question — and would grow without
+// bound on a store that is rewritten often.
 func TestTextPublishedTwiceIsOneMember(t *testing.T) {
 	s := newStore(t)
-	snapshot, prof := seededProfile(t, s)
+	// The profile is no longer needed: publication evidence names an invocation and
+	// a node, and no attempt is built here any more.
+	snapshot, _ := seededProfile(t, s)
 	nodes := snapshot.Documents[0].Nodes
 	// Guarded like its sibling: without this, the same fixture shrinking gives
 	// one clear failure there and an index-out-of-range panic here.
@@ -116,12 +139,11 @@ func TestTextPublishedTwiceIsOneMember(t *testing.T) {
 	shared := identity.HashBytes([]byte("published twice"))
 
 	for i, node := range []string{nodes[0].ID, nodes[1].ID} {
-		attempt := attemptFixture(prof.ID, node)
-		attempt.InvocationID = identity.HashBytes([]byte{byte('a' + i)})
-		attempt.CandidateHash = shared
-		attempt.Accepted, attempt.Rejection = true, ""
-		if err := s.PutRewriteAttempt(ctx(), attempt); err != nil {
-			t.Fatalf("PutRewriteAttempt(%d): %v", i, err)
+		if err := s.RecordPublication(ctx(), store.Publication{
+			InvocationID: identity.HashBytes([]byte{byte('a' + i)}),
+			Paragraphs:   []store.PublishedParagraph{{NodeID: node, ParagraphHash: shared}},
+		}); err != nil {
+			t.Fatalf("RecordPublication(%d): %v", i, err)
 		}
 	}
 

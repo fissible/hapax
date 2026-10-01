@@ -1357,10 +1357,8 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 }
 
 // ProducedByRewrite reports which of these content hashes this store recorded
-// as an accepted candidate, so a caller can refuse to anchor on text this tool
-// published. Only accepted candidates count: a refused one was never published
-// and so cannot be anybody's input, and a current_hash is the text a run
-// started from rather than anything this tool wrote.
+// as published. Attempts alone do not establish that their candidates reached
+// a file; only RecordPublication supplies evidence for this screen.
 //
 // The answer holds an entry for every hash asked about. A caller that is about
 // to decide a paragraph's fate has to tell "no" from "I did not look", which a
@@ -1381,7 +1379,7 @@ func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[str
 		answer[hash] = false
 		arguments[i] = hash
 	}
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT candidate_hash FROM rewrite_attempt WHERE accepted=1 AND candidate_hash IN (?"+strings.Repeat(",?", len(hashes)-1)+")", arguments...)
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT paragraph_hash FROM published_paragraph WHERE paragraph_hash IN (?"+strings.Repeat(",?", len(hashes)-1)+")", arguments...)
 	if err != nil {
 		return nil, err
 	}
@@ -1399,13 +1397,10 @@ func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[str
 	return answer, nil
 }
 
-// PublishedParagraphs returns every paragraph text this store recorded as an
-// accepted candidate. A corpus screen has to test every paragraph of every
+// PublishedParagraphs returns every paragraph hash recorded as published.
+// A corpus screen has to test every paragraph of every
 // document, which ProducedByRewrite cannot answer: it binds one parameter per
 // hash against the variable ceiling its own doc comment records.
-//
-// Accepted only, for the reason given there — a refused candidate was never
-// published, so it cannot be in anybody's corpus because this tool put it there.
 //
 // Unscoped by register and by profile, deliberately. Text this tool published is
 // this tool's text whatever register the draft was in, and a byte-identical
@@ -1415,7 +1410,7 @@ func (s *Store) ProducedByRewrite(ctx context.Context, hashes []string) (map[str
 // index has to tell "nothing was published" from "nothing was screened".
 func (s *Store) PublishedParagraphs(ctx context.Context) (map[string]bool, error) {
 	published := map[string]bool{}
-	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT candidate_hash FROM rewrite_attempt WHERE accepted=1")
+	rows, err := s.db.QueryContext(ctx, "SELECT DISTINCT paragraph_hash FROM published_paragraph")
 	if err != nil {
 		return nil, err
 	}

@@ -152,6 +152,19 @@ const (
 	improvesTwo = "A second paragraph doing likewise. It has enough length to clear the floor, " +
 		"and is measured on its own terms rather than skipped."
 
+	// #132's fixtures. lengthensOne is improvesOne plus a clause, so the
+	// paragraph GROWS by 16 bytes and the target after it shifts forward in the
+	// published document — measured, the second target moves from offset 200 to
+	// 216. improvesOne shortens by 3, which moves it to 197 and puts a wrong read
+	// past the end of the document rather than inside it.
+	//
+	// approachesOne is a FIRST rung: measured against this fixture's release,
+	// paragraphOne is 1.338914, approachesOne 0.949697 and improvesOne 0.558017,
+	// so the loop accepts twice and the first acceptance is superseded.
+	lengthensOne  = improvesOne + " It is put plainly."
+	approachesOne = "A paragraph of ordinary prose that runs on past a single sentence so " +
+		"the structure pass reads it as prose rather than as a heading, and it says a thing."
+
 	// A candidate that measures EXACTLY what the current text measures. It is
 	// rejected, and specifically as not-improved rather than by either guard,
 	// which is what makes it useful: it separates "the loop ran and refused"
@@ -331,6 +344,11 @@ func requireCandidates(t *testing.T, root string) {
 		{name: "improvesOne", current: paragraphOne, candidate: improvesOne, wantImproves: true},
 		{name: "improvesTwo", current: paragraphTwo, candidate: improvesTwo, wantImproves: true},
 		{name: "matchesOne", current: paragraphOne, candidate: matchesOne, wantEqual: true},
+		// #132's two: a lengthening acceptance, and a ladder whose first rung is
+		// superseded by improvesOne.
+		{name: "lengthensOne", current: paragraphOne, candidate: lengthensOne, wantImproves: true},
+		{name: "approachesOne", current: paragraphOne, candidate: approachesOne, wantImproves: true},
+		{name: "improvesOne over approachesOne", current: approachesOne, candidate: improvesOne, wantImproves: true},
 	} {
 		got := judge(t, root, c.current, c.candidate)
 		if got.segments != 1 {

@@ -109,6 +109,7 @@ package workflow_test
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -121,8 +122,11 @@ import (
 	"github.com/fissible/hapax/internal/workflow"
 )
 
-// published records that this tool once accepted `text` for some paragraph, which
-// is the only fact the check consults.
+// published records that this tool PUBLISHED `text` for some paragraph, which is
+// the fact the check consults. #134: the accepted attempt beside it is the audit
+// record a real run would also leave, and is not what the screen reads — an
+// accepted attempt that was never published is covered in
+// internal/store/publication_test.go.
 //
 // The attempt is recorded against whichever node the plan happens to name,
 // because the answer must not depend on that: `node_id` is
@@ -151,8 +155,17 @@ func published(t *testing.T, root string, plan workflow.RewritePlan, text string
 		TellsComparable: true,
 		Accepted:        true,
 	}
-	if err := openStore(t, defaultStorePath(root)).PutRewriteAttempt(ctx(), attempt); err != nil {
+	db := openStore(t, defaultStorePath(root))
+	if err := db.PutRewriteAttempt(ctx(), attempt); err != nil {
 		t.Fatalf("record an accepted attempt: %v", err)
+	}
+	if err := db.RecordPublication(ctx(), store.Publication{
+		InvocationID: attempt.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: attempt.NodeID, ParagraphHash: attempt.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("record the publication: %v", err)
 	}
 }
 
@@ -559,7 +572,7 @@ func TestARealRewriteWrittenBackIsRefusedOnTheNextRun(t *testing.T) {
 	t.Parallel()
 	root, draft := targetStore(t)
 	requireCandidates(t, root)
-	runner, _ := executingRunner(&arm{provider: newProvider(t,
+	runner, invocationID := executingRunner(&arm{provider: newProvider(t,
 		map[string][]string{paragraphOne: {improvesOne}})}, nil)
 
 	outcome, err := runner.Rewrite(ctx(), workflow.RewriteInput{
@@ -574,9 +587,78 @@ func TestARealRewriteWrittenBackIsRefusedOnTheNextRun(t *testing.T) {
 			outcome.Report().Improved)
 	}
 
-	// What --in-place does: publish.Replace over the source.
+	// Nothing is recorded by `Rewrite` itself. `Rewrite` wraps `Execute`, so a
+	// wrapper that recorded before returning passes both the direct-`Execute`
+	// negative and cli's mocked ordering test, and the idempotent call below hides
+	// it here too — which would restore #134 exactly whenever the file write then
+	// failed.
+	db := openStore(t, defaultStorePath(root))
+	before, err := db.PublishedParagraphs(ctx())
+	if err != nil {
+		t.Fatalf("PublishedParagraphs before publishing: %v", err)
+	}
+	if len(before) != 0 {
+		t.Fatalf("Rewrite recorded %d published paragraphs before returning; nothing "+
+			"had been written to the file yet: %v", len(before), before)
+	}
+
+	// What `--in-place` does, in the order cli does it: publish.Replace over the
+	// source, and THEN record the publication evidence. #134 — the evidence has to
+	// come back through `Rewrite`'s own outcome, because nothing else in the suite
+	// exercises that handoff: the workflow tests read `ExecuteResult.Publication`
+	// and the cli tests manufacture one.
 	if err := os.WriteFile(draft, outcome.Content(), 0o644); err != nil {
 		t.Fatalf("write the rewrite back: %v", err)
+	}
+	evidence := outcome.Publication()
+	if len(evidence.Paragraphs) != 1 {
+		t.Fatalf("Rewrite returned %d published paragraphs for one improvement: %+v",
+			len(evidence.Paragraphs), evidence)
+	}
+	if want := identity.HashBytes([]byte(improvesOne)); evidence.Paragraphs[0].ParagraphHash != want {
+		t.Errorf("the evidence names %q, want the accepted candidate's leaf hash",
+			evidence.Paragraphs[0].ParagraphHash)
+	}
+	// The IDENTITIES, not only the hash. Screening needs the paragraph hash alone
+	// and the table has no foreign keys, so a wrapper substituting another valid
+	// invocation or node hash would satisfy every other assertion here and attach
+	// the evidence to the wrong target.
+	changedNode := ""
+	for _, outcome := range outcome.Report().Outcomes {
+		if outcome.Changed {
+			changedNode = outcome.NodeID
+		}
+	}
+	if changedNode == "" {
+		t.Fatal("no outcome reports a change, so there is no node to compare against")
+	}
+	if evidence.InvocationID != invocationID {
+		t.Errorf("the evidence names invocation %.12s, want the run's %.12s",
+			evidence.InvocationID, invocationID)
+	}
+	if evidence.Paragraphs[0].NodeID != changedNode {
+		t.Errorf("the evidence names node %.12s, want the target that changed %.12s",
+			evidence.Paragraphs[0].NodeID, changedNode)
+	}
+	if err := runner.RecordPublication(ctx(), evidence); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
+	}
+	// It reached the database the run resolved, not some other one.
+	stored, err := db.PublishedParagraphs(ctx())
+	if err != nil {
+		t.Fatalf("PublishedParagraphs: %v", err)
+	}
+	if !stored[evidence.Paragraphs[0].ParagraphHash] {
+		t.Fatalf("the recorded evidence is not in the store the run named: %v", stored)
+	}
+	// And the ROW carries those identities, so a recorder that dropped or rewrote
+	// them on the way in is caught as well.
+	rows := storedPublicationRows(t, defaultStorePath(root))
+	want := map[string]string{
+		invocationID + "/" + changedNode: evidence.Paragraphs[0].ParagraphHash,
+	}
+	if !reflect.DeepEqual(rows, want) {
+		t.Errorf("published_paragraph holds\n%v\nwant\n%v", rows, want)
 	}
 
 	plan := planned(t, planRequest(root, draft))

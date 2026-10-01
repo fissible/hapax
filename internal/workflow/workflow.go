@@ -105,6 +105,7 @@ type IndexResult struct {
 	// prose. Named for what it counts rather than after the CheckStatus it is
 	// read from a few lines away.
 	ToolOutputDocuments                    int
+	PublicationEvidenceGap                 bool
 	ProfileID, ReferenceID, NotReadyReason string
 	Checks                                 []Check
 	Pruned                                 Pruned
@@ -328,6 +329,7 @@ type ExecuteResult struct {
 	// this run, and is empty when it could — or when the run refused before
 	// resolving the register the answer depends on. #117.
 	TellsInactiveReason string
+	Publication         Publication
 }
 
 // RewriteInput is the one request the composition root may use to rewrite a
@@ -360,8 +362,9 @@ type RewriteReport struct {
 // RewriteOutcome keeps assembled document bytes private to workflow. Content
 // returns a copy so publication cannot mutate the result retained by a caller.
 type RewriteOutcome struct {
-	report  RewriteReport
-	content []byte
+	report      RewriteReport
+	content     []byte
+	publication Publication
 }
 
 func NewRewriteOutcome(report RewriteReport, content []byte) RewriteOutcome {
@@ -429,6 +432,7 @@ type Service interface {
 	Eval(context.Context, EvalRequest) (EvalResult, error)
 	Score(context.Context, ScoreRequest) (ScoreResult, error)
 	Rewrite(context.Context, RewriteInput) (RewriteOutcome, error)
+	RecordPublication(context.Context, Publication) error
 }
 
 func heldOutSegments(ctx context.Context, s *store.Store, snapshotID string, fitted profile.Fitted) ([]eval.Segment, error) {
@@ -1467,6 +1471,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		}
 	}
 	var replacements []assemble.Replacement
+	var changedNodes []string
 	options := rewrite.DefaultOptions()
 	options.ProfileID = p.ProfileID
 	options.InvocationID = id
@@ -1503,6 +1508,7 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 		result.Outcomes = append(result.Outcomes, x)
 		if out.Changed {
 			result.Improved++
+			changedNodes = append(changedNodes, target.NodeID)
 			replacements = append(replacements, assemble.Replacement{Span: text.Span{Offset: target.Offset, Length: target.Length}, Text: out.Text})
 		}
 	}
@@ -1518,6 +1524,28 @@ func (r *Runner) Execute(ctx context.Context, request ExecuteRequest) (ExecuteRe
 	if err != nil {
 		return ExecuteResult{}, err
 	}
+	// Resolve identities only in the final document, after every replacement
+	// has shifted later spans. Admission strips a restored BOM from coordinates.
+	assembled, err := text.Admit(bytes)
+	if err != nil {
+		return ExecuteResult{}, err
+	}
+	publication := Publication{StorePath: p.StorePath, InvocationID: id}
+	leaves := assembled.Structure(text.DefaultStructureOptions()).IncludedLeaves()
+	shift := 0
+	for i, replacement := range replacements {
+		at := text.Span{
+			Offset: replacement.Span.Offset + shift + leadingSpace(replacement.Text),
+			Length: len(strings.TrimSpace(replacement.Text)),
+		}
+		hash, err := leafHashAt(assembled, leaves, at)
+		if err != nil {
+			return ExecuteResult{}, err
+		}
+		publication.Paragraphs = append(publication.Paragraphs, PublishedParagraph{NodeID: changedNodes[i], ParagraphHash: hash})
+		shift += len(replacement.Text) - replacement.Span.Length
+	}
+	result.Publication = publication
 	result.Bytes = bytes
 	if result.Improved > 0 {
 		result.State = RewriteImproved
@@ -1557,7 +1585,7 @@ func (r *Runner) Rewrite(ctx context.Context, request RewriteInput) (RewriteOutc
 		Targeting: plan.Targeting, Claim: plan.Claim, CalibrationAvailable: plan.CalibrationAvailable,
 		TellsInactiveReason:        executed.TellsInactiveReason,
 		ParagraphsAlreadyRewritten: plan.ParagraphsAlreadyRewritten,
-	}, executed.Bytes), nil
+	}, executed.Bytes).WithPublication(executed.Publication), nil
 }
 
 // readFresh reports whether the draft on disk is still the one that was planned.
@@ -1757,6 +1785,10 @@ func (r *Runner) commit(ctx context.Context, request IndexRequest, mode IndexMod
 	}
 	w.LockWait = request.LockWait
 	indexed, err := s.Index(ctx, w)
+	if err != nil {
+		return IndexResult{}, err
+	}
+	result.PublicationEvidenceGap, err = s.PublicationEvidenceGap(ctx)
 	if err != nil {
 		return IndexResult{}, err
 	}

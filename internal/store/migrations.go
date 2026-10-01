@@ -171,4 +171,21 @@ CREATE TABLE document_new (document_id TEXT NOT NULL PRIMARY KEY CHECK(length(do
 INSERT INTO document_new SELECT document_id,snapshot_id,path,content_hash,register,split,admission,language,unavailable_at FROM document;
 DROP TABLE document;
 ALTER TABLE document_new RENAME TO document;
+`, `
+-- #132, #134. Attempts cannot establish publication, so no history is
+-- backfilled. Node identities change on re-index: evidence has no foreign keys.
+CREATE TABLE published_paragraph (
+    invocation_id TEXT NOT NULL CHECK(length(invocation_id)=64 AND invocation_id NOT GLOB '*[^0-9a-f]*'),
+    node_id TEXT NOT NULL CHECK(length(node_id)=64 AND node_id NOT GLOB '*[^0-9a-f]*'),
+    paragraph_hash TEXT NOT NULL CHECK(length(paragraph_hash)=64 AND paragraph_hash NOT GLOB '*[^0-9a-f]*'),
+    PRIMARY KEY(invocation_id,node_id)
+);
+CREATE INDEX published_paragraph_hash ON published_paragraph(paragraph_hash);
+CREATE TABLE publication_evidence_gap (
+    id INTEGER NOT NULL PRIMARY KEY CHECK(id=1),
+    noticed_at TEXT NOT NULL CHECK(strftime('%Y-%m-%dT%H:%M:%SZ',noticed_at) IS NOT NULL AND strftime('%Y-%m-%dT%H:%M:%SZ',noticed_at)=noticed_at)
+);
+INSERT INTO publication_evidence_gap (id,noticed_at)
+    SELECT 1,strftime('%Y-%m-%dT%H:%M:%SZ','now')
+    WHERE EXISTS(SELECT 1 FROM rewrite_attempt WHERE accepted=1);
 `}
