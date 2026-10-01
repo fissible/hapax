@@ -42,7 +42,11 @@ import (
 
 // spliceColumnMigration is the INDEX of the migration this file covers, so
 // truncating the list produces the schema as it stood immediately before it.
-const spliceColumnMigration = 12
+//
+// 13, not 12: #132/#134's publication tables took 12 while this slice was in
+// review, and both branches had written 12 independently. The collision surfaced
+// on rebase rather than in either suite, because each was correct alone.
+const spliceColumnMigration = 13
 
 // The attempts already stored survive, and carry no verdict.
 func TestAddingTheSpliceColumnKeepsTheAttemptsAlreadyStored(t *testing.T) {
