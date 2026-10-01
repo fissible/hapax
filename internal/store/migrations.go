@@ -188,4 +188,13 @@ CREATE TABLE publication_evidence_gap (
 INSERT INTO publication_evidence_gap (id,noticed_at)
     SELECT 1,strftime('%Y-%m-%dT%H:%M:%SZ','now')
     WHERE EXISTS(SELECT 1 FROM rewrite_attempt WHERE accepted=1);
+`, `
+-- #135. Retain the splice gate's answer independently of the chosen rejection.
+-- Historical rows keep no recorded verdict, even when acceptance or rejection
+-- would allow an inference. Adding the column preserves the table and children.
+ALTER TABLE rewrite_attempt ADD COLUMN splice TEXT NOT NULL DEFAULT ''
+    CHECK(splice IN ('','intact','not-intact'))
+    CHECK(NOT(accepted=1 AND splice='not-intact'))
+    CHECK(NOT(rejection='not-spliceable' AND splice='intact'))
+    CHECK(NOT(rejection IN ('not-one-segment','candidate-unscoreable','uncalibrated','different-features') AND splice<>''));
 `}

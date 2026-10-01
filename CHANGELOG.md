@@ -15,6 +15,14 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### Changed
 - Migration 12 creates publication evidence without backfilling history. Paragraphs published before this upgrade stop being screened; stores with earlier accepted attempts disclose a persistent `publication-evidence-gap` on index. This deliberately fails to exclude unrecorded output rather than risk excluding the author's own prose based on an attempt that was never published.
+- Retain each rewrite attempt's splice verdict independently of rejection precedence (#135).
+  Migration 13 leaves historical verdicts empty without inference; database, write, and read
+  validation reject contradictory evidence, and immutable writes compare the verdict strictly.
+  Gate-skipping rejections (`not-one-segment`, `candidate-unscoreable`, `uncalibrated`,
+  `different-features`) require an empty verdict at all three boundaries. `unscoreable`
+  returns `TerminalNotEntered` before any attempt exists and is excluded from this rule.
+- Replace the rewrite comments' replay claim with the text-local precedence rationale:
+  audit rows store hashes, so they cannot supply the prose needed to rerun the gates.
 
 ## [0.1.0] - 2026-09-29
 
@@ -99,4 +107,3 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### Tools
 - Keep the select oracle rather than losing it with the session
-

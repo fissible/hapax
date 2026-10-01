@@ -56,10 +56,10 @@ const (
 	//
 	// It is last in RejectionCodes() because it is reported last — this const
 	// block never encoded precedence, and tells and not-improved sit above
-	// language here while being reported after it. It is reported last
-	// because it is the only rejection whose verdict depends on the surrounding
-	// DOCUMENT rather than only on the two texts — so unlike every other code
-	// here, it cannot be reproduced from a `rewrite_attempt` row alone.
+	// language here while being reported after it. Reporting it last favors the
+	// most text-local reason: preserve anchors on the original, tells on the
+	// advancing current, language reads all three texts, and distance compares
+	// scores. Spliceability additionally needs the surrounding document and span.
 	RejectionNotSpliceable RejectionCode = "not-spliceable"
 	RejectionLanguage      RejectionCode = "language"
 	// RejectionLanguageGrowth refuses a candidate that text.ScriptSet.Exceeding
@@ -200,6 +200,21 @@ type LanguageVerdict struct {
 // leaf, none at all, a different span, or a leaf in different containers.
 type SpliceVerdict struct{ Intact bool }
 
+// SpliceOutcome records the splice gate's answer independently of rejection.
+// The empty value means no verdict was recorded; historical attempts may have
+// run the gate without retaining its answer.
+type SpliceOutcome string
+
+const (
+	SpliceNotRecorded SpliceOutcome = ""
+	SpliceIntact      SpliceOutcome = "intact"
+	SpliceNotIntact   SpliceOutcome = "not-intact"
+)
+
+func SpliceOutcomes() []SpliceOutcome {
+	return []SpliceOutcome{SpliceNotRecorded, SpliceIntact, SpliceNotIntact}
+}
+
 type RewriteRequest struct {
 	Prompt                  string
 	ProfileID, InvocationID string
@@ -227,6 +242,7 @@ type Attempt struct {
 	TellsComparable, Accepted           bool
 	Rejection                           RejectionCode
 	ProfileID, ProviderID, InvocationID string
+	Splice                              SpliceOutcome
 }
 
 type Store interface {
@@ -342,6 +358,10 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			if err != nil {
 				return Outcome{}, fmt.Errorf("rewrite splice gate: %w", err)
 			}
+			attempt.Splice = SpliceNotIntact
+			if splice.Intact {
+				attempt.Splice = SpliceIntact
+			}
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
@@ -360,12 +380,12 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 				rejection = RejectionTellsWorse
 			case candidateScored.Distance.Value > currentScored.Distance.Value-Epsilon:
 				rejection = RejectionNotImproved
-			// LAST, below not-improved. Every case above is a function of the
-			// recorded texts, so a stored `rewrite_attempt` row can be replayed
-			// and its `rejection` recomputed; this one is a function of the
-			// document and the span, and the row carries only `node_id`.
-			// Ranking it higher would stop `rejection` being reproducible from
-			// the evidence stored beside it.
+			// LAST, below not-improved, so the most text-local reason wins.
+			// Preserve anchors on the original, tells on the advancing current,
+			// language reads all three texts, and distance compares scores.
+			// Spliceability also needs the surrounding document and span.
+			// The row stores hashes, not prose: recorded decisions can be read
+			// back, but the gates cannot be rerun from that row alone.
 			case !splice.Intact:
 				rejection = RejectionNotSpliceable
 			}
