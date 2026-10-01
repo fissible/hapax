@@ -105,7 +105,16 @@ var declaredSchema = map[string][]string{
 	"rewrite_attempt_script": {"invocation_id", "node_id", "attempt_index", "ordinal", "script"},
 	// #107. The sibling of the line above: same shape, same reason.
 	"rewrite_attempt_overgrown_script": {"invocation_id", "node_id", "attempt_index", "ordinal", "script"},
-	"migration":                        {"version", "checksum", "applied_at"},
+	// #134. Publication evidence, kept apart from the attempt audit because an
+	// accepted attempt is a decision and a published paragraph is an outcome.
+	// Hashes only: no path, no prose, and no foreign key — the next `index`
+	// re-derives every node id, so a reference would cascade the evidence away at
+	// the moment the screen first needs it.
+	"published_paragraph": {"invocation_id", "node_id", "paragraph_hash"},
+	// One row, written by the migration, when a store already held accepted
+	// attempts and so cannot account for what those runs published.
+	"publication_evidence_gap": {"noticed_at"},
+	"migration":                {"version", "checksum", "applied_at"},
 }
 
 func tableColumns(t *testing.T, db *sql.DB, table string) []string {

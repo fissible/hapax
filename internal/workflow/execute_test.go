@@ -147,6 +147,11 @@ func TestTheExecuteResultSurfaceIsExactlyThis(t *testing.T) {
 		{"Refusal", "string"},
 		{"Outcomes", "[]workflow.TargetOutcome"},
 		{"TellsInactiveReason", "string"},
+		// #132/#134. The identities of the paragraphs this run would publish, for
+		// the caller to record AFTER the bytes become visible. It carries no prose
+		// either: a store path, an invocation id, and one node id and hash per
+		// changed target.
+		{"Publication", "workflow.Publication"},
 	})
 }
 

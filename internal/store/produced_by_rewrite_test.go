@@ -51,19 +51,26 @@ package store_test
 // needs no amendment there and would go unremarked. Stated rather than left
 // silent, because silence in this package reads as "not considered".
 //
-// # Only accepted candidates
+// # Only PUBLISHED paragraphs, which is not what this originally said
 //
-// A refused candidate was never published anywhere, so it cannot be anybody's
-// input. A `current_hash` is the text a run STARTED from, which is the author's
-// (or an earlier run's, in which case that earlier run's accepted candidate
-// carries the same hash). Counting either would refuse paragraphs this tool never
-// emitted.
+// It said "only accepted candidates", and #134 is that an accepted candidate is
+// not a published paragraph: `RecordAttempt` fires per attempt inside the loop,
+// so a run that accepted a candidate and then failed leaves one behind having
+// written nothing, and a run with three acceptances published the last. The
+// contract now lives on `Store.RecordPublication`, in `publication_test.go`, and
+// is not restated here.
+//
+// What survives unchanged: a `current_hash` is the text a run STARTED from, which
+// is the author's — or an earlier run's, in which case that earlier run's own
+// publication carries the same hash. Counting it would refuse paragraphs this
+// tool never emitted.
 
 import (
 	"testing"
 
 	"github.com/fissible/hapax/internal/identity"
 	"github.com/fissible/hapax/internal/rewrite"
+	"github.com/fissible/hapax/internal/store"
 )
 
 // An accepted candidate's hash is recognized; nothing else is.
@@ -71,7 +78,7 @@ import (
 // Table-driven over the four hashes one attempt puts in the store, because the
 // three negatives are each a different way to be wrong: the input text, a
 // candidate that was refused, and a hash the store never saw.
-func TestOnlyAnAcceptedCandidateCountsAsRewriteOutput(t *testing.T) {
+func TestOnlyAPublishedParagraphCountsAsRewriteOutput(t *testing.T) {
 	s := newStore(t)
 	snapshot, prof := seededProfile(t, s)
 	nodes := snapshot.Documents[0].Nodes
@@ -95,10 +102,32 @@ func TestOnlyAnAcceptedCandidateCountsAsRewriteOutput(t *testing.T) {
 		t.Fatalf("PutRewriteAttempt(refused): %v", err)
 	}
 
+	// Accepted AND published, which is what the screen is about. Without this
+	// the test asserts the equation #134 refuted.
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: accepted.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: nodes[0].ID, ParagraphHash: accepted.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
+	}
+
+	// Accepted and never published: a run that failed after an acceptance, or an
+	// acceptance a later one superseded.
+	stranded := identity.HashBytes([]byte("what a failed run accepted"))
+	unpublished := attemptFixture(prof.ID, nodes[1].ID)
+	unpublished.Index = 1
+	unpublished.CandidateHash = stranded
+	unpublished.Accepted, unpublished.Rejection = true, ""
+	if err := s.PutRewriteAttempt(ctx(), unpublished); err != nil {
+		t.Fatalf("PutRewriteAttempt(unpublished): %v", err)
+	}
+
 	unknown := identity.HashBytes([]byte("a paragraph this store never saw"))
 
 	got, err := s.ProducedByRewrite(ctx(), []string{
-		accepted.CandidateHash, refused.CandidateHash, accepted.CurrentHash, unknown,
+		accepted.CandidateHash, refused.CandidateHash, accepted.CurrentHash, stranded, unknown,
 	})
 	if err != nil {
 		t.Fatalf("ProducedByRewrite: %v", err)
@@ -108,9 +137,10 @@ func TestOnlyAnAcceptedCandidateCountsAsRewriteOutput(t *testing.T) {
 		name, hash string
 		want       bool
 	}{
-		{"the accepted candidate", accepted.CandidateHash, true},
+		{"a published paragraph", accepted.CandidateHash, true},
 		{"a candidate that was refused, and so never published", refused.CandidateHash, false},
 		{"the text a run started from", accepted.CurrentHash, false},
+		{"a candidate that was accepted and never published", stranded, false},
 		{"a hash the store never saw", unknown, false},
 	} {
 		if got[c.hash] != c.want {
@@ -135,6 +165,14 @@ func TestTheAnswerNamesEveryHashItWasAskedAbout(t *testing.T) {
 	accepted.Accepted, accepted.Rejection = true, ""
 	if err := s.PutRewriteAttempt(ctx(), accepted); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
+	}
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: accepted.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: nodes[0].ID, ParagraphHash: accepted.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
 	}
 	asked := []string{
 		accepted.CandidateHash,
@@ -201,6 +239,14 @@ func TestAHashOutlivesTheNodeItWasRecordedAgainst(t *testing.T) {
 	if err := s.PutRewriteAttempt(ctx(), accepted); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
 	}
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: accepted.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: first.Documents[0].Nodes[0].ID, ParagraphHash: accepted.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
+	}
 
 	// One more document, which renumbers everything beneath it.
 	second := withDerivedIDs(snapshotWrite(
@@ -239,6 +285,14 @@ func TestAnAcceptedRecordSurvivesAPrune(t *testing.T) {
 	accepted.Accepted, accepted.Rejection = true, ""
 	if err := s.PutRewriteAttempt(ctx(), accepted); err != nil {
 		t.Fatalf("PutRewriteAttempt: %v", err)
+	}
+	if err := s.RecordPublication(ctx(), store.Publication{
+		InvocationID: accepted.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: first.Documents[0].Nodes[0].ID, ParagraphHash: accepted.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("RecordPublication: %v", err)
 	}
 	// A second snapshot nothing references, so the prune has something to take.
 	// Without it the fixture cannot tell "the prune preserved the record" from

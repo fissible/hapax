@@ -125,6 +125,11 @@ func (r *rewriteService) Eval(context.Context, workflow.EvalRequest) (workflow.E
 func (r *rewriteService) Index(context.Context, workflow.IndexRequest) (workflow.IndexResult, error) {
 	return workflow.IndexResult{}, errNotUsed{}
 }
+
+// RecordPublication is a no-op here: the tests that care about publication
+// evidence use recordingService, which overrides it. #134.
+func (r *rewriteService) RecordPublication(context.Context, workflow.Publication) error { return nil }
+
 func (r *rewriteService) Profile(context.Context, workflow.ProfileRequest) (workflow.ProfileResult, error) {
 	return workflow.ProfileResult{}, errNotUsed{}
 }

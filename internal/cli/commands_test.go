@@ -57,6 +57,8 @@ func (f *fakeService) Profile(_ context.Context, request workflow.ProfileRequest
 
 // Rewrite exists because B2b-2b widened Service to carry the command. Nothing in
 // this file exercises it; rewrite_test.go has a service of its own.
+func (f *fakeService) RecordPublication(context.Context, workflow.Publication) error { return nil }
+
 func (f *fakeService) Rewrite(_ context.Context, request workflow.RewriteInput) (workflow.RewriteOutcome, error) {
 	f.calls++
 	f.rewriteRequest = request

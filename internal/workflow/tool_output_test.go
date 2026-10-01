@@ -107,6 +107,16 @@ func publishInto(t *testing.T, p publisher, text string) {
 	if err := p.store.PutRewriteAttempt(ctx(), attempt); err != nil {
 		t.Fatalf("record an accepted attempt: %v", err)
 	}
+	// #134. The screen reads publication evidence, not the attempt audit, so
+	// "publish" has to mean both halves here.
+	if err := p.store.RecordPublication(ctx(), store.Publication{
+		InvocationID: attempt.InvocationID,
+		Paragraphs: []store.PublishedParagraph{
+			{NodeID: attempt.NodeID, ParagraphHash: attempt.CandidateHash},
+		},
+	}); err != nil {
+		t.Fatalf("record the publication: %v", err)
+	}
 }
 
 // aCorpusDocument is an eligible document's path on disk, so a test can take a
@@ -231,21 +241,24 @@ func TestACleanCorpusIsScreenedAndReportsItPassed(t *testing.T) {
 	}
 }
 
-// A refused candidate does not screen anything out, and an accepted one does.
+// A published paragraph screens its document out; an accepted one does not.
 //
-// Both rows over the SAME paragraph, because the refused row alone asserts a
-// zero against an implementation that never sets the field — it was green under
-// the stub, which is the shape of an assertion that proves nothing. The accepted
-// row is the positive control that makes the refused row mean something.
-func TestOnlyAnAcceptedCandidateScreensADocumentOut(t *testing.T) {
+// Three rows over the SAME paragraph. The refused row alone asserts a zero
+// against an implementation that never sets the field — it was green under the
+// stub, which is the shape of an assertion that proves nothing — so the published
+// row is the positive control that makes it mean something. The middle row is
+// #134: accepted, recorded, never published, and so still the author's as far as
+// this screen is concerned.
+func TestOnlyAPublishedParagraphScreensADocumentOut(t *testing.T) {
 	t.Parallel()
 	for _, c := range []struct {
-		name     string
-		accepted bool
-		want     int
+		name               string
+		accepted, recorded bool
+		want               int
 	}{
-		{"refused, and so never published", false, 0},
-		{"accepted, and so published", true, 1},
+		{"refused, and so never published", false, false, 0},
+		{"accepted and never published", true, false, 0},
+		{"published", true, true, 1},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			t.Parallel()
@@ -270,8 +283,19 @@ func TestOnlyAnAcceptedCandidateScreensADocumentOut(t *testing.T) {
 				attempt.CandidateDistance, attempt.CandidateBand = 1.75, eval.BandNotYou
 				attempt.Rejection = "not-improved"
 			}
-			if err := openStore(t, defaultStorePath(root)).PutRewriteAttempt(ctx(), attempt); err != nil {
+			db := openStore(t, defaultStorePath(root))
+			if err := db.PutRewriteAttempt(ctx(), attempt); err != nil {
 				t.Fatalf("record the attempt: %v", err)
+			}
+			if c.recorded {
+				if err := db.RecordPublication(ctx(), store.Publication{
+					InvocationID: attempt.InvocationID,
+					Paragraphs: []store.PublishedParagraph{
+						{NodeID: attempt.NodeID, ParagraphHash: attempt.CandidateHash},
+					},
+				}); err != nil {
+					t.Fatalf("record the publication: %v", err)
+				}
 			}
 
 			result := indexed(t, indexRequest(root))
