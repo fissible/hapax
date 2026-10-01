@@ -19,7 +19,19 @@ jobs:
     # `go test -race ./...` measures 9m24s on ubuntu, of which internal/workflow
     # is 7m9s: nearly every test there builds a corpus, indexes it and crafts a
     # release. At 10 the margin was 36 seconds and one slice's fixtures spent it.
-    timeout-minutes: 20
+    #
+    # The JOB timeout was raised then and `go test`'s own was not, so the binding
+    # limit stayed Go's default 10m PER PACKAGE — a number nobody chose. #132/#134
+    # spent what was left of it: measured on one machine under -race,
+    # internal/workflow is 300.9s on main and 362.8s with that slice, +20.6%,
+    # which crossed 10m on the macOS runner and produced a goroutine dump rather
+    # than a failing assertion.
+    #
+    # -timeout is now explicit and below the job's, so a package that really does
+    # hang still dumps its goroutines instead of being killed without one. 20m is
+    # roughly twice what internal/workflow costs on the slower runner, which still
+    # catches a genuine hang; the job gets 30 so the binary's dump comes first.
+    timeout-minutes: 30
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
@@ -28,7 +40,7 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e
         with:
           go-version: '1.25'
-      - run: go test -race ./...
+      - run: go test -race -timeout 20m ./...
 
   quality:
     name: Quality
