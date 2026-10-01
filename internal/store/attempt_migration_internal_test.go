@@ -64,7 +64,7 @@ func TestWideningTheAttemptKeyKeepsTheAttemptsAlreadyStored(t *testing.T) {
 		t.Fatalf("the truncated list produced version %d, want %d", version, wantVersion)
 	}
 
-	seeded := seedAttemptGraph(t, before)
+	seeded := seedAttemptGraphAtSchemaVersion3(t, before)
 	if err := before.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
 	}
@@ -148,12 +148,30 @@ type seededAttempt struct {
 	want RewriteAttempt
 }
 
-// seedAttemptGraph writes the minimum graph an attempt needs — snapshot,
-// document, two nodes, profile — and one attempt with one identifier, using raw
-// SQL because the Go API at this version is the thing being migrated away from.
-func seedAttemptGraph(t *testing.T, s *Store) seededAttempt {
+// seedAttemptGraphAtSchemaVersion3 writes the minimum graph an attempt needs —
+// snapshot, document, two nodes, profile — and one attempt with one identifier,
+// using raw SQL because the Go API at this version is the thing being migrated
+// away from.
+//
+// NAMED for the schema it writes, and it asserts that version before inserting,
+// because two later slices reached for it and got
+// `NOT NULL constraint failed: rewrite_attempt_identifier.node_id` — the column
+// migration 4 adds. A caller at any other version now fails immediately and is
+// told why, instead of failing on a constraint whose connection to this helper is
+// not obvious.
+func seedAttemptGraphAtSchemaVersion3(t *testing.T, s *Store) seededAttempt {
 	t.Helper()
 	ctx := context.Background()
+	version, err := s.SchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("SchemaVersion: %v", err)
+	}
+	if version != 3 {
+		t.Fatalf("seedAttemptGraphAtSchemaVersion3 was called at schema version %d. It "+
+			"writes a rewrite_attempt_identifier row with no node_id, which migration 4 "+
+			"makes NOT NULL, so it only works at version 3. Write a seeder for the "+
+			"version your test opens.", version)
+	}
 	out := seededAttempt{invocation: identity.HashBytes([]byte("invocation"))}
 	currentHash := identity.HashBytes([]byte("current"))
 	candidateHash := identity.HashBytes([]byte("candidate"))

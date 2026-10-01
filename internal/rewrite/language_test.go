@@ -1030,7 +1030,14 @@ func hashOf(text string) string { return identity.HashBytes([]byte(text)) }
 // distinct distances, distinct bands, distinct texts on each side — so that a
 // swap or a stale carry-over cannot compare equal.
 func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
-	passing := rewrite.Attempt{Preserved: true, TellsComparable: true, TellsComparison: -1}
+	// #135. Every row here reaches the gate block and `passingGate` splices, so
+	// `intact` is the base. One row below overrides it, for the reason the #107
+	// case states about its own field: a new column compared only at its default
+	// value is not compared at all.
+	passing := rewrite.Attempt{
+		Preserved: true, TellsComparable: true, TellsComparison: -1,
+		Splice: rewrite.SpliceIntact,
+	}
 
 	cases := []struct {
 		name       string
@@ -1203,6 +1210,32 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 			}())},
 		},
 		{
+			// #135's path. The gate says NO and the distance refuses first, so the
+			// reported code is `not-improved` and the splice evidence is
+			// `not-intact` — the pairing the whole slice exists to make possible,
+			// and the one row in this table where the new field is not its base
+			// value.
+			name: "refused, not improved, and it would not have spliced",
+			gate: func() *fakeGate {
+				g := passingGate()
+				g.fallback.unspliceable = true
+				return g
+			}(),
+			reports: map[string]score.Report{
+				original: scored(0.30), better: scored(0.90),
+			},
+			candidates: []string{better},
+			want: []rewrite.Attempt{identities(func() rewrite.Attempt {
+				a := passing
+				a.CurrentHash, a.CandidateHash = hashOf(original), hashOf(better)
+				a.CurrentDistance, a.CandidateDistance = 0.30, 0.90
+				a.CurrentBand, a.CandidateBand = eval.BandDrifting, eval.BandDrifting
+				a.Rejection = rewrite.RejectionNotImproved
+				a.Splice = rewrite.SpliceNotIntact
+				return a
+			}())},
+		},
+		{
 			// No bands at all. The uncalibrated path records the distances it
 			// has and leaves the bands empty rather than inventing one.
 			name: "refused, uncalibrated",
@@ -1267,7 +1300,7 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 // happens to put there. This fails when the struct grows, which is the moment
 // to decide what each path should record.
 func TestEveryAuditFieldIsSpecifiedByTheRecordTable(t *testing.T) {
-	const specified = 19
+	const specified = 20
 	if n := reflect.TypeOf(rewrite.Attempt{}).NumField(); n != specified {
 		t.Errorf("rewrite.Attempt has %d fields and the record table specifies %d; "+
 			"add the new field to TestTheAttemptRecordIsCompleteOnEveryLanguagePath "+

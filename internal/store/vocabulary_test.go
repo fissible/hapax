@@ -50,6 +50,9 @@ func declaredVocabularies() map[string][]string {
 		"rewrite_attempt.current_band":   stringsOf(eval.Bands()),
 		"rewrite_attempt.candidate_band": stringsOf(eval.Bands()),
 		"rewrite_attempt.rejection":      stringsOf(rewrite.RejectionCodes()),
+		// #135. Includes the EMPTY member deliberately: the column is NOT NULL and
+		// every row names one of the three, with "" meaning no verdict recorded.
+		"rewrite_attempt.splice": stringsOf(rewrite.SpliceOutcomes()),
 	}
 }
 
@@ -297,6 +300,7 @@ var textualColumnGrammars = map[string]string{
 	"rewrite_attempt_overgrown_script.invocation_id": "hex",
 	"rewrite_attempt_overgrown_script.node_id":       "hex",
 	"rewrite_attempt_overgrown_script.script":        "script",
+	"rewrite_attempt.splice":                         "enum",
 	"migration.checksum":                             "hex", "migration.applied_at": "time",
 	// #134. Hashes and a timestamp: there is deliberately nowhere in publication
 	// evidence to put prose, a path, or a register.
@@ -580,6 +584,10 @@ func TestAStoredEnumOutsideItsVocabularyIsCorruptOnRead(t *testing.T) {
 			return err
 		},
 		"rewrite_attempt.rejection": func(s *store.Store, ids seededIDs) error {
+			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
+			return err
+		},
+		"rewrite_attempt.splice": func(s *store.Store, ids seededIDs) error {
 			_, err := s.LoadRewriteAttempt(ctx(), ids.Invocation, ids.AttemptNode, 0)
 			return err
 		},

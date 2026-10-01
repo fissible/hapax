@@ -796,6 +796,12 @@ func migrationExclusions(table string) map[string]bool {
 		// This nullable audit edge did not exist in the version-1 graph the
 		// migration test seeds, so its NULL backfill is not a mutation of that row.
 		return map[string]bool{"distractor_pool_id": true}
+	case "rewrite_attempt":
+		// #135. Added at migration 12, so it does not exist in the version-1
+		// database this test seeds and its `''` backfill is not a mutation of
+		// that row. What the backfill IS is asserted next door, by
+		// TestAddingTheSpliceColumnKeepsTheAttemptsAlreadyStored.
+		return map[string]bool{"splice": true}
 	case "rewrite_attempt_identifier":
 		// Migration 4 derives this value from the child node. Its preservation is
 		// verified by TestWideningTheAttemptKeyKeepsTheAttemptsAlreadyStored.
