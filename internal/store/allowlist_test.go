@@ -98,6 +98,9 @@ var declaredSchema = map[string][]string{
 		"current_hash", "candidate_hash", "current_distance", "candidate_distance",
 		"current_band", "candidate_band", "preserved", "tells_comparison",
 		"tells_comparable", "accepted", "rejection",
+		// #143. The expansion gate's evidence, declared here column by column
+		// like everything else: two counts and the bound that was applied.
+		"original_lexical_tokens", "candidate_lexical_tokens", "expansion_ceiling",
 		// #135. What the splice gate answered, recorded whichever rejection won,
 		// the way the two script columns already are. Empty means no verdict is
 		// recorded — for a row written before the column existed, nothing can know

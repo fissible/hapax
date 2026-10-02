@@ -83,6 +83,15 @@ func enumUpdate(table, column, value string) string {
 		if value == "" {
 			return set("rejection = ''", "accepted = 1")
 		}
+		// #143. `expanded` carries an implication: the candidate must exceed the
+		// bound the row records. The seeded counts are zero, which satisfies no
+		// bound, so probing this value without companions would reject a CORRECT
+		// implementation rather than test one.
+		if value == string(rewrite.RejectionExpanded) {
+			return set("rejection = "+quoted, "accepted = 0",
+				"original_lexical_tokens = 20", "candidate_lexical_tokens = 31",
+				"expansion_ceiling = 1.5")
+		}
 		return set("rejection = "+quoted, "accepted = 0")
 	case "rewrite_attempt.current_band", "rewrite_attempt.candidate_band":
 		if value == "" {
