@@ -6,7 +6,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
-## [Unreleased]
+## [0.2.0] - 2026-10-02
 
 ### Fixed
 - Refuse publication when the assembled document does not reproduce the last accepted candidates' interpretation and measurements or changes an untouched included leaf (#133). Check shifted and BOM-adjusted spans, retain local attempt acceptance, and report all mismatched node IDs without publishable bytes or publication evidence. No migration is added.
@@ -24,6 +24,13 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
   returns `TerminalNotEntered` before any attempt exists and is excluded from this rule.
 - Replace the rewrite comments' replay claim with the text-local precedence rationale:
   audit rows store hashes, so they cannot supply the prose needed to rerun the gates.
+
+### Generated from the commit subjects
+
+- feat: give a published paragraph one canonical identity (#132, #134)
+- feat: record the splice verdict on every attempt (#135)
+- feat: publish only what was scored (#133)
+- ci: make go test's own timeout explicit
 
 ## [0.1.0] - 2026-09-29
 
@@ -108,3 +115,4 @@ Commit messages follow [Conventional Commits](https://www.conventionalcommits.or
 
 ### Tools
 - Keep the select oracle rather than losing it with the session
+
