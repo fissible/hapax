@@ -8,6 +8,14 @@ on:
   push:
     tags: ['v*']
 
+# REQUIRED on the caller, not only on the reusable workflow. A called workflow
+# cannot grant itself more than its caller holds, so without this the run fails
+# at startup — no job, no log, just "this run likely failed because of a workflow
+# file issue". v0.2.0's tag hit exactly that: this file was added during v0.1.0's
+# release and omitted the block the org wiring instructions include.
+permissions:
+  contents: write
+
 jobs:
   release:
     uses: fissible/.github/.github/workflows/release.yml@main
