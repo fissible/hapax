@@ -213,6 +213,38 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (#137 — epsilon is a declared tolerance)
+
+Branch `fix/epsilon-resolution`, duet, frozen at `a8172a6` (`.duet/epsilon.{ref,sha256}`).
+Tests mine, implementation codex's; both agree it is done.
+
+**What was wrong.** `Epsilon = 1e-9` shipped claiming it stayed "below the resolution of a
+score". The old argument used `2.5/((n+1)*k)` — 0.0134 at n=30, k=6 — but that approximates a
+SINGLE feature's rank step and `d` is a mean over k of them, so changes cancel and the total
+can be far finer. A witness through the real `Transform`/`Distance` improves by 1.31e-10 and
+is rejected: 1.02e8 times finer than the refuted figure.
+
+**What replaced it.** Epsilon's real job, which is narrower and which it does do: acceptance
+is `candidate <= current - Epsilon`, so the comparison is NOT strict and at a zero tolerance a
+tie would be accepted and `current` would advance without improving. The existing exact-tie row
+proves that — an `Epsilon = 0.0` mutant dies on it.
+
+**Two mutations that had been passing the whole package.** `>` -> `>=` at the boundary, and
+rewriting the rule as `current-candidate < Epsilon`. Both are closed by testing the boundary at
+TWO values of current, because acceptance compares against a ROUNDED threshold rather than
+subtracting: at current = 1.0 the threshold is an improvement of 9.99999971718e-10, under
+Epsilon and accepted. So "rejects improvements smaller than Epsilon" is false as a universal,
+and the docs no longer say it.
+
+**#137 stays OPEN deliberately** — `rewrite.go` and the frozen test both say so. The false
+claim is corrected; what is still unmeasured is how often a real rewrite lands inside the
+tolerance, which needs the maintainer's corpus and a provider. `EpsilonDerived = false` marks
+the value as declared, following `ScriptCeilingDerived`'s precedent.
+
+**Next:** #136 (the script ceiling's missing measurement), then #126 (`internal/workflow`
+fixture cost, 993 ms per build; `store: conflict` blocks the obvious fix), then #130, #123,
+#122, #118, #113, #112, #110.
+
 ### 2026-10-01 (v0.2.0 — the sprint closed)
 
 All four slices merged: A (#138), B1 (#139), B2 (#140), C (#141). Tagged v0.2.0.
