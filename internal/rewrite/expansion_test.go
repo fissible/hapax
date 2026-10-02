@@ -29,18 +29,82 @@ package rewrite_test
 //	                                 96.6x   1.002000883  accepted
 //	                                386.2x   1.002000883  accepted
 //
-// Two things follow. Length DOES reach d — `Standardize` divides by
-// sqrt(V + S(n)) and the sampling term falls as the segment grows, so expansion
-// moves the score, here monotonically worse. And the score SATURATES: past
-// roughly 19x the value is constant to nine decimal places through 386x, because
-// `Reference.Transform` ranks against a finite reference and the insertion
-// positions stop moving.
+// Two things follow. Length can reach d — `Standardize` divides by
+// sqrt(V + S(n)), so a fixed per-token value CAN yield a different standardized
+// value when its supplied sampling variance changes and its numerator is
+// non-zero, and in both columns above the score moved WORSE.
+// And along these trajectories it PLATEAUS: past roughly 19x the value is
+// constant to nine decimal places through 386x, because `Reference.Transform`
+// ranks against a finite reference and the insertion positions stop moving.
 //
-// So the distance guard prices expansion only up to saturation, and past that it
-// is exactly indifferent. Whether an expansion is refused therefore turns on
-// whether the SATURATED distance still beats the original — a property of the
-// candidate and the reference rather than a policy. That is the gap this ceiling
-// fills.
+// So d's sensitivity to length runs out along these trajectories, and past the
+// plateau it is exactly indifferent. Whether such an expansion is refused turns
+// on whether the plateau value still improves on what it is compared against — a
+// property of the candidate and the reference rather than a policy. That is the
+// gap this ceiling fills.
+//
+// Note the two guards compare against different things: the distance guard is
+// `candidate <= current - Epsilon` against the ADVANCING current, while this
+// ceiling anchors on the ORIGINAL. The columns above are all first passes, so
+// current and original coincide there.
+//
+// # Evidence: length can also make the score BETTER
+//
+// Added after the implementation, because the two columns above invite the
+// reading that expansion is self-penalizing and so barely needs a gate. That
+// reading is not supported.
+//
+// `Standardize` CONSUMES a supplied sampling variance rather than deriving one
+// from the token count. Where that model-estimated uncertainty shrinks as the
+// segment grows AND the numerator (x - mu) is non-zero, the standardized value
+// moves away from zero toward (x - mu)/sqrt(V), which is finite while V > 0.
+// Neither condition is universal: a feature at zero density can carry zero
+// sampling variance and not move at all. Whether any movement helps depends on
+// where the reference's own values sit.
+//
+// Measured through the real `Standardize` and `Reference.Transform`, holding every
+// per-token value fixed and growing only the segment:
+//
+//	reference values centred on 0.0     reference values centred on 1.0
+//	  n=  25  z 0.707107  d 0.356866      n=  25  z 0.707107  d 0.356866
+//	  n= 100  z 0.894427  d 0.356866      n= 100  z 0.894427  d 0.356866
+//	  n= 400  z 0.970143  d 0.356866      n= 400  z 0.970143  d 0.054882
+//	  n=1600  z 0.992278  d 0.356866      n=1600  z 0.992278  d 0.013491
+//
+// Centred on zero the query is already past the whole cluster and the rank cannot
+// move — the plateau again. Centred on 1.0 the query is BELOW the cluster, so
+// lengthening carries it toward the middle ranks and d falls by a factor of 26,
+// bought with length alone.
+//
+// # Consequence: the pipeline PERMITS off-centre references
+//
+// `profile.Build` fits on `corpus.Train`, and `deviation.BuildReference` requires
+// `corpus.Calibrate` and standardizes those paragraphs against the Train-fitted
+// statistics. Separate splits PERMIT an off-centre reference; they do not
+// guarantee one, and skew and segment-dependent denominators contribute too. The
+// medians below do not isolate the split difference as their cause.
+//
+// Measured on this package's own fixture reference, the median z per feature:
+//
+//	semicolon_density  -0.5458   (its minimum too: most paragraphs carry none)
+//	colon_density      -0.3837   (the same)
+//	word_length_mean   -0.2658
+//	clause_marker_rate -0.1336
+//	comma_density      -0.0410
+//	function_word_rate +0.2075
+//
+// So these are not centred, and the SIGN of any length-driven movement depends on
+// which side of the cluster a paragraph sits. Either way no per-token rate
+// changed: the movement records shrinking model-estimated sampling uncertainty,
+// not a change in how the author writes. That supplies an additional reason for
+// caution about generous expansion allowances; it does not derive the chosen
+// multiplier.
+//
+// What is NOT established here: that a real paragraph from a real corpus improves
+// by lengthening. The 26x case uses a CONSTRUCTED reference, it spans 25 to 1600
+// tokens and so says nothing about behaviour near 1.5, and the two real paragraphs
+// measured above both got worse. #143 carries this measurement and the protocol
+// for the part that is still missing.
 //
 // # Decision
 //
@@ -57,11 +121,11 @@ package rewrite_test
 // judgments made without showing scores. #143 records what such a measurement
 // would need.
 //
-// Also unresolved, and deliberately not fixed here: whether saturation is itself
-// a scoring defect. A continuous scorer would price expansion past 19x, but it
-// would still not answer whether replacing thirty words with three thousand is
-// an acceptable rewrite — that is a relation between original and candidate,
-// where the score measures each against a profile.
+// Also unresolved, and deliberately not fixed here: whether the plateaus are
+// themselves a scoring limitation. Replacing the empirical rank transform could
+// change them, but would not by itself establish an acceptable expansion policy —
+// that is a relation between original and candidate, where the score measures
+// each against a profile.
 
 import (
 	"reflect"
