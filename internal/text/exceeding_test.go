@@ -603,10 +603,18 @@ func TestExceedingIsExactlyTheDeclaredRule(t *testing.T) {
 				isEstablished := originalSet.Count(name) > 0 &&
 					originalSet.Share(name) >= established
 				overCeiling := candidateSet.Share(name) > ceiling
-				// Disjunctive: growing the count, OR taking over the
-				// paragraph without growing it. The second arm is what stops a
-				// candidate spending a banked count by deleting everything else.
-				grew := candidateSet.Count(name) > originalSet.Count(name) ||
+				// Disjunctive: growing BOTH the count and the share, OR taking
+				// over the paragraph without growing the count at all.
+				//
+				// #136 made the first arm conjunctive. A count that rises while
+				// the share falls is a dilution, and the guard exists to stop
+				// the mix drifting rather than to cap absolute letters. The
+				// second arm is what stops a candidate spending a banked count
+				// by deleting everything else, and it is NOT redundant: a
+				// takeover on an unchanged count satisfies the rising-share half
+				// of the first arm but fails its conjunction.
+				grew := (candidateSet.Count(name) > originalSet.Count(name) &&
+					candidateSet.Share(name) > originalSet.Share(name)) ||
 					candidateSet.Share(name) >= established
 				if !isEstablished && overCeiling && grew {
 					want = append(want, name)
