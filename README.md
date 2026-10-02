@@ -8,11 +8,20 @@ moved *toward you* rather than merely away from the model.
 
 The name is from *hapax legomenon*: a word appearing exactly once in a corpus.
 
-> **Status: v0.1.0, the first tagged release.** All six commands run and the
-> library is complete. The version says the shape has settled, not that the
-> work has: the number is below one because the qualification checks a corpus
-> would need before anyone should trust a band are still unimplemented, and
-> `index` says so in every result it emits.
+> **Status: v0.2.0.** All six commands run and the library is complete. The
+> version says the shape has settled, not that the work has: the number is below
+> one because the qualification checks a corpus would need before anyone should
+> trust a band are still unimplemented, and `index` says so in every result it
+> emits.
+>
+> v0.2.0 repairs three defects an independent review found in v0.1.0, all of which
+> let this tool's own output back into the measurement it is judged against: a
+> trailing newline defeated both self-contamination screens, the screens treated
+> an accepted attempt as a published paragraph, and a paragraph could be published
+> that was not the one whose improvement was measured. If you ran v0.1.0, note
+> that paragraphs it published are not screened by this version — the upgrade
+> cannot know what it published, and inventing that history would risk excluding
+> your own writing from your own corpus. `index` discloses it.
 >
 > What is out of reach for most people is **calibration**. A band claim needs
 > roughly 600 documents of your own writing plus a distractor corpus, so until

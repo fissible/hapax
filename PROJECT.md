@@ -87,14 +87,16 @@ goes after rather than in parallel.
 | A — strike the false claims | finding 5, no issue | XS | none | **merged** ([#138](https://github.com/fissible/hapax/pull/138)) |
 | B1 — publication identity and evidence | [#132](https://github.com/fissible/hapax/issues/132), [#134](https://github.com/fissible/hapax/issues/134) | M–L | A | **merged** ([#139](https://github.com/fissible/hapax/pull/139)) |
 | B2 — the splice verdict | [#135](https://github.com/fissible/hapax/issues/135) | S | none | **PR [#140](https://github.com/fissible/hapax/pull/140)** |
-| C — publish what was scored | [#133](https://github.com/fissible/hapax/issues/133) | M–L | B1 | **next** |
+| C — publish what was scored | [#133](https://github.com/fissible/hapax/issues/133) | M–L | B1 | **merged** ([#141](https://github.com/fissible/hapax/pull/141)) |
 
 Reviewer for this sprint is **codex**. What the history establishes is that eight
 consecutive Claude reviews did not find these defects; it does not isolate model identity as
 the cause, and saying "the defects exist because the same model reviewed them" would be a
 causal claim the evidence does not carry. The decision to change reviewers follows from the
 observed miss, not from a demonstrated mechanism. A release should follow B and
-C, because v0.1.0's README advertises guards that #132 and #133 defeat.
+C. Released as v0.2.0: minor rather than patch, because the repairs added two
+tables, a column, a refusal code and envelope fields, and `feat:` is a minor bump under the org
+rule even when the intent is a fix.
 
 ## Open issues
 
@@ -211,6 +213,39 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (v0.2.0 — the sprint closed)
+
+All four slices merged: A (#138), B1 (#139), B2 (#140), C (#141). Tagged v0.2.0.
+
+**Why 0.2.0 and not 0.1.1.** The three repairs landed as `feat:` commits, which the org rule
+makes a MINOR bump, and the substance agrees: two new tables, one new column, a new value in the
+refusal vocabulary consumers parse, new envelope fields, and one disclosed behaviour change.
+The intent was defect repair, so 0.1.1 was the instinct; a patch would have understated what a
+consumer has to handle.
+
+**The upgrade consequence, stated in the README.** Paragraphs published by v0.1.0 are not
+screened by v0.2.0. The migration cannot know what those runs published, and deriving it from
+`accepted=1` would import the exact equation #134 refutes — so `index` discloses a
+`publication-evidence-gap` instead. The failure direction is deliberate: fail to EXCLUDE this
+tool's output rather than risk excluding the author's own prose.
+
+**What the sprint was.** An independent codex review of everything merged after `157617c` found
+three reproduced production defects in released code plus two claim defects. All five are closed.
+Every defect was the same class: this tool's own output re-entering the measurement it is judged
+against, by a path no single slice's review had looked at.
+
+### Next: #137
+
+`Epsilon = 1e-9` sits below the score's own resolution and rejects real improvements. Verified
+during the sprint by running codex's probe here: a gap of 1.3135903476069188e-10 against an
+epsilon of 1e-9, so a genuine improvement is discarded. This is the only open issue that silently
+loses the user's work rather than recording something incompletely, which is why it goes first.
+
+Then #136 (the script ceiling's missing measurement, which slice A's struck claims were standing
+in for) and #126 (internal/workflow's fixture cost — now with numbers: 993 ms per build, and
+sharing a corpus fails on `store: conflict` because `executingRunner` injects a constant
+invocation id).
+
 ### 2026-10-01 (slices B1 and B2)
 
 **B1 (#132 + #134) is merged** as PR #139. **B2 (#135) is PR #140**, CI green on ubuntu with
@@ -261,7 +296,9 @@ file can differ from what the distance was measured on. C adopts the canonical p
 established — the re-admitted assembled leaf — which is why it was sequenced after B1 rather
 than in parallel.
 
-A v0.1.1 should follow C, because v0.1.0's README advertises guards that #132 and #133 defeat.
+A release should follow C, and did: v0.2.0, minor rather than patch, because the repairs added two
+tables, a column, a refusal code and envelope fields, and `feat:` is a minor bump under the org
+rule even when the intent is a fix.
 
 ### 2026-09-30 (codex sprint, slice A — the false claims)
 
