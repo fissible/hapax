@@ -1600,20 +1600,25 @@ it; resistance to a determined guesser holding the store is not claimed.
 
 ### `rewrite`: the acceptance loop
 
-ADR 0006 specifies the decision completely and leaves three quantities unstated. Two are
-settled here; the third turned out to be the wrong shape.
+ADR 0006 defines the loop; these records cover its declared quantities and operating rules.
 
-**ε is a tolerance, not a threshold.** ADR 0006 says `d(candidate) ≤ d(current) − ε` and that
-ties inside ε are rejections. A declared value in the range that looks natural — 0.01, say —
-would be a constant compared against a quantity whose resolution changes with the corpus.
-`d` is a mean over *k* features of deviations that are ranks against a reference of *n*
-values, so its finest expressible change is about 2.5/((*n*+1)·*k*): **0.0135 at a reference
-of thirty, 0.0041 at a hundred**. An ε of 0.01 therefore accepts a single-rank improvement on
-a small corpus and silently rejects the same improvement on a larger one — the tool getting
-*less* willing to improve as the evidence behind it grows.
+**The score admits sub-ε improvements; frequency in real rewrites is unmeasured.**
 
-So ε is a floating-point tolerance, `1e-9`, and its job is exactly the one the ADR names:
-make ties rejections. The substantive protection against churn is the pass cap.
+**Evidence.** At n=30, k=6, [epsilon_test.go](../internal/rewrite/epsilon_test.go) measures
+`0.51465835887477385 → 0.51465835874341492`: improvement `1.31358923738389421e-10`,
+1.02321638e8 times finer than the refuted claim's `2.5/((n+1)*k) = 0.013440860`,
+which approximates a single feature's rank step, not the score's resolution.
+
+Distinct values 0..29 give 61 rank positions; ties change placement. Multisets summed in
+ascending magnitude order yield 3,411,062 scores using Go's `math.Sqrt2 * math.Erfinv(2*u-1)`;
+the count depends on `math.Erfinv`'s rounding. `Distance` sums in manifest order; permutations
+can differ: a lower bound, not a census. The achievable set is finite; enumerated gaps leave
+`[1e-15, 1e-13)` empty across both summation directions and both Go and Python NormalDist
+quantiles. At current `1.0`, rounded threshold `0.99999999900000003` is accepted:
+improvement `9.9999997171806854e-10`, below ε.
+
+**Decision.** Retain the declared tolerance; #137 remains open for measurement and possible
+derivation. See `rewrite.go` for the contract.
 
 **The pass cap is three, and it counts attempts rather than acceptances.** Declared rather
 than derived: a cap is a safety envelope, not an optimum, and this is a stand-in like every

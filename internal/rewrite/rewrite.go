@@ -16,8 +16,15 @@ import (
 
 const (
 	RejectionNone RejectionCode = ""
-	// Epsilon rejects ties while remaining below the resolution of a score.
+	// Epsilon sets acceptance at candidate <= current - Epsilon, comparing against
+	// the rounded float64 threshold rather than subtracting the scores. With zero
+	// tolerance, the non-strict comparison would accept ties and advance current
+	// without improvement. Declining small positive improvements is policy, not a
+	// consequence of score resolution; their frequency in real rewrites is unmeasured.
 	Epsilon = 1e-9
+	// EpsilonDerived records that Epsilon is not derived from a measurement.
+	// A derivation remains possible; #137 stays open. See docs/DESIGN.md for evidence.
+	EpsilonDerived = false
 
 	// FencePrefix mechanically fences every exemplar line in a prompt.
 	FencePrefix = "> "

@@ -464,6 +464,9 @@ small corpus and rejects the identical improvement once the reference passes abo
 ties rejections. Churn is bounded by the pass cap, which limits accepted rewrites directly
 rather than through a proxy that drifts with corpus size.
 
+**Correction (2026-10-01, #137).** The resolution argument above was refuted. See
+[DESIGN's current record](DESIGN.md#rewrite-the-acceptance-loop) for the evidence and decision.
+
 **The pass cap had no value.** Three, declared, a safety envelope rather than an optimum.
 
 **Nothing said what a candidate that is not one paragraph means.** A generator can return two
