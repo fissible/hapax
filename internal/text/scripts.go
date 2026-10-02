@@ -77,9 +77,10 @@ func (s ScriptSet) Count(name string) int { return s.counts[name] }
 //
 //	original.Share(name) < established    OR original.Count(name) == 0
 //	s.Share(name) > ceiling
-//	s.Count(name) > original.Count(name)  OR s.Share(name) >= established
+//	(s.Count(name) > original.Count(name) AND s.Share(name) > original.Share(name))
+//	    OR s.Share(name) >= established
 //
-// Three consequences that follow from that and are easy to get wrong. Every
+// Five consequences that follow from that and are easy to get wrong. Every
 // number below is measured at the declared parameters, established=0.25 and
 // ceiling=0.05:
 //
@@ -93,6 +94,15 @@ func (s ScriptSet) Count(name string) int { return s.counts[name] }
 //   - The ceiling is a threshold on a ratio and moves with either term. 96 + 4
 //     to 114 + 6 is exactly 0.0500 and is not named; to 113 + 6 is 0.0504 and
 //     is.
+//   - The conjunctive growth arm permits dilution: a rising count whose share
+//     does not rise is not named. 10 Latin + 1 Greek to 23 + 2 takes Greek
+//     from 0.0909 to 0.0800 on a doubled count and is not named. Both shares
+//     exceed the ceiling, so its line does not screen the candidate off.
+//     Proportional scaling is the boundary case.
+//   - SHORTENING may remove script letters too: 80 Latin + 20 Greek to 60 + 15
+//     is 0.2000 and is not named. To 30 + 15 is 0.3333 and Greek is named on a
+//     count that fell. The takeover arm prevents spending a banked count by
+//     deleting everything else.
 //
 // Both comparisons against established are inclusive, and they point opposite
 // ways: a script already AT the threshold in the original is exempt, and a
@@ -100,13 +110,6 @@ func (s ScriptSet) Count(name string) int { return s.counts[name] }
 // ceiling < established — with the two equal the ceiling line admits the
 // candidate first, so at established = ceiling = 0.25, 80 Latin + 20 Greek to
 // 60 + 20 lands on 0.2500 and is not named.
-//
-// The count arm admits a SHORTENING rewrite that removes letters of the script
-// too, so long as the candidate's share stays under established: 80 Latin + 20
-// Greek to 60 + 15 is 0.2000 and is not named. It is not a general exemption for
-// shortening — the same original to 30 + 15 is 0.3333 and Greek is named on a
-// count that fell. The share arm is what stops a candidate spending a banked
-// count by deleting everything else.
 //
 // # Scripts, not languages
 //
@@ -127,7 +130,7 @@ func (s ScriptSet) Exceeding(original ScriptSet, established, ceiling float64) [
 		if s.Share(name) <= ceiling {
 			continue
 		}
-		if count > original.counts[name] || s.Share(name) >= established {
+		if (count > original.counts[name] && s.Share(name) > original.Share(name)) || s.Share(name) >= established {
 			names = append(names, name)
 		}
 	}

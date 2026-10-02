@@ -213,6 +213,50 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (#136 — the script growth arm is conjunctive)
+
+Branch `fix/script-proportional-growth`, duet, frozen at `4caef57`
+(`.duet/proportional.{ref,sha256}`). Tests mine, implementation codex's; both agree it is done.
+
+**The ticket asked one question and the answer required finding two.** #136 asked whether a
+rewrite that scales a paragraph without changing its script mix should be exempt. Scoping it
+showed the old arm — name a script whenever its absolute COUNT rose — was incoherent in both
+directions: it refused rewrites that DILUTED a script (10 Latin + 1 Greek to 23 + 2 takes
+Greek from 0.0909 to 0.0800 and was named), and it permitted a paragraph shrinking around a
+script until the share reached 0.25 (90 + 10 to 45 + 10 is an 82% rise, permitted). A real
+witness was already sitting in `exceeding_test.go`'s own fixtures.
+
+**The decision was the maintainer's, and it went against codex's recommendation.** Codex
+argued for RETAIN: neither rule dominates, the share arm removes a real protection, and no
+representative evidence exists to price the tradeoff. It also refuted my first proposal — a
+pure share arm refuses shortening the prose around an unchanged Greek quotation, which
+`Exceeding` documents as tolerated. The hybrid it offered as its own point 5 is what shipped:
+`(count grew AND share grew) OR share >= established`. Put to the maintainer with both
+arguments; they chose the hybrid.
+
+**Why the hybrid is safe to ship on unmeasured rates.** It only ever PERMITS more — the new
+arm implies the old one and the other conditions are untouched, so no rewrite accepted today
+becomes refused. Proof, plus zero newly named candidates measured over 42,806,400 pairs.
+
+**The cost is recorded, not hidden.** Absolute growth at constant share is permitted without
+bound and nothing refuses it: #143, filed. The exposure is wider rather than new — growth
+below the ceiling and established scripts were already exempt.
+
+**Still open under #136:** the rejection rate on legitimate rewrites and the escape rate on
+incidents, both blocked on corpus acquisition. The corpus carries two non-Latin paragraphs of
+1959, both below the ceiling, so the affected band cannot be sampled. I also corrected #136's
+body: its "separation, stated correctly" section was built on the superseded 20.93% figure
+that slice A replaced with 18.5841%, so 4.19x, 2.093%, 2.832% and 7.39x were all wrong.
+
+**Process note.** Phase 1 took FIVE rounds, and three of them turned on the same defect
+class: a fixture self-check that a useless fixture still satisfies. Codex broke six of my
+fixtures by editing only the fixture — one passed with the candidate identical to the
+original, "doubling" claim and all. Recorded in `CLAUDE.local.md`.
+
+**Next:** #126 (`internal/workflow` fixture cost, 993 ms per build; `store: conflict` blocks
+the obvious fix), then #143 if the expansion decision is wanted soon, then #130, #123, #122,
+#118, #113, #112, #110.
+
 ### 2026-10-01 (#137 — epsilon is a declared tolerance)
 
 Branch `fix/epsilon-resolution`, duet, frozen at `a8172a6` (`.duet/epsilon.{ref,sha256}`).

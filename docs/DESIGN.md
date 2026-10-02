@@ -252,8 +252,8 @@ one scoreable segment with comparable features, and is accepted only when:
 2. `preserve(original → candidate)` passes, and
 3. `tells(candidate) ⊑ tells(current)`, a **severity-lexicographic vector**
    comparison over derived, verdict-eligible findings only — see ADR 0006, and
-4. language introduces no script absent from `current` and grows no script beyond the
-   permitted share anchored on `original`, and
+4. language introduces no script absent from `current` and
+   `text.ScriptSet.Exceeding` names none against `original` (see [script growth](#script-growth)), and
 5. the candidate splices into the original document at the original span as exactly one
    included leaf in the same place and containers.
 
@@ -1602,6 +1602,28 @@ it; resistance to a determined guesser holding the store is not claimed.
 
 ADR 0006 defines the loop; these records cover its declared quantities and operating rules.
 
+#### Script growth
+
+**Decision (#136).** The maintainer selected the hybrid against the reviewer's recommendation
+to retain the old rule. [ScriptCeiling](../internal/rewrite/rewrite.go) owns the policy and
+open questions; [Exceeding](../internal/text/scripts.go) owns the predicate and consequences.
+
+**Evidence.** Comparing the complete old and new predicates at established=0.25 and
+ceiling=0.05 over 42,806,400 two-script pairs (original 10..100 Latin × 1..40 Greek;
+candidate 5..200 Latin × 1..60 Greek), 2,211,794 pairs are named only by the old predicate
+when Greek alone is scored; 2,213,415 when either script may be named. Across the Greek
+differences, the candidate/original Greek share factor ranges from 0.2065884980 to 1.0000.
+That bound does not cover the extra 1,621 Latin differences.
+
+The change only permits more: the new growth arm implies the old count-growth arm, and
+the other conditions are unchanged, so every candidate named now was named before.
+The enumeration found zero pairs named only by the new predicate. The frozen
+[proportional_test.go header](../internal/text/proportional_test.go) records the detailed
+evidence and real-prose witness; its tests reproduce the contract. These are guard results,
+not rewrite-loop acceptance rates.
+
+#### Improvement tolerance (ε)
+
 **The score admits sub-ε improvements; frequency in real rewrites is unmeasured.**
 
 **Evidence.** At n=30, k=6, [epsilon_test.go](../internal/rewrite/epsilon_test.go) measures
@@ -1619,6 +1641,8 @@ improvement `9.9999997171806854e-10`, below ε.
 
 **Decision.** Retain the declared tolerance; #137 remains open for measurement and possible
 derivation. See `rewrite.go` for the contract.
+
+#### Pass cap
 
 **The pass cap is three, and it counts attempts rather than acceptances.** Declared rather
 than derived: a cap is a safety envelope, not an optimum, and this is a stand-in like every
@@ -1639,6 +1663,8 @@ does not terminate:
 Because acceptance requires a strict improvement in `d` and `current` only ever advances on
 acceptance, the sequence of accepted distances is strictly decreasing and the loop is
 monotone whatever the provider does.
+
+#### Candidate acceptance
 
 **A candidate must admit exactly one segment.** A rewrite of a paragraph that arrives as two
 paragraphs, or as something the lexical-token floor excludes, is not a rewrite of that
