@@ -86,6 +86,10 @@ const (
 // Both values are DECLARED. ScriptCeilingDerived says so, the way #92 says it
 // about the paragraph floor.
 //
+// Under #136, the maintainer chose to exempt proportional growth and dilution
+// from this guard. The predicate is on text.ScriptSet.Exceeding; docs/DESIGN.md
+// links the evidence.
+//
 // The ceiling is evidence-INFORMED. Of 1959 admitted paragraphs in the
 // maintainer's corpus, measured through the real admission path with the tool's
 // own output excluded (#109), two carry any non-Latin script at all — at
@@ -114,9 +118,15 @@ const (
 //
 // # Unresolved
 //
-// The values, the rejection rate on legitimate rewrites, the escape rate on
-// incidents, and whether proportional growth should be exempt: #136. The band
-// between the two thresholds is unoccupied in the maintainer's corpus.
+// The values remain declared. #136 stays open for the rejection rate on
+// legitimate rewrites and the escape rate on incidents, blocked on corpus
+// acquisition: the two non-Latin paragraphs of 1959 are below the ceiling,
+// leaving the affected band unsampled.
+//
+// This guard permits unbounded absolute growth at constant share. The exposure
+// is wider, not new: growth below the ceiling and established scripts were
+// already exempt. No dedicated expansion refusal exists; provider response and
+// token limits bound transport, not prose expansion. #143 carries that decision.
 const ScriptCeiling = 0.05
 
 // ScriptEstablished is the share of the ORIGINAL at which a script is exempt
