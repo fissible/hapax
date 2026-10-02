@@ -14,18 +14,29 @@ package rewrite_test
 // Improvement is required on d alone; conditions 2 and 3 are non-regression
 // guards. Ties inside epsilon are rejections. Attempts are capped.
 //
-// # epsilon is a tolerance, not a threshold
+// # epsilon is a declared tolerance
 //
-// A declared absolute value would compare a constant against a quantity whose
-// resolution moves with the corpus: d is a mean over k features of ranks against
-// a reference of n values, so its finest expressible change is about
-// 2.5/((n+1)*k) — 0.0135 at a reference of thirty, 0.0041 at a hundred. An
-// epsilon of 0.01 accepts a single-rank improvement on a small corpus and
-// rejects the identical improvement once the reference passes about seventy, so
-// the tool would grow less willing to improve as its evidence improved.
+// It rejects small positive improvements — not precisely those smaller than
+// itself, since acceptance compares against the rounded threshold `current -
+// Epsilon`, which at current = 1.0 is an improvement under Epsilon and accepted.
+// Declining them is a policy choice rather than a consequence of the score. #137 struck the
+// argument that used to stand here, which said d's finest expressible change was
+// about 2.5/((n+1)*k) — 0.0135 at a reference of thirty — and concluded that
+// 1e-9 was below the score's resolution. That figure approximates a SINGLE
+// feature's rank step, and d is a mean over k of them, so changes in different
+// features cancel and the total can be far finer. `epsilon_test.go` carries a
+// witness through the real transform: a positive improvement of 1.3e-10, about
+// 10^8 times finer, which the rule rejects.
 //
-// epsilon is therefore 1e-9, doing exactly the job ADR 0006 names for it: making
-// ties rejections. Churn is bounded by the cap.
+// What survives is narrower, and it is Epsilon's actual job. Acceptance is
+// `candidate <= current - Epsilon`, so the comparison is NOT strict: at a
+// tolerance of zero a tie would be accepted and `current` would advance without
+// improving. Epsilon is what rejects ties, which is what ADR 0006 needs from it,
+// and that needs no claim about resolution. Churn is bounded by the cap.
+//
+// Whether 1e-9 is the right VALUE is unmeasured. How an absolute tolerance behaves
+// as the reference grows is a separate question and nothing here is evidence for
+// it. `EpsilonDerived` records that the figure is declared.
 //
 // # The cap counts attempts, not acceptances
 //
@@ -328,6 +339,14 @@ func TestDeclaredFigures(t *testing.T) {
 	if rewrite.Epsilon != 1e-9 {
 		t.Errorf("Epsilon = %v, want 1e-9", rewrite.Epsilon)
 	}
+	// #137. Declared NOT derived from a measurement, the way
+	// `ScriptCeilingDerived` says it about #107's constants. Not "underivable":
+	// a derivation remains possible and #137 stays open for it — what is missing
+	// is how often a real rewrite lands inside the tolerance.
+	if rewrite.EpsilonDerived {
+		t.Error("EpsilonDerived is true, so a measurement derives the value; nothing " +
+			"has measured how often a real rewrite lands inside the tolerance")
+	}
 	got := rewrite.DefaultOptions()
 	if got.Attempts != 3 {
 		t.Errorf("default attempts = %d, want 3", got.Attempts)
@@ -372,12 +391,16 @@ func TestAcceptanceTurnsOnTheDistance(t *testing.T) {
 		accepted bool
 	}{
 		{name: "a clear improvement", distance: 0.40, accepted: true},
-		{name: "an improvement of one rank at a reference of a hundred", distance: 0.50 - 0.0041, accepted: true},
-		// The finest change d can express at a reference of thirty. An absolute
-		// epsilon of 0.01 would reject this, and accept the 0.0041 case above
-		// only on a smaller corpus — which is the shape error the tolerance
-		// avoids.
-		{name: "an improvement of one rank at a reference of thirty", distance: 0.50 - 0.0135, accepted: true},
+		// Two SMALL improvements, named by their size rather than by an
+		// interpretation. Earlier versions called these "one rank at a reference
+		// of a hundred" and "the finest change d can express at a reference of
+		// thirty"; #137 refuted the second — d is a mean over k features, so
+		// cancellation produces totals far finer, and a witness through the real
+		// transform improves by 1.3e-10. Neither value is a rank step and neither
+		// is a resolution; they are simply two improvements comfortably clear of
+		// the tolerance, kept because the rule has to accept ordinary ones.
+		{name: "an improvement of about four thousandths", distance: 0.50 - 0.0041, accepted: true},
+		{name: "an improvement of about fourteen thousandths", distance: 0.50 - 0.0135, accepted: true},
 		{name: "an improvement just over the tolerance", distance: 0.50 - 2e-9, accepted: true},
 		{name: "an improvement just under the tolerance", distance: 0.50 - 5e-10, accepted: false},
 		{name: "an exact tie", distance: 0.50, accepted: false},

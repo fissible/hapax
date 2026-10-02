@@ -236,10 +236,17 @@ against, by a path no single slice's review had looked at.
 
 ### Next: #137
 
-`Epsilon = 1e-9` sits below the score's own resolution and rejects real improvements. Verified
-during the sprint by running codex's probe here: a gap of 1.3135903476069188e-10 against an
-epsilon of 1e-9, so a genuine improvement is discarded. This is the only open issue that silently
-loses the user's work rather than recording something incompletely, which is why it goes first.
+`Epsilon = 1e-9` is declared with a rationale that is false: it says the value stays below the
+score's resolution, and the score admits positive improvements about 10^8 times finer. Verified
+through the real transform — a witness improving by 1.31e-10, which the rule rejects.
+
+**The priority argument written here first was wrong, and it was mine.** It said this issue
+"silently loses the user's work", ranking it above everything else on that basis. It does not: a
+tolerance rejecting improvements smaller than itself is defensible design, and #137 is about the
+RATIONALE, not the behaviour. Effort XS for the honesty. Whether the value should change needs a
+measurement nobody has done — how often a real rewrite lands inside the tolerance — which needs
+the maintainer's corpus and a provider, so the issue stays open for that after the claims are
+corrected.
 
 Then #136 (the script ceiling's missing measurement, which slice A's struck claims were standing
 in for) and #126 (internal/workflow's fixture cost — now with numbers: 993 ms per build, and
