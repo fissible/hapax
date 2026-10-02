@@ -213,6 +213,56 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-02 (#143 — the expansion ceiling)
+
+Branch `feat/expansion-ceiling`, duet, frozen at `6d3454f`
+(`.duet/expansion.{ref,sha256}`, seven files). Tests mine, implementation codex's; both agree
+it is done.
+
+**I got the central mechanism wrong first, and codex caught it.** I measured that duplicating
+a paragraph changes every feature value by exactly zero and concluded `d` was length-invariant.
+That measured the WRONG LAYER: `Standardize` divides by `sqrt(V + S(n))` and the sampling term
+falls with length, so an unchanged rate gives a different z at a different n — which three
+existing tests already pinned. Redone by reading the distances the loop actually RECORDED:
+
+    duplicating the ORIGINAL          duplicating an IMPROVING candidate
+      2.0x  1.338914001  refused        1.9x  0.686365334  accepted
+      5.0x  1.553020197  refused       19.3x  1.002000883  accepted
+    100.0x  1.553020197  refused      386.2x  1.002000883  accepted
+
+**The real mechanism is SATURATION.** Expansion does move `d`, monotonically worse — but past
+roughly 19x the value is constant to nine decimal places through 386x, because
+`Reference.Transform` ranks against a finite reference and the insertion positions stop
+moving. So the distance guard prices expansion only up to saturation and is exactly
+indifferent past it, and whether an expansion is refused turns on whether the SATURATED
+distance still beats the original. That is a property of the candidate, not a policy.
+
+**The decision was the maintainer's.** Codex recommended the gate but left the multiplier
+explicitly open; put to them with the measured alternatives, they chose 1.5 — the stricter of
+the two I had flagged as evidence-indistinguishable. One-sided, lexical tokens, anchored on
+the ORIGINAL so N passes cannot compound to 1.5^N, own rejection code, counts and bound
+persisted.
+
+**Verified end to end** through the real Runner afterwards: `lengthensOne` at 1.1x still
+accepted as the suite requires; 1.9x, 19.3x and 386.2x all refused as `expanded`.
+
+**Process.** Phase 1 took SIX rounds and codex found twenty implementations that passed an
+earlier draft. The ones worth remembering: it removed `requireDispositions`-style evidence by
+moving three assignments inside the gate block (early refusals then recorded 0 -> 0); it added
+`break` after an expansion refusal (every over-bound fixture offered its candidate last); it
+restricted the gate to candidates that already improve (an over-bound tie then reported
+`not-improved`); and it left `Recorder.RecordAttempt` unwired while the columns and codec were
+done, which every other test tolerated. Seven test files ended up in the freeze because the
+`Attempt` field count guard cascades into six allowlists and fixtures.
+
+**Still open, deliberately:** the multiplier's tradeoffs — rewrites lost against expansions
+caught — need real provider candidates and author judgments made without showing scores.
+And whether saturation is itself a scoring defect is a separate question; codex argued, and I
+accept, that a continuous scorer would price expansion past 19x but still would not answer
+whether replacing thirty words with three thousand is an acceptable rewrite.
+
+**Next:** #130, #123, #122, #118, #113, #112, #110.
+
 ### 2026-10-01 (#126 — the workflow fixture cost)
 
 Branch `perf/workflow-fixture-cost`, duet, frozen at `80db20d`

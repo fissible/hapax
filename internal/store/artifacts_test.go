@@ -468,6 +468,12 @@ func TestARecorderSatisfiesTheRewriteStore(t *testing.T) {
 		Rejection: rewrite.RejectionNone,
 		ProfileID: prof.ID, ProviderID: string(llm.ProviderAnthropic),
 		InvocationID: fakeID("invocation", "recorder"),
+		// #143. UNEQUAL and non-zero, with a bound that is not the constant, so a
+		// recorder that dropped the three fields, swapped the counts, or
+		// substituted `ExpansionCeiling` for the stored value cannot pass.
+		OriginalLexicalTokens:  40,
+		CandidateLexicalTokens: 44,
+		ExpansionCeiling:       1.25,
 	}
 	if err := recorder.RecordAttempt(attempt); err != nil {
 		t.Fatalf("RecordAttempt: %v", err)
@@ -481,6 +487,17 @@ func TestARecorderSatisfiesTheRewriteStore(t *testing.T) {
 	}
 	if got.NodeID != nodeID || got.ProviderID != llm.ProviderAnthropic || !got.Accepted {
 		t.Errorf("recorded %+v", got)
+	}
+	// The recorder is a SEPARATE boundary from PutRewriteAttempt, and a
+	// recorder left unchanged while the columns and codec were wired dropped all
+	// three of these while every other test passed.
+	if got.OriginalLexicalTokens != 40 || got.CandidateLexicalTokens != 44 {
+		t.Errorf("counts recorded %d -> %d, want 40 -> 44",
+			got.OriginalLexicalTokens, got.CandidateLexicalTokens)
+	}
+	if got.ExpansionCeiling != 1.25 {
+		t.Errorf("ceiling recorded %v, want the supplied 1.25 and not the constant %v",
+			got.ExpansionCeiling, rewrite.ExpansionCeiling)
 	}
 }
 
@@ -523,6 +540,15 @@ func TestEveryRewriteAttemptFieldIsDecidedOnPurpose(t *testing.T) {
 		// derived from the paragraph.
 		"OvergrownScripts": true,
 		"TellsComparison":  true, "TellsComparable": true,
+		// #143. Persisted on the same argument as the scripts and the splice
+		// verdict: the gate runs on every candidate, its answer is evidence
+		// whichever refusal wins, and a COUNT of lexical tokens is a scalar
+		// measurement rather than anything from which prose could be
+		// reconstructed. The bound is stored per row rather than read from the
+		// constant at load time, so a later change to `ExpansionCeiling` cannot
+		// silently restate what an old decision was measured against.
+		"OriginalLexicalTokens": true, "CandidateLexicalTokens": true,
+		"ExpansionCeiling": true,
 		// #135. Persisted on the same argument as the two above: the gate runs on
 		// every candidate and its answer is evidence whichever refusal wins, and
 		// the value is one of three closed-vocabulary strings rather than anything
@@ -1065,6 +1091,9 @@ func TestTheCodecFieldSetsAreExactlyTheAllowlist(t *testing.T) {
 			// migration safety, which is false — persistence names its columns
 			// explicitly. What this test pins is exact MEMBERSHIP.
 			"Splice",
+			// #143. The expansion gate's evidence: both counts and the bound
+			// that was applied.
+			"OriginalLexicalTokens", "CandidateLexicalTokens", "ExpansionCeiling",
 		}},
 	}
 	for _, c := range declared {

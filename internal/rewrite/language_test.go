@@ -400,6 +400,11 @@ func TestLanguageIsReportedBeforeTells(t *testing.T) {
 
 	got := run(t, languageLoop(t, gate))
 
+	// Guarded before indexing: an empty-loop implementation panicked here rather
+	// than failing, which reads as a crash instead of as a refuted claim.
+	if len(got.Attempts) == 0 {
+		t.Fatal("no attempt was recorded, so there is no rejection to read")
+	}
 	if code := got.Attempts[0].Rejection; code != rewrite.RejectionLanguage {
 		t.Errorf("a candidate failing both was rejected as %q, want %q",
 			code, rewrite.RejectionLanguage)
@@ -418,6 +423,13 @@ func TestLanguageIsConsultedOncePerCandidate(t *testing.T) {
 
 	out := run(t, loop)
 
+	// The EXPECTED attempt count, not merely agreement with whatever the loop
+	// produced. Comparing the two counts alone is satisfied by zero and zero, so
+	// a loop that ran no attempts at all passed this.
+	if len(out.Attempts) != 1 {
+		t.Fatalf("%d attempts recorded; this fixture offers one candidate and the "+
+			"comparison below is vacuous at zero", len(out.Attempts))
+	}
 	if counting.languageCalls != len(out.Attempts) {
 		t.Errorf("language was consulted %d times across %d attempts",
 			counting.languageCalls, len(out.Attempts))
@@ -1034,9 +1046,18 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 	// `intact` is the base. One row below overrides it, for the reason the #107
 	// case states about its own field: a new column compared only at its default
 	// value is not compared at all.
+	// #143. Every row's reports come from `scored`/`inRangeAt`, which fix the
+	// segment at 12 lexical tokens, so the original and candidate counts are both
+	// 12 here and the ratio is 1.0. The #135 warning about a column compared only
+	// at its default applies, and is answered in expansion_test.go rather than
+	// here: TestTheAttemptRecordsBothCountsAndTheBound compares the two counts at
+	// 20 and 31, which are different from each other and from the default.
 	passing := rewrite.Attempt{
 		Preserved: true, TellsComparable: true, TellsComparison: -1,
-		Splice: rewrite.SpliceIntact,
+		Splice:                 rewrite.SpliceIntact,
+		OriginalLexicalTokens:  12,
+		CandidateLexicalTokens: 12,
+		ExpansionCeiling:       rewrite.ExpansionCeiling,
 	}
 
 	cases := []struct {
@@ -1121,8 +1142,15 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 			reports: map[string]score.Report{
 				// Three DISTINCT bands, so a record that froze the current
 				// band at the original's cannot compare equal.
-				original: banded(eval.BandNotYou, 1.60), better: scored(0.60),
-				betterYet: inRangeAt(0.05),
+				//
+				// #143. Three DISTINCT lexical counts too, 20 -> 28 -> 29, all
+				// within the ceiling so nothing here is refused for length. A
+				// record that swapped the two counts on ACCEPTANCE, or anchored
+				// the second record's original on the advancing current's 28,
+				// passed the whole package while every count was 12.
+				original:  withTokens(banded(eval.BandNotYou, 1.60), 20),
+				better:    withTokens(scored(0.60), 28),
+				betterYet: withTokens(inRangeAt(0.05), 29),
 			},
 			candidates: []string{better, betterYet},
 			want: []rewrite.Attempt{
@@ -1132,6 +1160,7 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 					a.CurrentHash, a.CandidateHash = hashOf(original), hashOf(better)
 					a.CurrentDistance, a.CandidateDistance = 1.60, 0.60
 					a.CurrentBand, a.CandidateBand = eval.BandNotYou, eval.BandDrifting
+					a.OriginalLexicalTokens, a.CandidateLexicalTokens = 20, 28
 					a.Accepted = true
 					return a
 				}()),
@@ -1141,6 +1170,8 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 					a.CurrentHash, a.CandidateHash = hashOf(better), hashOf(betterYet)
 					a.CurrentDistance, a.CandidateDistance = 0.60, 0.05
 					a.CurrentBand, a.CandidateBand = eval.BandDrifting, eval.BandInRange
+					// The ORIGINAL's 20, not the advancing current's 28.
+					a.OriginalLexicalTokens, a.CandidateLexicalTokens = 20, 29
 					a.Rejection = rewrite.RejectionLanguage
 					a.IntroducedScripts = []string{"Cyrillic"}
 					return a
@@ -1300,7 +1331,7 @@ func TestTheAttemptRecordIsCompleteOnEveryLanguagePath(t *testing.T) {
 // happens to put there. This fails when the struct grows, which is the moment
 // to decide what each path should record.
 func TestEveryAuditFieldIsSpecifiedByTheRecordTable(t *testing.T) {
-	const specified = 20
+	const specified = 23
 	if n := reflect.TypeOf(rewrite.Attempt{}).NumField(); n != specified {
 		t.Errorf("rewrite.Attempt has %d fields and the record table specifies %d; "+
 			"add the new field to TestTheAttemptRecordIsCompleteOnEveryLanguagePath "+

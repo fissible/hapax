@@ -801,7 +801,15 @@ func migrationExclusions(table string) map[string]bool {
 		// database this test seeds and its `''` backfill is not a mutation of
 		// that row. What the backfill IS is asserted next door, by
 		// TestAddingTheSpliceColumnKeepsTheAttemptsAlreadyStored.
-		return map[string]bool{"splice": true}
+		//
+		// #143. The same for the three expansion columns, added at migration 14.
+		// Their backfill is a default and not a mutation of the version-1 row;
+		// TestAddingTheExpansionColumnsKeepsTheAttemptsAlreadyStored asserts what
+		// it IS.
+		return map[string]bool{
+			"splice": true, "original_lexical_tokens": true,
+			"candidate_lexical_tokens": true, "expansion_ceiling": true,
+		}
 	case "rewrite_attempt_identifier":
 		// Migration 4 derives this value from the child node. Its preservation is
 		// verified by TestWideningTheAttemptKeyKeepsTheAttemptsAlreadyStored.
