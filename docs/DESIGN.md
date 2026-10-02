@@ -1622,6 +1622,16 @@ The enumeration found zero pairs named only by the new predicate. The frozen
 evidence and real-prose witness; its tests reproduce the contract. These are guard results,
 not rewrite-loop acceptance rates.
 
+#### Expansion
+
+**Decision (#143).** The maintainer chose 1.5 against the reviewer's recommendation to
+leave the multiplier open. [ExpansionCeiling](../internal/rewrite/rewrite.go) owns the
+predicate, policy, and unmeasured outcomes.
+
+**Evidence.** The frozen [expansion_test.go header](../internal/rewrite/expansion_test.go)
+records the distance measurements and accepted expansions through score saturation;
+its tests reproduce the contract. The measurements are retained there.
+
 #### Improvement tolerance (ε)
 
 **The score admits sub-ε improvements; frequency in real rewrites is unmeasured.**

@@ -249,11 +249,15 @@ type RewriteAttempt struct {
 	// ORIGINAL paragraph, in the order they were measured. A separate column from
 	// the one above because the two are independent measurements against
 	// different anchors, and one attempt can carry both.
-	OvergrownScripts          []string
-	TellsComparison           int
-	TellsComparable, Accepted bool
-	Rejection                 rewrite.RejectionCode
-	Splice                    rewrite.SpliceOutcome
+	OvergrownScripts                              []string
+	TellsComparison                               int
+	TellsComparable, Accepted                     bool
+	Rejection                                     rewrite.RejectionCode
+	Splice                                        rewrite.SpliceOutcome
+	OriginalLexicalTokens, CandidateLexicalTokens int
+	// ExpansionCeiling is zero when the policy was not recorded, which is the
+	// case for attempts stored before it existed. Zero is not a policy value.
+	ExpansionCeiling float64
 }
 
 // HeadPolicy controls whether a profile write advances its register head.
@@ -1342,7 +1346,7 @@ func (s *Store) PutRewriteAttempt(ctx context.Context, x RewriteAttempt) error {
 		if !exists {
 			return invalidArtifact("rewrite attempt", "profile id")
 		}
-		_, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", x.InvocationID, x.Index, x.ProfileID, x.ProviderID, x.NodeID, x.CurrentHash, x.CandidateHash, x.CurrentDistance, x.CandidateDistance, x.CurrentBand, x.CandidateBand, boolInt(x.Preserved), x.TellsComparison, boolInt(x.TellsComparable), boolInt(x.Accepted), x.Rejection, x.Splice)
+		_, err = c.ExecContext(ctx, "INSERT INTO rewrite_attempt (invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice,original_lexical_tokens,candidate_lexical_tokens,expansion_ceiling) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)", x.InvocationID, x.Index, x.ProfileID, x.ProviderID, x.NodeID, x.CurrentHash, x.CandidateHash, x.CurrentDistance, x.CandidateDistance, x.CurrentBand, x.CandidateBand, boolInt(x.Preserved), x.TellsComparison, boolInt(x.TellsComparable), boolInt(x.Accepted), x.Rejection, x.Splice, x.OriginalLexicalTokens, x.CandidateLexicalTokens, x.ExpansionCeiling)
 		if err != nil {
 			return err
 		}
@@ -1444,7 +1448,7 @@ func (s *Store) LoadRewriteAttempt(ctx context.Context, id, nodeID string, i int
 func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID string, index int) (RewriteAttempt, error) {
 	var x RewriteAttempt
 	var preserved, tellsComparable, accepted int
-	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice FROM rewrite_attempt WHERE invocation_id=? AND node_id=? AND attempt_index=?", id, nodeID, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection, &x.Splice)
+	err := query.QueryRowContext(ctx, "SELECT invocation_id,attempt_index,profile_id,provider_id,node_id,current_hash,candidate_hash,current_distance,candidate_distance,current_band,candidate_band,preserved,tells_comparison,tells_comparable,accepted,rejection,splice,original_lexical_tokens,candidate_lexical_tokens,expansion_ceiling FROM rewrite_attempt WHERE invocation_id=? AND node_id=? AND attempt_index=?", id, nodeID, index).Scan(&x.InvocationID, &x.Index, &x.ProfileID, &x.ProviderID, &x.NodeID, &x.CurrentHash, &x.CandidateHash, &x.CurrentDistance, &x.CandidateDistance, &x.CurrentBand, &x.CandidateBand, &preserved, &x.TellsComparison, &tellsComparable, &accepted, &x.Rejection, &x.Splice, &x.OriginalLexicalTokens, &x.CandidateLexicalTokens, &x.ExpansionCeiling)
 	if errors.Is(err, sql.ErrNoRows) {
 		return x, ErrNotFound
 	}
@@ -1520,7 +1524,7 @@ func (s *Store) loadAttempt(query queryer, ctx context.Context, id, nodeID strin
 	return x, nil
 }
 func sameAttempt(a, b RewriteAttempt) bool {
-	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && a.Splice == b.Splice && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts) && sameSet(a.OvergrownScripts, b.OvergrownScripts)
+	return a.InvocationID == b.InvocationID && a.Index == b.Index && a.ProfileID == b.ProfileID && a.ProviderID == b.ProviderID && a.NodeID == b.NodeID && a.CurrentHash == b.CurrentHash && a.CandidateHash == b.CandidateHash && a.CurrentDistance == b.CurrentDistance && a.CandidateDistance == b.CandidateDistance && a.CurrentBand == b.CurrentBand && a.CandidateBand == b.CandidateBand && a.Preserved == b.Preserved && a.TellsComparison == b.TellsComparison && a.TellsComparable == b.TellsComparable && a.Accepted == b.Accepted && a.Rejection == b.Rejection && a.Splice == b.Splice && a.OriginalLexicalTokens == b.OriginalLexicalTokens && a.CandidateLexicalTokens == b.CandidateLexicalTokens && a.ExpansionCeiling == b.ExpansionCeiling && sameSet(a.PreserveIdentifiers, b.PreserveIdentifiers) && sameSet(a.IntroducedScripts, b.IntroducedScripts) && sameSet(a.OvergrownScripts, b.OvergrownScripts)
 }
 
 type recorder struct {
@@ -1533,25 +1537,28 @@ func (s *Store) Recorder(ctx context.Context) rewrite.Store { return recorder{s:
 
 func (r recorder) RecordAttempt(attempt rewrite.Attempt) error {
 	return r.s.PutRewriteAttempt(r.ctx, RewriteAttempt{
-		InvocationID:        attempt.InvocationID,
-		Index:               attempt.Index,
-		ProfileID:           attempt.ProfileID,
-		ProviderID:          llm.ProviderID(attempt.ProviderID),
-		NodeID:              attempt.SpanRef,
-		CurrentHash:         attempt.CurrentHash,
-		CandidateHash:       attempt.CandidateHash,
-		CurrentDistance:     attempt.CurrentDistance,
-		CandidateDistance:   attempt.CandidateDistance,
-		CurrentBand:         attempt.CurrentBand,
-		CandidateBand:       attempt.CandidateBand,
-		Preserved:           attempt.Preserved,
-		PreserveIdentifiers: attempt.PreserveIdentifiers,
-		IntroducedScripts:   attempt.IntroducedScripts,
-		OvergrownScripts:    attempt.OvergrownScripts,
-		TellsComparison:     attempt.TellsComparison,
-		TellsComparable:     attempt.TellsComparable,
-		Accepted:            attempt.Accepted,
-		Rejection:           attempt.Rejection,
-		Splice:              attempt.Splice,
+		InvocationID:           attempt.InvocationID,
+		Index:                  attempt.Index,
+		ProfileID:              attempt.ProfileID,
+		ProviderID:             llm.ProviderID(attempt.ProviderID),
+		NodeID:                 attempt.SpanRef,
+		CurrentHash:            attempt.CurrentHash,
+		CandidateHash:          attempt.CandidateHash,
+		CurrentDistance:        attempt.CurrentDistance,
+		CandidateDistance:      attempt.CandidateDistance,
+		CurrentBand:            attempt.CurrentBand,
+		CandidateBand:          attempt.CandidateBand,
+		Preserved:              attempt.Preserved,
+		PreserveIdentifiers:    attempt.PreserveIdentifiers,
+		IntroducedScripts:      attempt.IntroducedScripts,
+		OvergrownScripts:       attempt.OvergrownScripts,
+		TellsComparison:        attempt.TellsComparison,
+		TellsComparable:        attempt.TellsComparable,
+		Accepted:               attempt.Accepted,
+		Rejection:              attempt.Rejection,
+		Splice:                 attempt.Splice,
+		OriginalLexicalTokens:  attempt.OriginalLexicalTokens,
+		CandidateLexicalTokens: attempt.CandidateLexicalTokens,
+		ExpansionCeiling:       attempt.ExpansionCeiling,
 	})
 }

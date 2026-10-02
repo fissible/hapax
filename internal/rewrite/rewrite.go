@@ -35,7 +35,7 @@ const (
 )
 
 func RejectionCodes() []RejectionCode {
-	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved, RejectionNotSpliceable}
+	return []RejectionCode{RejectionNone, RejectionNotOneSegment, RejectionUnscoreable, RejectionCandidateUnscoreable, RejectionUncalibrated, RejectionDifferentFeatures, RejectionNotPreserved, RejectionExpanded, RejectionLanguage, RejectionLanguageGrowth, RejectionTellsIncomparable, RejectionTellsWorse, RejectionNotImproved, RejectionNotSpliceable}
 }
 
 var (
@@ -55,6 +55,7 @@ const (
 	RejectionUncalibrated         RejectionCode = "uncalibrated"
 	RejectionDifferentFeatures    RejectionCode = "different-features"
 	RejectionNotPreserved         RejectionCode = "not-preserved"
+	RejectionExpanded             RejectionCode = "expanded"
 	RejectionTellsIncomparable    RejectionCode = "tells-incomparable"
 	RejectionTellsWorse           RejectionCode = "tells-worse"
 	RejectionNotImproved          RejectionCode = "not-improved"
@@ -125,8 +126,7 @@ const (
 //
 // This guard permits unbounded absolute growth at constant share. The exposure
 // is wider, not new: growth below the ceiling and established scripts were
-// already exempt. No dedicated expansion refusal exists; provider response and
-// token limits bound transport, not prose expansion. #143 carries that decision.
+// already exempt. ExpansionCeiling separately bounds total lexical growth.
 const ScriptCeiling = 0.05
 
 // ScriptEstablished is the share of the ORIGINAL at which a script is exempt
@@ -140,6 +140,20 @@ const ScriptEstablished = 0.25
 // demonstration that none can exist; internal/text/exceeding_test.go holds the
 // cases they died on and #136 holds the alternatives nobody tried.
 const ScriptCeilingDerived = false
+
+// ExpansionCeiling refuses candidate lexical tokens > ExpansionCeiling * the
+// ORIGINAL paragraph's lexical tokens. Equality passes; shorter candidates are
+// unrestricted. The original count stays fixed across accepted passes, and the
+// bound is not rounded up. Preservation takes precedence over this refusal;
+// language introduction follows it.
+//
+// The multiplier is declared, not derived. The score can accept large expansions
+// after its distance saturates; docs/DESIGN.md links the measured evidence and
+// decision. Useful rewrites lost and harmful expansions admitted are unmeasured.
+const ExpansionCeiling = 1.5
+
+// ExpansionCeilingDerived records that no measurement derives the multiplier.
+const ExpansionCeilingDerived = false
 
 // Terminal explains how a loop ended. It is deliberately separate from
 // RejectionCode, which belongs to a single recorded candidate.
@@ -260,6 +274,14 @@ type Attempt struct {
 	Rejection                           RejectionCode
 	ProfileID, ProviderID, InvocationID string
 	Splice                              SpliceOutcome
+	// Counts are recorded for every one-segment candidate, even early refusals;
+	// otherwise both are zero. ExpansionCeiling records policy on every attempt.
+	//
+	// The anchors are MIXED, deliberately: CurrentDistance and CurrentBand
+	// describe the text entering this pass, while OriginalLexicalTokens stays
+	// anchored to the original paragraph.
+	OriginalLexicalTokens, CandidateLexicalTokens int
+	ExpansionCeiling                              float64
 }
 
 type Store interface {
@@ -300,6 +322,8 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 		return Outcome{Text: current, Reason: reason, Terminal: TerminalNotEntered}, nil
 	}
 
+	originalLexicalTokens := currentScored.LexicalTokens
+
 	exemplars, err := l.Selector.Exemplars(l.Options.Exemplars)
 	if err != nil {
 		return Outcome{}, err
@@ -330,6 +354,10 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 		}
 		candidateScored, rejection := judged(candidateReport, true, l.Options.AllowUncalibrated)
 		attempt := l.attempt(index, segment.SpanRef, current, candidate, currentScored, candidateScored)
+		if len(candidateReport.Segments) == 1 {
+			attempt.OriginalLexicalTokens = originalLexicalTokens
+			attempt.CandidateLexicalTokens = candidateScored.LexicalTokens
+		}
 		if rejection == "" && !sameFeatures(currentScored.Distance.Features, candidateScored.Distance.Features) {
 			rejection = RejectionDifferentFeatures
 		}
@@ -382,6 +410,8 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 			switch {
 			case !preservation.Preserved:
 				rejection = RejectionNotPreserved
+			case float64(attempt.CandidateLexicalTokens) > ExpansionCeiling*float64(originalLexicalTokens):
+				rejection = RejectionExpanded
 			// Any script the current text does not already use, at any share.
 			case len(language.Introduced) > 0:
 				rejection = RejectionLanguage
@@ -477,7 +507,8 @@ func sameFeatures(a, b []features.ID) bool {
 func (l Loop) attempt(index int, spanRef, current, candidate string, currentScored, candidateScored score.Segment) Attempt {
 	return Attempt{
 		Index: index, SpanRef: spanRef,
-		CurrentHash: identity.HashBytes([]byte(current)), CandidateHash: identity.HashBytes([]byte(candidate)),
+		ExpansionCeiling: ExpansionCeiling,
+		CurrentHash:      identity.HashBytes([]byte(current)), CandidateHash: identity.HashBytes([]byte(candidate)),
 		CurrentDistance: currentScored.Distance.Value, CandidateDistance: candidateScored.Distance.Value,
 		CurrentBand: currentScored.Band.Band, CandidateBand: candidateScored.Band.Band,
 		ProfileID: l.Options.ProfileID, ProviderID: l.Options.ProviderID, InvocationID: l.Options.InvocationID,
