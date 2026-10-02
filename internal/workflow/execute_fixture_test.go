@@ -92,7 +92,7 @@ func writeVariedCorpusInto(root string, documents int) error {
 // harness_test.go gives: indexing sixty documents per case was the most
 // expensive thing in this package.
 var variedTemplate = sync.OnceValues(func() (string, error) {
-	root, err := os.MkdirTemp("", "hapax-varied-template")
+	root, err := os.MkdirTemp(templateRoot, "varied-")
 	if err != nil {
 		return "", err
 	}
@@ -195,20 +195,91 @@ func repeatedDraft() string { return paragraphOne + "\n\n" + paragraphOne + "\n\
 // outside in-range, so a plan over the draft has two targets.
 func targetStore(t *testing.T) (root, draft string) {
 	t.Helper()
-	root = installRelease(t, 0.05, 5.0)
-	draft = writeDraft(t, root, executableDraft())
-	requireDispositions(t, root, draft, workflow.DispositionTarget, workflow.DispositionTarget)
-	return root, draft
+	return copyOfPreparedTemplate(t, targetTemplate)
 }
 
 // settledStore is the same corpus whose release places both paragraphs in-range,
 // so a plan over the same draft has nothing to change.
 func settledStore(t *testing.T) (root, draft string) {
 	t.Helper()
-	root = installRelease(t, 2.0, 8.0)
-	draft = writeDraft(t, root, executableDraft())
-	requireDispositions(t, root, draft, workflow.DispositionInRange, workflow.DispositionInRange)
-	return root, draft
+	return copyOfPreparedTemplate(t, settledTemplate)
+}
+
+type preparedTemplate struct {
+	root         string
+	profileHeads map[string]string
+	releaseID    string
+}
+
+var targetTemplate = sync.OnceValues(func() (preparedTemplate, error) {
+	return buildPreparedTemplate(0.05, 5.0, workflow.DispositionTarget)
+})
+
+var settledTemplate = sync.OnceValues(func() (preparedTemplate, error) {
+	return buildPreparedTemplate(2.0, 8.0, workflow.DispositionInRange)
+})
+
+func buildPreparedTemplate(authorCentre, distractorCentre float64, disposition workflow.Disposition) (preparedTemplate, error) {
+	// Both configurations start from the unplanned corpus. Preparing settled
+	// from target would retain the target plan's exemplar selection.
+	base, err := variedTemplate()
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	root, err := os.MkdirTemp(templateRoot, "prepared-")
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	complete := false
+	defer func() {
+		if !complete {
+			_ = os.RemoveAll(root)
+		}
+	}()
+	if err := copyTree(base, root); err != nil {
+		return preparedTemplate{}, err
+	}
+	opened, err := store.Open(defaultStorePath(root))
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	// Also close on failure, before the partial directory is removed.
+	defer opened.Close()
+	bundle, err := opened.LoadProfileBundle(ctx(), "essays")
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	if bundle.Reference.ID == "" {
+		return preparedTemplate{}, fmt.Errorf("the varied template indexed no reference")
+	}
+	heads, err := opened.ProfileHeads(ctx())
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	release, err := evaltest.BuildReleaseAround(bundle.Profile.ID, bundle.Reference.ID, authorCentre, distractorCentre)
+	if err != nil {
+		return preparedTemplate{}, err
+	}
+	if !release.Shippable {
+		return preparedTemplate{}, fmt.Errorf("the crafted release is not shippable (%s)", release.Reason)
+	}
+	if err := opened.PutRelease(ctx(), release, "", store.AdvanceHead); err != nil {
+		return preparedTemplate{}, err
+	}
+	draft := filepath.Join(root, "draft.md")
+	if err := os.WriteFile(draft, []byte(executableDraft()), 0o644); err != nil {
+		return preparedTemplate{}, err
+	}
+	// This validates the delivered draft AND persists its snapshot and, for
+	// targets, the exemplar selection. Copies must carry all of that state.
+	if err := requireDispositions(root, draft, disposition, disposition); err != nil {
+		return preparedTemplate{}, err
+	}
+	if err := opened.Close(); err != nil {
+		return preparedTemplate{}, err
+	}
+	complete = true
+	return preparedTemplate{root: root, profileHeads: heads, releaseID: release.ID}, nil
 }
 
 func installRelease(t *testing.T, authorCentre, distractorCentre float64) string {
@@ -238,21 +309,24 @@ func installRelease(t *testing.T, authorCentre, distractorCentre float64) string
 // passed — the release boundaries are quantiles of a crafted population and the
 // draft's distances are whatever the corpus happens to produce, so their
 // relationship is not something this file controls.
-func requireDispositions(t *testing.T, root, draft string, want ...workflow.Disposition) {
-	t.Helper()
-	plan := planned(t, planRequest(root, draft))
+func requireDispositions(root, draft string, want ...workflow.Disposition) error {
+	plan, err := workflow.Default().Plan(ctx(), planRequest(root, draft))
+	if err != nil {
+		return fmt.Errorf("Plan: %w", err)
+	}
 	if plan.Refusal != "" {
-		t.Fatalf("planning the draft refused %q; the fixture cannot exercise execution", plan.Refusal)
+		return fmt.Errorf("planning the draft refused %q; the fixture cannot exercise execution", plan.Refusal)
 	}
 	if len(plan.Segments) != len(want) {
-		t.Fatalf("the plan has %d segments and the fixture needs %d", len(plan.Segments), len(want))
+		return fmt.Errorf("the plan has %d segments and the fixture needs %d", len(plan.Segments), len(want))
 	}
 	for i, disposition := range want {
 		if plan.Segments[i].Disposition != disposition {
-			t.Fatalf("segment %d is %q and the fixture needs %q; band %q against this release",
+			return fmt.Errorf("segment %d is %q and the fixture needs %q; band %q against this release",
 				i, plan.Segments[i].Disposition, disposition, plan.Segments[i].Band.Band)
 		}
 	}
+	return nil
 }
 
 // ---------------------------------------------------------------------------

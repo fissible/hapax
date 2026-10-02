@@ -12,6 +12,7 @@
 package evaltest
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 	"testing"
@@ -73,6 +74,19 @@ func ReleaseAround(t *testing.T, profileID, referenceID string, authorCenter, di
 // test rather than returning it.
 func ReleaseAroundUnchecked(t *testing.T, profileID, referenceID string, authorCenter, distractorCenter float64) eval.Release {
 	t.Helper()
+	release, err := BuildReleaseAround(profileID, referenceID, authorCenter, distractorCenter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return release
+}
+
+// BuildReleaseAround constructs the same artifact as ReleaseAroundUnchecked,
+// returning construction errors instead of reporting to a test. Package-lived
+// fixtures can use it without capturing the test that first requests them.
+// A non-shippable release is a valid result; callers requiring a shippable
+// fixture must check Shippable, as ReleaseAround does.
+func BuildReleaseAround(profileID, referenceID string, authorCenter, distractorCenter float64) (eval.Release, error) {
 	// Distractors cluster by AUTHOR when every one carries a name, and by
 	// DOCUMENT when none does. This fixture leaves the author empty on purpose,
 	// for two reasons found the hard way. Giving thirty distractors one name
@@ -130,19 +144,19 @@ func ReleaseAroundUnchecked(t *testing.T, profileID, referenceID string, authorC
 		eval.Source{Cohort: digest("cohort", profileID), DistractorPool: digest("pool", profileID)},
 		eval.DefaultTargets())
 	if err != nil {
-		t.Fatalf("Calibrate: %v", err)
+		return eval.Release{}, fmt.Errorf("Calibrate: %w", err)
 	}
 	calibration, err := thresholds.CalibrateBands(held, eval.DefaultBandFloor())
 	if err != nil {
-		t.Fatalf("CalibrateBands: %v", err)
+		return eval.Release{}, fmt.Errorf("CalibrateBands: %w", err)
 	}
 	discrimination, err := eval.Discriminate(held, eval.DefaultDiscrimination())
 	if err != nil {
-		t.Fatalf("Discriminate: %v", err)
+		return eval.Release{}, fmt.Errorf("Discriminate: %w", err)
 	}
 	release, err := eval.NewRelease(discrimination, calibration)
 	if err != nil {
-		t.Fatalf("NewRelease: %v", err)
+		return eval.Release{}, fmt.Errorf("NewRelease: %w", err)
 	}
-	return release
+	return release, nil
 }

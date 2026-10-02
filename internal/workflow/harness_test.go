@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -18,6 +19,26 @@ import (
 	"github.com/fissible/hapax/internal/text"
 	"github.com/fissible/hapax/internal/workflow"
 )
+
+// Templates belong to the package run, never to the test that first asks for
+// one. All handles are closed before publication; only paths and metadata live
+// until m.Run returns. Per-test copies still belong to t.TempDir.
+var templateRoot string
+
+func TestMain(m *testing.M) {
+	var err error
+	templateRoot, err = os.MkdirTemp("", "hapax-workflow-templates-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	code := m.Run()
+	if err := os.RemoveAll(templateRoot); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		code = 1
+	}
+	os.Exit(code)
+}
 
 func ctx() context.Context { return context.Background() }
 
@@ -378,7 +399,7 @@ var indexedTemplate = sync.OnceValues(func() (string, error) { return buildTempl
 var twoRegisterTemplate = sync.OnceValues(func() (string, error) { return buildTemplate("essays", "letters") })
 
 func buildTemplate(registers ...string) (string, error) {
-	root, err := os.MkdirTemp("", "hapax-indexed-template")
+	root, err := os.MkdirTemp(templateRoot, "indexed-")
 	if err != nil {
 		return "", err
 	}
@@ -437,6 +458,69 @@ func copyOfTemplate(t *testing.T, build func() (string, error), registers ...str
 		t.Fatalf("the copied store holds %d heads, and the template indexed %d", len(heads), len(registers))
 	}
 	return destination
+}
+
+// copyOfPreparedTemplate checks against metadata recorded at construction,
+// never expectations read back from the destination itself.
+func copyOfPreparedTemplate(t *testing.T, build func() (preparedTemplate, error)) (root, draft string) {
+	t.Helper()
+	template, err := build()
+	if err != nil {
+		t.Fatalf("building the prepared template: %v", err)
+	}
+	root = t.TempDir()
+	if err := copyTree(template.root, root); err != nil {
+		t.Fatalf("copying the prepared template: %v", err)
+	}
+	if err := checkPreparedCopy(root, template.profileHeads["essays"], template.releaseID); err != nil {
+		t.Fatalf("checking the prepared copy: %v", err)
+	}
+	if err := checkPreparedProfileHeads(root, template.profileHeads); err != nil {
+		t.Fatalf("checking the prepared profile heads: %v", err)
+	}
+	return root, filepath.Join(root, "draft.md")
+}
+
+func checkPreparedCopy(root, expectedProfileID, expectedReleaseID string) error {
+	if expectedProfileID == "" || expectedReleaseID == "" {
+		return fmt.Errorf("prepared template has empty profile or release identity")
+	}
+	opened, err := store.Open(defaultStorePath(root))
+	if err != nil {
+		return err
+	}
+	defer opened.Close()
+	profileID, err := opened.ProfileHead(ctx(), "essays")
+	if err != nil {
+		return err
+	}
+	if profileID != expectedProfileID {
+		return fmt.Errorf("copied profile head %q, want %q", profileID, expectedProfileID)
+	}
+	releaseID, err := opened.ReleaseHead(ctx(), expectedProfileID)
+	if err != nil {
+		return err
+	}
+	if releaseID != expectedReleaseID {
+		return fmt.Errorf("copied release head %q, want %q", releaseID, expectedReleaseID)
+	}
+	return nil
+}
+
+func checkPreparedProfileHeads(root string, expected map[string]string) error {
+	opened, err := store.Open(defaultStorePath(root))
+	if err != nil {
+		return err
+	}
+	defer opened.Close()
+	heads, err := opened.ProfileHeads(ctx())
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(heads, expected) {
+		return fmt.Errorf("copied profile heads %v, want %v", heads, expected)
+	}
+	return nil
 }
 
 func copyTree(from, to string) error {

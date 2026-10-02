@@ -213,6 +213,52 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-01 (#126 — the workflow fixture cost)
+
+Branch `perf/workflow-fixture-cost`, duet, frozen at `80db20d`
+(`.duet/fixture-cache.{ref,sha256}`). Tests mine, implementation codex's; both agree done.
+
+**The ticket's diagnosis was stale, and the measurement had to be redone.** It blames
+"walks a corpus, indexes it" — already cached, `variedTemplate` is a `sync.OnceValues`. The
+real per-fixture cost under `-race` is ~2.6s, of which `requireDispositions` is 2.20s (84%)
+and goes unmentioned, because it runs a FULL PLAN to validate the fixture's shape. Helper
+calls instrumented rather than counted by eye: targetStore 101, settledStore 6,
+installRelease 114, requireDispositions 107 — the ticket says "roughly forty".
+
+**The prize is smaller than the ticket implies, and I measured it instead of projecting.**
+My first projection was 293s, wrong by 3x: 204 of 222 tests are parallel at GOMAXPROCS 10, so
+summed latency is not wall time. Stubbing `requireDispositions` to a no-op measured the
+ceiling at 425.3s → 338.5s. Delivered: 326.9s (my run) and 345.4s (codex's), so **80–98s,
+roughly a fifth**, with a 4.3% run-to-run spread. The other ~75% is the tests themselves and
+is not this issue's.
+
+**Two beliefs I had to discard.** That `store: conflict` blocked the obvious fix — a second
+`PutRelease(AdvanceHead)` returns nil, so whatever I hit in an earlier session was not this.
+And that copies at different absolute paths would get different identities — `corpus.go:382`
+uses `filepath.Rel`, and two copies give byte-identical profile and reference ids. That last
+is the premise the whole design rests on, so it was measured rather than reasoned.
+
+**Design, simplified against codex's recommendation on measurement.** It wanted three
+templates including an unplanned one for the direct `installRelease` callers; those are 7
+invocations worth 2.6s summed, so they were left untouched entirely — which satisfies its
+concern (they keep exactly today's state) more simply. Two prepared templates, built once per
+package run under a `TestMain`-owned directory, copied per test.
+
+**Known limitation, agreed with codex rather than fixed:** the frozen suite verifies
+`checkPreparedCopy` rejects correctly but does not detect removal of the validation CALLS
+from `copyOfPreparedTemplate`; their presence was verified by source review.
+
+**Process note.** Phase 1 took FIVE rounds and codex broke sixteen of my attempted
+implementations. The one that mattered: it removed `requireDispositions` entirely and all my
+tests passed, because that helper PERSISTS a draft snapshot and exemplar selection and I was
+only checking the selection — whose identity derives from corpus exemplars, not the draft, so
+my stated reason for the check was false. Cross-copy comparison also cannot see UNIFORM
+damage, which is why the corpus is compared against an oracle built from
+`writeVariedCorpusInto` directly.
+
+**Next:** #143 (the expansion-guard decision this sprint's #136 split out), then #130, #123,
+#122, #118, #113, #112, #110.
+
 ### 2026-10-01 (#136 — the script growth arm is conjunctive)
 
 Branch `fix/script-proportional-growth`, duet, frozen at `4caef57`
