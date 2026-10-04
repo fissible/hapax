@@ -213,6 +213,63 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-04 (#149 slice 1 — interruption cannot orphan a publication)
+
+Branch `fix/graceful-interruption`, duet, frozen at `f8292f6`
+(`.duet/interruption.{ref,sha256}`). Tests mine, implementation codex's; both agree slice 1 is
+done. **#149 stays OPEN for slice 2.**
+
+**The defect, reproduced rather than described.** The tests fail against main with the real
+diagnostic: `published .../draft.md.revised but could not record publication evidence: context
+canceled`. The cancelled context was forwarded straight to `RecordPublication`, making the
+evidence write the one step guaranteed to fail — and the existing code handled that failure
+gracefully, which is exactly why it stayed invisible. A context cancelled before the run even
+started still published, so there was no admission boundary at all.
+
+**The fix.** An admission boundary immediately before publication; once admitted, the
+publication and its required evidence proceed under `context.WithoutCancel(ctx)`, confined to
+one call inside a new `publishAndRecord` whose four-state result lets the caller tell
+publication failure from evidence failure from completion. The loop checks cancellation before
+every attempt and returns the ZERO outcome with a `context.Canceled` error — not a new terminal
+(the vocabulary is closed and none of its three values means interrupted) and not a refusal
+(which would claim the candidate was judged). Exit 3, with three distinct truthful diagnostics,
+and `interrupted` decided ONCE before rendering.
+
+**Two claims of mine that codex refuted.** That a signal-cancelled context alone would fix
+this — it would CAUSE the bad case, since `publish` takes no context while the evidence write
+uses the caller's. And that the residual exposure was only SIGKILL: `RecordPublication` can
+fail normally, and a publisher can rename then fail on directory sync, after which this command
+records nothing. Also that `publication-evidence-gap` covers it — it does not, it is a
+migration marker and a fresh store can hit this with the flag false.
+
+**Process.** Phase 1 took FIVE rounds; codex reproduced eighteen implementations that passed an
+earlier draft. The costliest lesson: the same `--out`-only asymmetry hid three separate
+mutants, so every interrupted case now runs over both destinations. The sharpest: my
+`cancellingService` embedded `*rewriteService` and so inherited the NO-OP recorder, making the
+rewrite-time rows observe nothing at all. And `recorded` is appended only after the context
+check, so "nothing recorded" could not distinguish a wrongly-called recorder from an unasked
+one — the fake now counts calls separately.
+
+**Slice 2, scoped by codex:** wire `signal.NotifyContext` into the composition root; unregister
+promptly after the first signal so a subsequent one can terminate a stuck shutdown, and clean
+up on normal completion too since a defer in `main` will not run through `os.Exit`; subprocess
+tests with readiness handshakes over both signals, before publication and after admission,
+verifying exit 3, stderr's actual publication state, no stdout result, evidence completion and
+this invocation's staging cleanup; and prove second-signal termination while documenting that
+it can interrupt the orderly completion.
+
+**Deliberately still out of scope:** hard-kill staging leftovers, failures after filesystem
+publication, and durable crash recovery. Slice 2 establishes graceful signal handling without
+claiming filesystem or database atomicity.
+
+**Also this session:** v0.3.0 released; #134 closed (fixed by #139, never auto-closed); #148
+filed for #143's measurement; #130 designed and ready to implement (its premise is false for
+the shipped binary — no `os/signal` anywhere — so the fix is internal consistency, option C:
+wrap `ctx.Err()` for classification, keep the response error as diagnostic text, do not also
+match `ErrProvider`).
+
+**Next:** #130 (designed, XS), then #149 slice 2, then #123, #122, #118.
+
 ### 2026-10-02 (#143 — the expansion ceiling)
 
 Branch `feat/expansion-ceiling`, duet, frozen at `6d3454f`
