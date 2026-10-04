@@ -6,6 +6,61 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/).
+## [0.3.0] - 2026-10-03
+
+### Added
+- A candidate may not exceed 1.5x the ORIGINAL paragraph's lexical tokens, refused as the new
+  `expanded` rejection code (#143). One-sided — nothing is refused for being shorter — and
+  anchored on the original rather than the advancing current, so accepted passes cannot
+  compound to 1.5^N. Reported after `not-preserved` and before both language refusals and
+  `not-improved`. The multiplier is declared, not derived; `ExpansionCeilingDerived` says so,
+  and #148 carries the measurement that would justify a value.
+
+### Changed
+- Migration 14 widens `rewrite_attempt.rejection` to admit `expanded` and adds
+  `original_lexical_tokens`, `candidate_lexical_tokens` and `expansion_ceiling`, rebuilding
+  the attempt table and its three child tables so their foreign keys survive. Historical rows
+  backfill to zero, which reads as "written before the policy existed" rather than as a policy
+  value. The database refuses an `expanded` row whose counts fall within the bound THE ROW
+  RECORDS, never the current constant, so a later change to the multiplier cannot make old
+  rows look contradictory.
+- The two lexical counts are recorded on every attempt that admits exactly one candidate
+  segment, including refusals that never reach the gate, and are zero when it does not;
+  `expansion_ceiling` records the policy in force either way.
+- A script is named for growth only when its count AND its share both rise (#136). The arm it
+  replaces fired on any rise in absolute count, so it refused rewrites that DILUTED a script —
+  measured, 10 Latin + 1 Greek to 23 + 2 takes Greek from 0.0909 to 0.0800 and was named. The
+  change only ever permits more: the new arm implies the old one, so no rewrite accepted before
+  this release becomes refused. Proportional scaling is exempt, which was the contract #136
+  asked for. No migration.
+- `Epsilon` is recorded as a declared tolerance rather than a bound below the score's
+  resolution (#137), with `EpsilonDerived = false`. The rationale it replaces computed
+  2.5/((n+1)*k), which approximates a single feature's rank step, where `d` is a mean over k of
+  them — a witness through the real transform improves by 1.3e-10 and is rejected. What
+  Epsilon actually does is reject ties: acceptance is `candidate <= current - Epsilon`, so at a
+  zero tolerance a tie would be accepted and `current` would advance without improving.
+  Behaviour unchanged; the value is still 1e-9.
+
+### Fixed
+- Acceptance now covers the computed float64 threshold at more than one value of `current`
+  (#137). Two comparison errors passed the whole test suite before: turning the tolerance
+  strict, and rewriting the rule as a subtraction, which disagree only where the threshold
+  rounds — at `current = 1.0` the threshold is an improvement of 9.99999972e-10, under Epsilon
+  and accepted.
+
+### Internal
+- `internal/workflow` builds its prepared fixtures once per package run and copies them per
+  test (#126), taking the package from 425.3s to 326.9-345.4s under `-race` on two runs. The
+  ticket's diagnosis was stale: the corpus indexing it blamed was already cached, and the cost
+  was the per-fixture disposition check, 84% of it.
+
+### Generated from the commit subjects
+
+- feat: refuse a candidate more than 1.5x the original's length
+- fix: exempt proportional growth and dilution from the script guard
+- fix: record epsilon as a declared tolerance, not the score's resolution
+- perf: build the workflow fixtures once per package run (#126)
+
 ## [0.2.0] - 2026-10-02
 
 ### Fixed
