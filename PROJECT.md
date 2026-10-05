@@ -213,6 +213,51 @@ Acquisition and packaging, if a licensed source is ever adopted, are governed by
 
 ## Session handoff notes
 
+### 2026-10-05 (#130 — a cancelled request that completes)
+
+Branch `fix/cancelled-request-error`, duet, frozen at `5497e4c`
+(`.duet/cancellation.{ref,sha256}`). Tests mine, implementation codex's; both agree done.
+
+**I was wrong that the gap could not be reached deterministically, and I had already told the
+maintainer so.** My argument: cancelling before `Do` takes the already-correct path, the
+body-read branch already propagates cancellation, and nothing outside the provider can land a
+cancel between `Do` returning and the status check. The error was assuming the test had to stay
+OUTSIDE the provider. From in-package, swapping `client.Transport` lets a test end the context
+inside `RoundTrip` and still return a valid response with a nil error — a successful
+non-redirect response proceeds without `Do` rejecting it. Verified, not taken on trust.
+
+**One of my tests could have rejected a CORRECT implementation.** The end-to-end 500 test
+asserted cancellation "under both interleavings". There are three: cancellation makes `Do`
+fail; `Do` succeeds and cancellation is then observed; and `Do` succeeds and classification
+finishes BEFORE cancellation. The third legitimately returns `ErrProvider` even after the fix.
+Measured, that test also caught the gap 0 times in 20 runs — simultaneously non-discriminating
+and capable of false failures. Removed.
+
+**Final shape:** ten end-to-end subtests (five response branches x cancellation and deadline
+expiry) plus the helper's own rule tests. The deadline cause is deterministic, not timed: its
+trigger waits for `ctx.Done()`. The body-read case deliberately leaves the context LIVE when
+the response arrives, so it tests LATER cancellation — otherwise a snapshot-after-`Do`
+implementation passes. Neither `ErrProvider` nor `ErrResponseTooLarge` may survive as a second
+classification, and the helper tests reject `errors.Is(got, response)` so the original is
+retained as TEXT.
+
+**The implementation is 20 lines:** an unexported `cancellationPrecedence` plus a deferred
+wrapper installed AFTER `Do` returns and immediately before the status check — so the scope is
+structural rather than five call sites to keep in sync, which is better than what I specified.
+
+**A near-miss worth remembering.** I read the diff, saw `defer` under a changed signature, and
+concluded it wrapped the whole function, which would have reclassified `ErrModeMismatch` and
+friends. I probed, saw `Is(ErrModeMismatch)=false`, and nearly reported it. Both halves were
+wrong: the defer is at llm.go:208, and the `false` came from the pre-existing entry check
+returning `ctx.Err()` before validation. My probe's outright failure was a nil-dialer panic of
+my own making. Checking where the defer actually sat is what stopped me.
+
+**Deliberately not done:** nothing changed about the success path, no rejection code, no signal
+handling. #130's user-facing premise stays false until #149 slice 2 — the binary passes
+`context.Background()`, so a Ctrl-C still kills the process before any error is formatted.
+
+**Next:** #149 slice 2 (signal wiring; scope in the 2026-10-04 entry), then #123, #122, #118.
+
 ### 2026-10-04 (#149 slice 1 — interruption cannot orphan a publication)
 
 Branch `fix/graceful-interruption`, duet, frozen at `f8292f6`
