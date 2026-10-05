@@ -68,6 +68,10 @@ type CloudDeps struct {
 	RootCAs     *x509.CertPool
 }
 
+// On unsuccessful response handling, observed cancellation takes precedence:
+// the error wraps ctx.Err() and retains the response error only as diagnostic text.
+// Success and Do errors are unchanged. ctx.Err() reports cancellation when checked,
+// not whether it preceded the response; a response from Do does not imply body completion.
 var (
 	ErrMissingInput     = errors.New("llm is missing required input")
 	ErrInvalidConfig    = errors.New("llm configuration is invalid")
@@ -162,7 +166,7 @@ func validateEndpoint(endpoint string) error {
 	return nil
 }
 
-func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) (string, error) {
+func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) (text string, err error) {
 	if err := ctx.Err(); err != nil {
 		return "", err
 	}
@@ -201,6 +205,11 @@ func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) 
 		return "", err
 	}
 	defer response.Body.Close()
+	defer func() {
+		if err != nil {
+			err = cancellationPrecedence(ctx, err)
+		}
+	}()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= 300 {
 		return "", fmt.Errorf("%w: status %d", ErrProvider, response.StatusCode)
 	}
@@ -215,6 +224,16 @@ func (p *provider) Rewrite(ctx context.Context, request rewrite.RewriteRequest) 
 		return "", ErrResponseTooLarge
 	}
 	return p.parse(reply)
+}
+
+func cancellationPrecedence(ctx context.Context, err error) error {
+	if err == nil {
+		return nil
+	}
+	if cause := ctx.Err(); cause != nil {
+		return fmt.Errorf("%w; response handling also failed: %v", cause, err)
+	}
+	return err
 }
 
 func (p *provider) body(prompt string) ([]byte, error) {
