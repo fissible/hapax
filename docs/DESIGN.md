@@ -793,7 +793,7 @@ The codes partition on one question — *did the tool produce a verdict?*
 | 0 | completed, nothing adverse |
 | 1 | completed, adverse finding |
 | 2 | invalid invocation: unknown command, bad flag, malformed `HAPAX_LOCAL_ONLY` |
-| 3 | operational failure: IO, store, provider |
+| 3 | operational failure or interrupted execution: IO, store, provider, cancellation |
 | 4 | refusal, with a machine-readable reason |
 
 0 and 1 mean the tool worked. 2, 3 and 4 mean it did not, and only 4 is a deliberate refusal
@@ -801,6 +801,17 @@ rather than a failure. A refusal carries a reason from a closed set — `uncalib
 `insufficient-evidence`, `stale-draft`, `stale-exemplars`, `local-only-forbids-provider`,
 `no-profile`, `no-reference`, `ambiguous-reference` —
 because a script must not have to parse prose to tell them apart.
+
+Cancellation is an operational interruption, not a measured judgment or a refusal. It uses
+exit 3 without adding a sixth code or a rejection reason. An interrupted rewrite emits a
+diagnostic on stderr and no ordinary result document on stdout, in human and JSON modes.
+**Exit 3 does not imply the destination is unchanged.** Before publication admission the
+diagnostic says nothing was published. After successful publication it names the destination
+as published and says whether required evidence was recorded; a recording failure retains
+the underlying error and explicitly says evidence could not be recorded. A publisher error
+retains the underlying error but cannot establish whether the destination changed. The
+terminal decision precedes rendering; cancellation during rendering does not retroactively
+turn an already-rendered completed result into an interruption.
 
 `no-profile` was added when `cli` was designed. None of the earlier refusal reasons covers
 the most common first-run state there is:
@@ -2713,6 +2724,33 @@ publication records nothing. If the file is published but recording fails, the C
 names the publication-evidence failure and its underlying error on stderr, and emits nothing
 on stdout in either human or JSON mode. File publication and database recording are separate
 operations: a failure or crash between them can leave an unrecorded publication.
+
+**Cancellation admission (#149, slice 1).** One CLI orchestration function checks caller
+cancellation immediately before the selected publication call. If cancellation is observed,
+it publishes and records nothing. Once publication is admitted, caller cancellation does
+not abandon publication or suppress required evidence recording after successful
+publication. Recording runs synchronously under `context.WithoutCancel(ctx)`, preserving
+caller values without inheriting cancellation or a deadline. Empty evidence batches and
+the in-place nothing-to-change path do not call the recorder. The workflow continues to
+derive evidence from the assembled bytes; the filesystem publisher only publishes them.
+There is a race between admission and entering the publisher: this is an observation
+boundary, not a promise about a signal's wall-clock arrival. Disk and database failures
+still end their respective operations; publication and evidence do not finish atomically.
+
+The rewrite loop checks cancellation before every provider attempt, including the first,
+returns the zero outcome and the context error, and keeps attempts already recorded. The
+provider receives the caller's cancellable context. No interruption terminal is added to
+the closed three-value loop vocabulary. Slice 1 supplies these guarantees for a cancellable
+context; signal wiring and subprocess signal tests are slice 2, so #149 remains open.
+
+Two exposures remain open. A hard kill during staging can leave a `.hapax-*` file holding
+prose at the source's permissions rather than 0600. Cleanup removes only the staging file
+owned by that publication; no directory sweep can infer ownership or abandonment from a
+filename, age or PID. Also, a publisher that links or renames successfully and then fails
+on directory sync, close or staging cleanup still causes the command to record nothing,
+even though the destination changed. This slice adds no runtime publication-evidence gap
+flag: there is no reliable writer after a crash. Crash recovery would require durable
+intent written before publication and resolved afterward, which is separate work.
 
 `RecordPublication` uses one transaction for the batch. Identical retries succeed; conflicting
 hashes under `(invocation_id, node_id)` fail, and any row failure rolls back the entire batch.

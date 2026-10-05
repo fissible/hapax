@@ -334,6 +334,9 @@ func (l Loop) Rewrite(ctx context.Context, segment Segment) (Outcome, error) {
 
 	outcome := Outcome{Text: current}
 	for index := 0; index < l.Options.Attempts; index++ {
+		if err := ctx.Err(); err != nil {
+			return Outcome{}, err
+		}
 		candidate, err := l.Provider.Rewrite(ctx, RewriteRequest{
 			Prompt:       prompt(exemplars, current),
 			ProfileID:    l.Options.ProfileID,

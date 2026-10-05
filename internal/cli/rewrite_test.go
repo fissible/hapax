@@ -50,6 +50,10 @@ type publication struct {
 type spyPublisher struct {
 	published []publication
 	err       error
+	// #149. before, when set, runs on entry to Create or Replace, which is how a
+	// test cancels the caller's context AFTER the admission boundary and before
+	// the evidence write — the window this command has to protect.
+	before func()
 	// events, when set, is shared with the stdout writer so the ORDER of
 	// publication and rendering is observable. Without it an implementation can
 	// render into a buffer, notice the publication failed, discard the buffer,
@@ -83,6 +87,9 @@ func (w *recordingWriter) Write(p []byte) (int, error) {
 }
 
 func (s *spyPublisher) Create(source, destination string, content []byte) error {
+	if s.before != nil {
+		s.before()
+	}
 	s.note("published")
 	s.published = append(s.published, publication{
 		Op: "create", Source: source, Destination: destination,
@@ -92,6 +99,9 @@ func (s *spyPublisher) Create(source, destination string, content []byte) error 
 }
 
 func (s *spyPublisher) Replace(source string, content []byte) error {
+	if s.before != nil {
+		s.before()
+	}
 	s.note("published")
 	s.published = append(s.published, publication{
 		Op: "replace", Source: source, Content: append([]byte(nil), content...),

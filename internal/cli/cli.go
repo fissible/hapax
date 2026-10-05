@@ -489,7 +489,7 @@ FLAGS
   --paragraphs I,...  Rewrite these zero-based scored paragraph indices.
 
 EXIT CODES
-  0  worked, nothing adverse      3  something failed: IO, store, provider
+  0  worked, nothing adverse      3  operational failure or interrupted execution
   1  worked, adverse finding      4  refused, with a reason in the output
   2  invalid invocation
 
@@ -1124,7 +1124,15 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 		Mode:       resolved, Attempts: parsed.attempts,
 	})
 	if err != nil {
-		diagnostic(deps.Stderr, err.Error())
+		if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			diagnostic(deps.Stderr, fmt.Sprintf("rewrite interrupted; nothing was published: %v", err))
+		} else {
+			diagnostic(deps.Stderr, err.Error())
+		}
+		return 3
+	}
+	if err := ctx.Err(); err != nil {
+		diagnostic(deps.Stderr, fmt.Sprintf("rewrite interrupted; nothing was published: %v", err))
 		return 3
 	}
 	report := outcome.Report()
@@ -1151,24 +1159,39 @@ func runRewrite(ctx context.Context, parsed invocation, resolved mode.Mode, deps
 			action = replace
 		}
 	}
-	if action == create {
-		err = deps.Publisher.Create(parsed.path, destination, content)
+	evidence := outcome.Publication()
+	publication := publishAndRecord(ctx, deps.Publisher, deps.Service, action, parsed.path, destination, content, evidence)
+	// Decide interruption before rendering. Cancellation during a completed
+	// result's rendering must not retroactively change that result's exit code.
+	interrupted := ctx.Err()
+	prefix := ""
+	if interrupted != nil {
+		prefix = fmt.Sprintf("rewrite interrupted (%v); ", interrupted)
 	}
-	if action == replace {
-		err = deps.Publisher.Replace(parsed.path, content)
-	}
-	if err != nil {
-		diagnostic(deps.Stderr, err.Error())
-		if errors.Is(err, ErrDestinationExists) || errors.Is(err, ErrDestinationIsInput) {
+	switch publication.state {
+	case publicationNotAdmitted:
+		diagnostic(deps.Stderr, fmt.Sprintf("rewrite interrupted; nothing was published: %v", publication.err))
+		return 3
+	case publicationFailed:
+		diagnostic(deps.Stderr, fmt.Sprintf("%spublication to %s failed; publication evidence not recorded: %v", prefix, destination, publication.err))
+		if interrupted == nil && (errors.Is(publication.err, ErrDestinationExists) || errors.Is(publication.err, ErrDestinationIsInput)) {
 			return 2
 		}
 		return 3
+	case publicationEvidenceFailed:
+		diagnostic(deps.Stderr, fmt.Sprintf("%spublished %s but could not record publication evidence: %v", prefix, destination, publication.err))
+		return 3
 	}
-	if evidence := outcome.Publication(); action != noPublication && len(evidence.Paragraphs) != 0 {
-		if err := deps.Service.RecordPublication(ctx, evidence); err != nil {
-			diagnostic(deps.Stderr, fmt.Sprintf("published %s but could not record publication evidence: %v", destination, err))
-			return 3
+	if interrupted != nil {
+		switch {
+		case action == noPublication:
+			diagnostic(deps.Stderr, prefix+"nothing was published")
+		case len(evidence.Paragraphs) == 0:
+			diagnostic(deps.Stderr, fmt.Sprintf("%spublished %s; no publication evidence was required", prefix, destination))
+		default:
+			diagnostic(deps.Stderr, fmt.Sprintf("%spublished %s; publication evidence was recorded", prefix, destination))
 		}
+		return 3
 	}
 	result := rewriteResultFrom(report, destination)
 	status, code := StatusOK, 0
